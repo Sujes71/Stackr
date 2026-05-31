@@ -576,24 +576,26 @@ func (m *AddServiceModel) viewSource() string {
 		}
 	}
 
-	// Local style for the selected item: color + bold only (no padding).
-	// We avoid StyleListItemSelected here because its Padding(0,2)
-	// couples indentation to invisible style state -- keep it explicit.
+	// Selected style: just color+bold, NO padding/width/margin
 	selStyle := lipgloss.NewStyle().
 		Foreground(styles.ColorPrimary).
 		Bold(true)
 
 	var b strings.Builder
-	b.WriteString(styles.StyleSubtitle.Render("  How do you want to find the image?\n\n"))
+	b.WriteString("  How do you want to find the image?\n\n")
 	for i, o := range opts {
-		// 4-char cursor prefix gives every option the same left margin.
-		// Non-selected: 4 spaces   -> emoji at column 4.
-		// Selected:     2 spaces + "> " -> ">" at column 2, emoji at column 4.
-		cursor := "    " // 4 spaces
+		// Use a simple 4-char prefix: "  > " for selected, "    " for others
+		// This keeps ALL lines at the same indentation without relying on
+		// lipgloss padding or alignment.
+		prefix := "    "
 		if i == m.sourceCursor {
-			cursor = "  > " // 2 spaces + ">" + space
+			prefix = "  > "
 		}
-		line := fmt.Sprintf("%s%s  %-*s  (%s)", cursor, o.emoji, maxW, o.label, o.desc)
+		line := prefix + o.emoji + "  " + o.label
+		for len(line)-len(prefix) < maxW+4+2 { // align descriptions
+			line += " "
+		}
+		line += " (" + o.desc + ")"
 		if i == m.sourceCursor {
 			b.WriteString(selStyle.Render(line))
 		} else {
@@ -607,14 +609,19 @@ func (m *AddServiceModel) viewSource() string {
 
 func (m *AddServiceModel) viewCatalog() string {
 	var b strings.Builder
-	b.WriteString(styles.StyleSubtitle.Render("  Select a service from the catalog:\n\n"))
+	b.WriteString("  Select a service from the catalog:\n\n")
+	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 	for i, entry := range hub.Catalog {
-		label := fmt.Sprintf("%-16s  %s:%s  — %s",
-			entry.Name, entry.Image, entry.DefaultTag, truncate(entry.Description, 44))
+		prefix := "    "
 		if i == m.catalogCursor {
-			b.WriteString(styles.StyleListItemSelected.Render(label))
+			prefix = "  > "
+		}
+		label := fmt.Sprintf("%s%-16s  %s:%s  — %s",
+			prefix, entry.Name, entry.Image, entry.DefaultTag, truncate(entry.Description, 44))
+		if i == m.catalogCursor {
+			b.WriteString(selStyle.Render(label))
 		} else {
-			b.WriteString(styles.StyleListItem.Render(label))
+			b.WriteString(label)
 		}
 		b.WriteString("\n")
 	}
