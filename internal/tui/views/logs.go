@@ -201,12 +201,16 @@ func (m *LogsModel) View() string {
 		followLabel = styles.StyleSubtitle.Render("follow: OFF")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(strings.Join([]string{
-		styles.HelpItem("↑↓", "scroll"),
-		styles.HelpItem("f", followLabel),
-		styles.HelpItem("g/G", "top/bottom"),
-		styles.HelpItem("esc", "back"),
-	}, "   ")))
+	b.WriteString(styles.HelpBar(
+		styles.HelpGroup{Label: "Scroll", Items: []string{
+			styles.HelpItem("↑↓", "scroll"),
+			styles.HelpItem("g/G", "top/bottom"),
+		}},
+		styles.HelpGroup{Label: "View", Items: []string{
+			styles.HelpItem("f", followLabel),
+			styles.HelpItem("esc", "back"),
+		}},
+	))
 
 	return b.String()
 }

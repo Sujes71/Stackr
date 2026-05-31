@@ -244,15 +244,25 @@ func (m *NewProfileModel) View() string {
 
 	b.WriteString("\n\n")
 	if m.step == npStepEnvs {
-		b.WriteString(styles.StyleHelp.Render(
-			styles.HelpItem("↵", "add / continue") + "   " +
-				styles.HelpItem("d d", "remove last") + "   " +
+		b.WriteString(styles.HelpBar(
+			styles.HelpGroup{Label: "Action", Items: []string{
+				styles.HelpItem("↵", "add / continue"),
+			}},
+			styles.HelpGroup{Label: "Manage", Items: []string{
+				styles.HelpItem("d d", "remove last"),
+			}},
+			styles.HelpGroup{Label: "Navigate", Items: []string{
 				styles.HelpItem("esc", "back"),
+			}},
 		))
 	} else {
-		b.WriteString(styles.StyleHelp.Render(
-			styles.HelpItem("↵", "next") + "   " +
+		b.WriteString(styles.HelpBar(
+			styles.HelpGroup{Label: "Action", Items: []string{
+				styles.HelpItem("↵", "next"),
+			}},
+			styles.HelpGroup{Label: "Navigate", Items: []string{
 				styles.HelpItem("esc", "back"),
+			}},
 		))
 	}
 

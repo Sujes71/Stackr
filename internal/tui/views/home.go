@@ -111,14 +111,18 @@ func (m *HomeModel) View() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	helpItems := []string{styles.HelpItem("↑↓ / jk", "navigate")}
+	navItems := []string{styles.HelpItem("↑↓ / jk", "navigate")}
 	if len(m.profiles) > 0 {
-		helpItems = append(helpItems, styles.HelpItem("↵", "open"))
-		helpItems = append(helpItems, styles.HelpItem("d d", "delete"))
+		navItems = append(navItems, styles.HelpItem("↵", "open"))
 	}
-	helpItems = append(helpItems, styles.HelpItem("n", "new profile"))
-	b.WriteString(styles.StyleHelp.Render(
-		strings.Join(helpItems, "   "),
+	var mgmtItems []string
+	mgmtItems = append(mgmtItems, styles.HelpItem("n", "new profile"))
+	if len(m.profiles) > 0 {
+		mgmtItems = append(mgmtItems, styles.HelpItem("d d", "delete"))
+	}
+	b.WriteString(styles.HelpBar(
+		styles.HelpGroup{Label: "Navigation", Items: navItems},
+		styles.HelpGroup{Label: "Manage", Items: mgmtItems},
 	))
 
 	return b.String()

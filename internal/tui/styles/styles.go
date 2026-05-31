@@ -3,6 +3,7 @@ package styles
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -110,6 +111,39 @@ func HelpItem(key, desc string) string {
 	return lipgloss.NewStyle().
 		Foreground(ColorAccent).
 		Render(key) + " " + desc
+}
+
+// HelpGroup defines a labeled section of help items for HelpBar.
+type HelpGroup struct {
+	Label string
+	Items []string // pre-rendered via HelpItem()
+}
+
+// labelStyle is used for section labels in HelpBar.
+var labelStyle = lipgloss.NewStyle().Foreground(ColorMuted)
+
+// HelpBar renders labeled help sections side by side as columns.
+// Each section shows a dimmed label on top, then items distributed in 2 rows.
+func HelpBar(groups ...HelpGroup) string {
+	var cols []string
+	for _, g := range groups {
+		if len(g.Items) == 0 {
+			continue
+		}
+		lines := []string{labelStyle.Render("── " + g.Label + " ──")}
+		mid := (len(g.Items) + 1) / 2
+		if mid > 0 {
+			lines = append(lines, strings.Join(g.Items[:mid], "  "))
+		}
+		if mid < len(g.Items) {
+			lines = append(lines, strings.Join(g.Items[mid:], "  "))
+		}
+		cols = append(cols, lipgloss.JoinVertical(lipgloss.Left, lines...))
+	}
+	if len(cols) == 0 {
+		return ""
+	}
+	return strings.Join(cols, "    ")
 }
 
 // EnvBadge returns a styled environment name badge.

@@ -495,38 +495,49 @@ func (m *ProfileViewModel) View() string {
 	}
 
 	b.WriteString("\n")
-	var helpItems []string
-	helpItems = append(helpItems, styles.HelpItem("tab", "switch env"))
-	helpItems = append(helpItems, styles.HelpItem("e", "add env"))
-	if len(m.profile.Environments) > 0 {
-		helpItems = append(helpItems, styles.HelpItem("D D", "delete env"))
-	}
+
 	svcs := m.currentEnvServices()
+	hasRunning := false
+	for _, st := range m.statuses {
+		if st.State == "running" {
+			hasRunning = true
+			break
+		}
+	}
+
+	// ── Help bar ──
+	var envItems, svcItems, stackItems []string
+	envItems = append(envItems, styles.HelpItem("tab", "switch env"))
+	envItems = append(envItems, styles.HelpItem("e", "add env"))
+	if len(m.profile.Environments) > 0 {
+		envItems = append(envItems, styles.HelpItem("D D", "delete env"))
+	}
+	envItems = append(envItems, styles.HelpItem("a", "add service"))
+
 	if len(svcs) > 0 {
-		helpItems = append(helpItems, styles.HelpItem("↵", "start/stop"))
-		helpItems = append(helpItems, styles.HelpItem("s", "stack"))
-		helpItems = append(helpItems, styles.HelpItem("r r", "reset vols"))
-		hasRunning := false
-		for _, st := range m.statuses {
-			if st.State == "running" {
-				hasRunning = true
-				break
-			}
+		svcItems = append(svcItems, styles.HelpItem("↵", "start/stop"))
+		svcItems = append(svcItems, styles.HelpItem("l", "logs"))
+		if m.selectedDBType() != "" {
+			svcItems = append(svcItems, styles.HelpItem("o", "db ops"))
 		}
-		if hasRunning {
-			helpItems = append(helpItems, styles.HelpItem("x", "stop"))
-		}
-		helpItems = append(helpItems, styles.HelpItem("l", "logs"))
 		if len(svcs) > 1 {
-			helpItems = append(helpItems, styles.HelpItem("d d", "delete"))
+			svcItems = append(svcItems, styles.HelpItem("d d", "delete"))
 		}
+
+		stackItems = append(stackItems, styles.HelpItem("s", "stack all"))
+		if hasRunning {
+			stackItems = append(stackItems, styles.HelpItem("x", "stop all"))
+		}
+		stackItems = append(stackItems, styles.HelpItem("r r", "reset vols"))
 	}
-	helpItems = append(helpItems, styles.HelpItem("a", "add service"))
-	if m.selectedDBType() != "" {
-		helpItems = append(helpItems, styles.HelpItem("o", "db ops"))
-	}
-	helpItems = append(helpItems, styles.HelpItem("esc", "back"))
-	b.WriteString(styles.StyleHelp.Render(strings.Join(helpItems, "   ")))
+
+	b.WriteString(styles.HelpBar(
+		styles.HelpGroup{Label: "Environment", Items: envItems},
+		styles.HelpGroup{Label: "Service", Items: svcItems},
+		styles.HelpGroup{Label: "Stack", Items: stackItems},
+	))
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back")))
 
 	return b.String()
 }
