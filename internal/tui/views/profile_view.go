@@ -13,14 +13,15 @@ import (
 )
 
 type ProfileViewModel struct {
-	cfg        *config.Config
-	profile    *config.Profile
-	activeEnv  int
-	cursor     int
-	statuses   []docker.ServiceStatus
-	statusErr  string
-	loading    bool
-	lastAction string
+	cfg         *config.Config
+	profile     *config.Profile
+	activeEnv   int
+	cursor      int
+	statuses    []docker.ServiceStatus
+	statusErr   string
+	loading     bool
+	lastAction  string
+	deleteArmed bool
 }
 
 func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
@@ -71,7 +72,7 @@ func (m *ProfileViewModel) loadStatus() tea.Cmd {
 }
 
 var profileKeys = struct {
-	back, up, down, start, stop, logs, addSvc, dbOps, switchEnv key.Binding
+	back, up, down, start, stop, logs, addSvc, svcDelete, dbOps, switchEnv key.Binding
 }{
 	back:      key.NewBinding(key.WithKeys("esc", "backspace")),
 	up:        key.NewBinding(key.WithKeys("up", "k")),
@@ -80,7 +81,8 @@ var profileKeys = struct {
 	stop:      key.NewBinding(key.WithKeys("x")),
 	logs:      key.NewBinding(key.WithKeys("l")),
 	addSvc:    key.NewBinding(key.WithKeys("a")),
-	dbOps:     key.NewBinding(key.WithKeys("d")),
+	svcDelete: key.NewBinding(key.WithKeys("d")),
+	dbOps:     key.NewBinding(key.WithKeys("o")),
 	switchEnv: key.NewBinding(key.WithKeys("tab")),
 }
 
@@ -175,6 +177,40 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case key.Matches(msg, profileKeys.svcDelete):
+			env := m.currentEnv()
+			svcs := m.currentEnvServices()
+			if env == nil || len(svcs) <= 1 || m.cursor >= len(svcs) {
+				break
+			}
+			if !m.deleteArmed {
+				m.deleteArmed = true
+				return m, nil // return early so disarm at bottom doesn't fire
+			}
+			// Second d: delete service at cursor
+			m.deleteArmed = false
+			svc := svcs[m.cursor]
+			m.lastAction = "Deleting " + svc.Name + "..."
+			go func() {
+				_ = docker.Down(m.profile.Name, env.Name)
+			}()
+			updated, err := m.cfg.DeleteService(m.profile.Name, env.Name, svc.Name)
+			if err != nil {
+				m.lastAction = "✗ " + err.Error()
+			} else {
+				m.profile = updated
+				if _, err := config.GenerateCompose(*m.profile, env.Name); err != nil {
+					m.lastAction = "✗ compose gen: " + err.Error()
+				} else {
+					m.lastAction = "✓ Deleted " + svc.Name
+				}
+				remaining := m.currentEnvServices()
+				if m.cursor >= len(remaining) && m.cursor > 0 {
+					m.cursor--
+				}
+			}
+			return m, m.loadStatus()
+
 		case key.Matches(msg, profileKeys.dbOps):
 			if m.currentEnvHasDB() {
 				env := m.currentEnv()
@@ -188,6 +224,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
+	m.deleteArmed = false
 	return m, nil
 }
 
@@ -237,6 +274,11 @@ func (m *ProfileViewModel) View() string {
 		b.WriteString("\n")
 	}
 
+	if m.deleteArmed {
+		b.WriteString(styles.StyleError.Render("  Press d again to confirm removal"))
+		b.WriteString("\n")
+	}
+
 	b.WriteString("\n")
 	var helpItems []string
 	helpItems = append(helpItems, styles.HelpItem("tab", "switch env"))
@@ -254,10 +296,13 @@ func (m *ProfileViewModel) View() string {
 			helpItems = append(helpItems, styles.HelpItem("x", "stop"))
 		}
 		helpItems = append(helpItems, styles.HelpItem("l", "logs"))
+		if len(svcs) > 1 {
+			helpItems = append(helpItems, styles.HelpItem("d d", "delete"))
+		}
 	}
 	helpItems = append(helpItems, styles.HelpItem("a", "add service"))
 	if m.currentEnvHasDB() {
-		helpItems = append(helpItems, styles.HelpItem("d", "db ops"))
+		helpItems = append(helpItems, styles.HelpItem("o", "db ops"))
 	}
 	helpItems = append(helpItems, styles.HelpItem("esc", "back"))
 	b.WriteString(styles.StyleHelp.Render(strings.Join(helpItems, "   ")))

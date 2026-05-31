@@ -248,3 +248,32 @@ func (c *Config) GetProfile(name string) (*Profile, bool) {
 	}
 	return nil, false
 }
+
+// DeleteService removes a service from the given environment in a profile.
+// Returns the updated profile so the caller can refresh their reference.
+func (c *Config) DeleteService(profileName, envName, svcName string) (*Profile, error) {
+	for i := range c.Profiles {
+		if c.Profiles[i].Name != profileName {
+			continue
+		}
+		p := &c.Profiles[i]
+		for j := range p.Environments {
+			if p.Environments[j].Name != envName {
+				continue
+			}
+			env := &p.Environments[j]
+			for k, s := range env.Services {
+				if s.Name == svcName {
+					env.Services = append(env.Services[:k], env.Services[k+1:]...)
+					p.UpdatedAt = time.Now()
+					// Return a copy so the caller gets the updated data
+					cp := *p
+					return &cp, c.Save()
+				}
+			}
+			return nil, fmt.Errorf("service %q not found in %s/%s", svcName, profileName, envName)
+		}
+		return nil, fmt.Errorf("environment %q not found in profile %q", envName, profileName)
+	}
+	return nil, fmt.Errorf("profile %q not found", profileName)
+}
