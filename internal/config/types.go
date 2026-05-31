@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -52,6 +53,30 @@ func (s Service) FullImage() string {
 		return s.Image
 	}
 	return s.Image + ":" + s.Tag
+}
+
+var reInvalidCompose = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
+
+// ComposeName returns a sanitized version of the service name safe for use
+// in docker-compose identifiers (service keys, container names, volume names).
+// docker-compose only allows [a-zA-Z0-9][a-zA-Z0-9_.-]*.
+func (s Service) ComposeName() string {
+	return SanitizeComposeName(s.Name)
+}
+
+// SanitizeComposeName replaces characters invalid for docker-compose identifiers with "-".
+// docker-compose only allows [a-zA-Z0-9][a-zA-Z0-9_.-]*.
+func SanitizeComposeName(name string) string {
+	sanitized := reInvalidCompose.ReplaceAllString(name, "-")
+	// Ensure it doesn't start with a non-alphanumeric
+	if len(sanitized) > 0 && !isAlphaNum(rune(sanitized[0])) {
+		sanitized = "svc-" + sanitized
+	}
+	return sanitized
+}
+
+func isAlphaNum(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
 }
 
 // DBType returns the database type this service provides, or "" if not a DB.

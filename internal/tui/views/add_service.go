@@ -315,11 +315,12 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 					m.svc.Image = img
 					m.prefillFromCatalog(img)
-					// Auto-fill service name from image (strip tag)
+					// Auto-fill service name from image (strip tag, sanitize for compose)
 					name := img
 					if idx := strings.IndexByte(name, ':'); idx >= 0 {
 						name = name[:idx]
 					}
+					name = config.SanitizeComposeName(name)
 					m.nameInput.SetValue(name)
 					m.nameFocus = 1
 					m.imageInput.Blur()
@@ -328,7 +329,7 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					return m, textinput.Blink
 				}
 				// Enter on service name: advance to ports
-				m.svc.Name = strings.TrimSpace(m.nameInput.Value())
+				m.svc.Name = config.SanitizeComposeName(strings.TrimSpace(m.nameInput.Value()))
 				if m.svc.Name == "" {
 					m.err = "service name required"
 					return m, nil
@@ -341,7 +342,7 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			// Catalog / Search flow: image is read-only, just service name input
 			if key.Matches(msg, addSvcNext) {
-				m.svc.Name = strings.TrimSpace(m.nameInput.Value())
+				m.svc.Name = config.SanitizeComposeName(strings.TrimSpace(m.nameInput.Value()))
 				if m.svc.Name == "" {
 					m.err = "service name required"
 					return m, nil
@@ -468,7 +469,7 @@ func (m *AddServiceModel) handleCatalog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, addSvcNext):
 		entry := cat[m.catalogCursor]
 		m.svc.Image = entry.Image
-		m.svc.Name = entry.Image
+		m.svc.Name = config.SanitizeComposeName(entry.Image)
 		m.svc.Tag = entry.DefaultTag
 		m.prefillFromCatalog(entry.Image)
 		// go to tag selection

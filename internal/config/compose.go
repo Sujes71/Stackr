@@ -32,9 +32,10 @@ func GenerateCompose(profile Profile, envName string) (string, error) {
 	networkNames[netName] = true
 
 	for _, svc := range env.Services {
-		b.WriteString(fmt.Sprintf("  %s:\n", svc.Name))
+		compName := svc.ComposeName()
+		b.WriteString(fmt.Sprintf("  %s:\n", compName))
 		b.WriteString(fmt.Sprintf("    image: %s\n", svc.FullImage()))
-		b.WriteString(fmt.Sprintf("    container_name: stackr-%s-%s-%s\n", profile.Name, envName, svc.Name))
+		b.WriteString(fmt.Sprintf("    container_name: stackr-%s-%s-%s\n", profile.Name, envName, compName))
 
 		if len(svc.Ports) > 0 {
 			b.WriteString("    ports:\n")
@@ -56,7 +57,7 @@ func GenerateCompose(profile Profile, envName string) (string, error) {
 		if v.Named {
 				volName := v.Source
 				if volName == "" {
-					volName = fmt.Sprintf("%s_%s_%s_data", profile.Name, envName, svc.Name)
+					volName = fmt.Sprintf("%s_%s_%s_data", profile.Name, envName, compName)
 				}
 				b.WriteString(fmt.Sprintf("      - %s:%s\n", volName, v.Target))
 				namedVolumes[volName] = true
