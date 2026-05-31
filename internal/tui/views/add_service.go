@@ -215,7 +215,8 @@ var addSvcBack = key.NewBinding(key.WithKeys("esc"))
 var addSvcNext = key.NewBinding(key.WithKeys("enter"))
 var addSvcUp = key.NewBinding(key.WithKeys("up", "k"))
 var addSvcDown = key.NewBinding(key.WithKeys("down", "j"))
-var addSvcTab = key.NewBinding(key.WithKeys("up", "down"))
+var addSvcUpField = key.NewBinding(key.WithKeys("up"))
+var addSvcDownField = key.NewBinding(key.WithKeys("down"))
 var addSvcToggle = key.NewBinding(key.WithKeys("t"))
 var addSvcDelete = key.NewBinding(key.WithKeys("d"))
 var addSvcReset = key.NewBinding(key.WithKeys("r"))
@@ -295,7 +296,7 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case svcStepName:
 		if m.sourcePath == "manual" {
 			switch {
-			case key.Matches(msg, addSvcTab):
+			case key.Matches(msg, addSvcUpField), key.Matches(msg, addSvcDownField):
 				if m.nameFocus == 0 {
 					m.nameFocus = 1
 					m.imageInput.Blur()
@@ -585,7 +586,7 @@ func (m *AddServiceModel) handleTagSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *AddServiceModel) handlePorts(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, addSvcTab):
+	case key.Matches(msg, addSvcUpField), key.Matches(msg, addSvcDownField):
 		if m.portHost.Focused() {
 			m.portHost.Blur()
 			m.portContainer.Focus()
@@ -675,7 +676,7 @@ func (m *AddServiceModel) handlePorts(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *AddServiceModel) handleEnvVars(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, addSvcTab):
+	case key.Matches(msg, addSvcUpField), key.Matches(msg, addSvcDownField):
 		m.envVarsDeleteArmed = false
 		if m.envFocus == 0 {
 			m.envFocus = 1
@@ -784,7 +785,7 @@ func (m *AddServiceModel) resolveVolumeTarget() string {
 
 func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, addSvcTab):
+	case key.Matches(msg, addSvcUpField), key.Matches(msg, addSvcDownField):
 		// Only one input now — tab just focuses source
 		return m, nil
 	case key.Matches(msg, addSvcToggle):

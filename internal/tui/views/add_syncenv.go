@@ -87,7 +87,8 @@ type AddSyncEnvModel struct {
 var (
 	wizardBack = key.NewBinding(key.WithKeys("esc"))
 	wizardNext = key.NewBinding(key.WithKeys("enter"))
-	wizardTab  = key.NewBinding(key.WithKeys("up", "down"))
+	wizardUp   = key.NewBinding(key.WithKeys("up"))
+	wizardDown = key.NewBinding(key.WithKeys("down"))
 )
 
 // ── Constructor ───────────────────────────────────────────────────────────────
@@ -288,8 +289,12 @@ func (m *AddSyncEnvModel) updateCredentialsStep(msg tea.Msg) (*AddSyncEnvModel, 
 			m.nameInput.Focus()
 			return m, textinput.Blink
 
-		case key.Matches(msg, wizardTab):
-			// Cycle focus through credential fields
+		case key.Matches(msg, wizardUp):
+			m.credFocus = (m.credFocus - 1 + m.maxFocus + 1) % (m.maxFocus + 1)
+			m.updateCredFocus()
+			return m, textinput.Blink
+
+		case key.Matches(msg, wizardDown):
 			m.credFocus = (m.credFocus + 1) % (m.maxFocus + 1)
 			m.updateCredFocus()
 			return m, textinput.Blink

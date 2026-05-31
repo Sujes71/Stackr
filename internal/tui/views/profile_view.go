@@ -94,7 +94,7 @@ func (m *ProfileViewModel) loadStatus() tea.Cmd {
 }
 
 var profileKeys = struct {
-	back, up, down, enter, start, stop, logs, addSvc, svcDelete, dbOps, switchEnv, addEnv, envDelete, resetVol key.Binding
+	back, up, down, enter, start, stop, logs, addSvc, svcDelete, dbOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol key.Binding
 }{
 	back:      key.NewBinding(key.WithKeys("esc", "backspace")),
 	up:        key.NewBinding(key.WithKeys("up", "k")),
@@ -106,7 +106,8 @@ var profileKeys = struct {
 	addSvc:    key.NewBinding(key.WithKeys("a")),
 	svcDelete: key.NewBinding(key.WithKeys("d")),
 	dbOps:     key.NewBinding(key.WithKeys("o")),
-	switchEnv: key.NewBinding(key.WithKeys("left", "right")),
+	switchEnvLeft:  key.NewBinding(key.WithKeys("left")),
+	switchEnvRight: key.NewBinding(key.WithKeys("right")),
 	addEnv:    key.NewBinding(key.WithKeys("e")),
 	envDelete: key.NewBinding(key.WithKeys("D")),
 	resetVol:  key.NewBinding(key.WithKeys("r")),
@@ -198,9 +199,16 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, profileKeys.back):
 			return m, func() tea.Msg { return NavigateTo{Screen: NavHome} }
 
-		case key.Matches(msg, profileKeys.switchEnv):
-			if len(m.profile.Environments) > 1 {
-				m.activeEnv = (m.activeEnv + 1) % len(m.profile.Environments)
+		case key.Matches(msg, profileKeys.switchEnvLeft):
+			if m.activeEnv > 0 {
+				m.activeEnv--
+				m.statuses = nil
+				return m, m.loadStatus()
+			}
+
+		case key.Matches(msg, profileKeys.switchEnvRight):
+			if m.activeEnv < len(m.profile.Environments)-1 {
+				m.activeEnv++
 				m.statuses = nil
 				return m, m.loadStatus()
 			}
