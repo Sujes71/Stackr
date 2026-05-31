@@ -111,7 +111,7 @@ func (m *HomeModel) View() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	navItems := []string{styles.HelpItem("↑↓ / jk", "navigate")}
+	navItems := []string{styles.HelpItem("tab", "navigate")}
 	if len(m.profiles) > 0 {
 		navItems = append(navItems, styles.HelpItem("↵", "open"))
 	}

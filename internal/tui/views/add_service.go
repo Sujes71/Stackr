@@ -1005,7 +1005,7 @@ func (m *AddServiceModel) viewSource() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n" + styles.HelpBar(
-		styles.HelpGroup{Label: "Navigate", Items: []string{styles.HelpItem("↑↓", "select")}},
+		styles.HelpGroup{Label: "Navigate", Items: []string{styles.HelpItem("tab", "select")}},
 		styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "confirm")}},
 	))
 	return b.String()
@@ -1030,7 +1030,7 @@ func (m *AddServiceModel) viewCatalog() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n" + styles.HelpBar(
-		styles.HelpGroup{Label: "Navigate", Items: []string{styles.HelpItem("↑↓", "select")}},
+		styles.HelpGroup{Label: "Navigate", Items: []string{styles.HelpItem("tab", "select")}},
 		styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "confirm")}},
 	))
 	return b.String()
@@ -1066,7 +1066,7 @@ func (m *AddServiceModel) viewSearch() string {
 		b.WriteString("  Type a name and press ↵ to search\n")
 	}
 	b.WriteString("\n" + styles.HelpBar(
-		styles.HelpGroup{Label: "Navigate", Items: []string{styles.HelpItem("↑↓", "navigate results")}},
+		styles.HelpGroup{Label: "Navigate", Items: []string{styles.HelpItem("tab", "navigate results")}},
 		styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "search / select")}},
 	))
 	return b.String()
@@ -1094,7 +1094,7 @@ func (m *AddServiceModel) viewTags() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n" + styles.HelpBar(
-		styles.HelpGroup{Label: "Navigate", Items: []string{styles.HelpItem("↑↓", "select")}},
+		styles.HelpGroup{Label: "Navigate", Items: []string{styles.HelpItem("tab", "select")}},
 		styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "confirm")}},
 	))
 	return b.String()

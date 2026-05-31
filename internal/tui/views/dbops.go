@@ -288,8 +288,7 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 	}
 
 	b.WriteString("\n\n")
-	navItems := []string{styles.HelpItem("\u2191\u2193", "select")}
-	navItems = append(navItems, styles.HelpItem("esc", "back"))
+	navItems := []string{styles.HelpItem("tab", "select")}
 	var actItems []string
 	actItems = append(actItems, styles.HelpItem("a", "add"))
 	svc = m.currentService()
@@ -302,6 +301,8 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 		styles.HelpGroup{Label: "Navigate", Items: navItems},
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back")))
 	return b.String()
 }
 
@@ -417,7 +418,7 @@ func (m *DBOpsModel) viewActions() string {
 	}
 
 	b.WriteString("\n")
-	navItems := []string{styles.HelpItem("\u2191\u2193", "select"), styles.HelpItem("esc", "back")}
+	navItems := []string{styles.HelpItem("tab", "select")}
 	var actItems []string
 	if !m.running {
 		actItems = append(actItems, styles.HelpItem("\u21B5", "run"))
@@ -426,6 +427,8 @@ func (m *DBOpsModel) viewActions() string {
 		styles.HelpGroup{Label: "Navigate", Items: navItems},
 		styles.HelpGroup{Label: "Action", Items: actItems},
 	))
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back")))
 	return b.String()
 }
 

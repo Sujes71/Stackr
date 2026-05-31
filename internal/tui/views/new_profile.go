@@ -251,19 +251,17 @@ func (m *NewProfileModel) View() string {
 			styles.HelpGroup{Label: "Manage", Items: []string{
 				styles.HelpItem("d d", "remove last"),
 			}},
-			styles.HelpGroup{Label: "Navigate", Items: []string{
-				styles.HelpItem("esc", "back"),
-			}},
 		))
+		b.WriteString("\n")
+		b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back")))
 	} else {
 		b.WriteString(styles.HelpBar(
 			styles.HelpGroup{Label: "Action", Items: []string{
 				styles.HelpItem("↵", "next"),
 			}},
-			styles.HelpGroup{Label: "Navigate", Items: []string{
-				styles.HelpItem("esc", "back"),
-			}},
 		))
+		b.WriteString("\n")
+		b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back")))
 	}
 
 	return b.String()

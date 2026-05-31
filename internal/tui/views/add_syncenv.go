@@ -540,13 +540,12 @@ func (m *AddSyncEnvModel) viewNameStep() string {
 
 	b.WriteString("\n\n")
 	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Navigate", Items: []string{
-			styles.HelpItem("esc", "cancel"),
-		}},
 		styles.HelpGroup{Label: "Action", Items: []string{
 			styles.HelpItem("↵", "next"),
 		}},
 	))
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "cancel")))
 
 	return b.String()
 }
@@ -634,13 +633,14 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 	b.WriteString("\n")
 	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Navigate", Items: []string{
-			styles.HelpItem("esc", "back"),
 			styles.HelpItem("tab", "next field"),
 		}},
 		styles.HelpGroup{Label: "Action", Items: []string{
 			styles.HelpItem("↵", "next"),
 		}},
 	))
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back")))
 
 	return b.String()
 }
@@ -675,13 +675,12 @@ func (m *AddSyncEnvModel) viewReviewStep() string {
 
 	b.WriteString("\n")
 	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Navigate", Items: []string{
-			styles.HelpItem("esc", "back"),
-		}},
 		styles.HelpGroup{Label: "Action", Items: []string{
 			styles.HelpItem("↵", "save"),
 		}},
 	))
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back")))
 
 	return b.String()
 }
