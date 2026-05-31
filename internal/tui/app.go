@@ -231,7 +231,9 @@ func (a *App) breadcrumb() string {
 			return "profiles / " + a.addService.ProfileName() + " / add service"
 		}
 	case ScreenDBOps:
-		return "db ops"
+		if a.dbOps != nil {
+			return "profiles / " + a.dbOps.ProfileName() + " / " + a.dbOps.EnvName() + " / " + a.dbOps.ServiceName() + " / db ops"
+		}
 	case ScreenLogs:
 		return "logs"
 	}

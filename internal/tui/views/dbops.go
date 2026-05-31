@@ -217,8 +217,8 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.listCursor >= len(svc.SyncEnvs) && m.listCursor > 0 {
 						m.listCursor--
 					}
+					return m, ClearActionAfter(3 * time.Second)
 				}
-				return m, ClearActionAfter(3 * time.Second)
 			}
 
 		default:
@@ -344,8 +344,8 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.actions = m.buildActionsList(se)
 				}
 			}
+			return m, ClearActionAfter(3 * time.Second)
 		}
-		return m, ClearActionAfter(3 * time.Second)
 
 	case ClearActionMsg:
 		m.lastResult = ""

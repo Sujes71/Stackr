@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,14 @@ import (
 //   └── docker-compose.yml  (generated)
 //   └── profile.yaml        (source of truth)
 
+// Default port constants for supported database types.
+const (
+	DefaultPortPostgres = "5432"
+	DefaultPortMongo    = "27017"
+	DefaultPortMySQL    = "3306"
+	DefaultPortMSSQL    = "1433"
+)
+
 type Config struct {
 	Profiles []Profile `yaml:"profiles"`
 }
@@ -26,13 +35,13 @@ type Profile struct {
 	CreatedAt   time.Time   `yaml:"created_at"`
 	UpdatedAt   time.Time   `yaml:"updated_at"`
 	Environments []Environment `yaml:"environments"`
-	ActiveEnv   string      `yaml:"active_env"`
+	ActiveEnv            string      `yaml:"active_env"`
+	LegacyDBOpsMigrated  bool        `yaml:"legacy_db_ops_migrated,omitempty"`
 }
 
 type Environment struct {
 	Name     string    `yaml:"name"`        // local, dev, staging...
 	Services []Service `yaml:"services"`
-	DBOps    *DBOps    `yaml:"db_ops,omitempty"`
 }
 
 type Service struct {
@@ -43,6 +52,7 @@ type Service struct {
 	EnvVars     []EnvVar          `yaml:"env_vars,omitempty"`
 	Volumes     []VolumeMapping   `yaml:"volumes,omitempty"`
 	DependsOn   []string          `yaml:"depends_on,omitempty"`
+	SyncEnvs    []SyncEnv         `yaml:"sync_envs,omitempty"`
 	HealthCheck *HealthCheck      `yaml:"healthcheck,omitempty"`
 	Restart     string            `yaml:"restart,omitempty"`
 	Networks    []string          `yaml:"networks,omitempty"`
@@ -106,6 +116,16 @@ func containsFold(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
 
+// FindSyncEnv finds a SyncEnv by name, or returns nil if not found.
+func (s Service) FindSyncEnv(name string) *SyncEnv {
+	for i := range s.SyncEnvs {
+		if s.SyncEnvs[i].Name == name {
+			return &s.SyncEnvs[i]
+		}
+	}
+	return nil
+}
+
 // HasDatabaseServices returns true if any service in this environment is a known database.
 func (e Environment) HasDatabaseServices() bool {
 	for _, s := range e.Services {
@@ -128,6 +148,47 @@ func (e Environment) DatabaseTypes() []string {
 		}
 	}
 	return types
+}
+
+// SyncEnv defines a sync-from environment's database credentials.
+type SyncEnv struct {
+	Name     string `yaml:"name"`
+	DBType   string `yaml:"db_type"`
+	Host     string `yaml:"host"`
+	Port     string `yaml:"port"`
+	User     string `yaml:"user"`
+	Password string `yaml:"password,omitempty"`
+	Database string `yaml:"database"`
+	AuthDB   string `yaml:"auth_db,omitempty"`
+}
+
+// Validate checks that all required fields are set and valid.
+// Returns a map of field name → error message for invalid fields.
+func (s SyncEnv) Validate() map[string]string {
+	errs := make(map[string]string)
+	if strings.TrimSpace(s.Name) == "" {
+		errs["name"] = "Name is required"
+	}
+	if strings.TrimSpace(s.Host) == "" {
+		errs["host"] = "Host is required"
+	}
+	if s.Port != "" {
+		if p, err := strconv.Atoi(s.Port); err != nil || p < 1 || p > 65535 {
+			errs["port"] = "Port must be a number between 1 and 65535"
+		}
+	}
+	if strings.TrimSpace(s.User) == "" {
+		errs["user"] = "User is required"
+	}
+	if strings.TrimSpace(s.Database) == "" {
+		errs["database"] = "Database is required"
+	}
+	return errs
+}
+
+// DumpDir returns the directory path for dumps of this sync environment.
+func (s SyncEnv) DumpDir(profileName, envName, serviceName string) string {
+	return filepath.Join(ProfileDir(profileName), envName, "dumps", serviceName, s.Name)
 }
 
 type PortMapping struct {
@@ -155,38 +216,6 @@ type HealthCheck struct {
 	Interval string `yaml:"interval"`
 	Timeout  string `yaml:"timeout"`
 	Retries  int    `yaml:"retries"`
-}
-
-// DBOps defines how to interact with databases in this environment
-type DBOps struct {
-	Postgres *PostgresOps `yaml:"postgres,omitempty"`
-	Mongo    *MongoOps    `yaml:"mongo,omitempty"`
-	MySQL    *MySqlOps    `yaml:"mysql,omitempty"`
-}
-
-type PostgresOps struct {
-	Host     string `yaml:"host"`
-	Port     string `yaml:"port"`
-	User     string `yaml:"user"`
-	Password string `yaml:"password"`
-	Database string `yaml:"database"`
-}
-
-type MongoOps struct {
-	Host     string `yaml:"host"`
-	Port     string `yaml:"port"`
-	User     string `yaml:"user"`
-	Password string `yaml:"password"`
-	Database string `yaml:"database"`
-	AuthDB   string `yaml:"auth_db"`
-}
-
-type MySqlOps struct {
-	Host     string `yaml:"host"`
-	Port     string `yaml:"port"`
-	User     string `yaml:"user"`
-	Password string `yaml:"password"`
-	Database string `yaml:"database"`
 }
 
 // ── Persistence ──────────────────────────────────────────────────────────────
