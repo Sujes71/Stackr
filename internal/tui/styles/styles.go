@@ -106,17 +106,11 @@ var (
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// HelpItem formats a key + description pair for the help bar,
-// padding the key to align descriptions across items.
+// HelpItem formats a key + description pair for the help bar.
 func HelpItem(key, desc string) string {
-	styledKey := lipgloss.NewStyle().
+	return lipgloss.NewStyle().
 		Foreground(ColorAccent).
-		Render(key)
-	pad := 10 - lipgloss.Width(styledKey)
-	if pad < 1 {
-		pad = 1
-	}
-	return styledKey + strings.Repeat(" ", pad) + desc
+		Render(key) + " " + desc
 }
 
 // HelpGroup defines a labeled section of help items for HelpBar.
@@ -125,40 +119,32 @@ type HelpGroup struct {
 	Items []string // pre-rendered via HelpItem()
 }
 
-// helpPanelStyle is used for each HelpBar section box.
-var helpPanelStyle = lipgloss.NewStyle().
-	Border(lipgloss.RoundedBorder()).
-	BorderForeground(ColorMuted).
-	Padding(0, 1)
+// sectionLabelStyle is used for section labels in HelpBar.
+var sectionLabelStyle = lipgloss.NewStyle().Foreground(ColorMuted)
 
-// helpLabelStyle is used for the section label inside each box.
-var helpLabelStyle = lipgloss.NewStyle().Foreground(ColorMuted)
-
-// HelpBar renders labeled help sections as bordered boxes side by side.
-// Each box shows a dimmed label on the first line, then items in 2 rows.
+// HelpBar renders labeled help sections side by side as columns.
+// Each section: "── Label ──" on row 0, items in 2 rows below.
 func HelpBar(groups ...HelpGroup) string {
 	var cols []string
 	for _, g := range groups {
 		if len(g.Items) == 0 {
 			continue
 		}
-		var lines []string
-		lines = append(lines, helpLabelStyle.Render(" "+g.Label+" "))
+		lines := []string{sectionLabelStyle.Render("── " + g.Label + " ──")}
 		mid := (len(g.Items) + 1) / 2
 		if mid > 0 {
-			lines = append(lines, " "+strings.Join(g.Items[:mid], "  "))
+			lines = append(lines, strings.Join(g.Items[:mid], "  "))
 		}
 		if mid < len(g.Items) {
-			lines = append(lines, " "+strings.Join(g.Items[mid:], "  "))
+			lines = append(lines, strings.Join(g.Items[mid:], "  "))
 		}
-		cols = append(cols, helpPanelStyle.Render(
-			lipgloss.JoinVertical(lipgloss.Left, lines...),
-		))
+		cols = append(cols, lipgloss.JoinVertical(lipgloss.Left, lines...))
 	}
 	if len(cols) == 0 {
 		return ""
 	}
-	gapStyle := lipgloss.NewStyle().PaddingRight(2)
+	// Add space between columns
+	gapStyle := lipgloss.NewStyle().PaddingRight(4)
 	for i := 0; i < len(cols)-1; i++ {
 		cols[i] = gapStyle.Render(cols[i])
 	}
