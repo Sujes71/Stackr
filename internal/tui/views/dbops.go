@@ -82,6 +82,7 @@ var (
 	dbOpsDown   = key.NewBinding(key.WithKeys("down", "j"))
 	dbOpsEnter  = key.NewBinding(key.WithKeys("enter"))
 	dbOpsBack   = key.NewBinding(key.WithKeys("esc"))
+	dbOpsAdd    = key.NewBinding(key.WithKeys("a"))
 	dbOpsEdit   = key.NewBinding(key.WithKeys("e"))
 	dbOpsDelete = key.NewBinding(key.WithKeys("d"))
 )
@@ -186,16 +187,16 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.screen = dbScreenSyncEnvActions
 			}
 
+		case key.Matches(msg, dbOpsAdd):
+			m.wizardModel = NewAddSyncEnv(m.cfg, m.profile, m.envName, m.serviceName, true, nil)
+			m.screen = dbScreenWizard
+
 		case key.Matches(msg, dbOpsEdit):
 			if len(syncEnvs) > 0 {
-				// Edit mode
 				se := &syncEnvs[m.listCursor]
 				m.wizardModel = NewAddSyncEnv(m.cfg, m.profile, m.envName, m.serviceName, false, se)
-			} else {
-				// Add mode
-				m.wizardModel = NewAddSyncEnv(m.cfg, m.profile, m.envName, m.serviceName, true, nil)
+				m.screen = dbScreenWizard
 			}
-			m.screen = dbScreenWizard
 
 		case key.Matches(msg, dbOpsDelete):
 			if len(syncEnvs) == 0 {
@@ -287,12 +288,13 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 
 	b.WriteString("\n\n")
 	helpItems := []string{styles.HelpItem("\u2191\u2193", "select")}
+	helpItems = append(helpItems, styles.HelpItem("a", "add"))
 	svc = m.currentService()
 	if svc != nil && len(svc.SyncEnvs) > 0 {
 		helpItems = append(helpItems, styles.HelpItem("\u21B5", "actions"))
+		helpItems = append(helpItems, styles.HelpItem("e", "edit"))
 		helpItems = append(helpItems, styles.HelpItem("d d", "delete"))
 	}
-	helpItems = append(helpItems, styles.HelpItem("e", "add/edit"))
 	helpItems = append(helpItems, styles.HelpItem("esc", "back"))
 	b.WriteString(styles.StyleHelp.Render(strings.Join(helpItems, "   ")))
 	return b.String()
