@@ -94,7 +94,7 @@ func (m *HomeModel) View() string {
 			lipgloss.JoinVertical(lipgloss.Center,
 				styles.StyleSubtitle.Render("No profiles yet."),
 				"",
-				styles.HelpItem("n", "new profile"),
+				styles.HelpItem("n", "new profile").Render(),
 			),
 		)
 		b.WriteString(lipgloss.PlaceHorizontal(60, lipgloss.Center, empty))
@@ -110,7 +110,7 @@ func (m *HomeModel) View() string {
 		b.WriteString(styles.StyleError.Render("  Press d again to confirm deletion"))
 		b.WriteString("\n")
 	}
-	var mgmtItems []string
+	var mgmtItems []styles.HelpItemResult
 	mgmtItems = append(mgmtItems, styles.HelpItem("n", "new profile"))
 	if len(m.profiles) > 0 {
 		mgmtItems = append(mgmtItems, styles.HelpItem("d d", "delete"))
@@ -119,7 +119,7 @@ func (m *HomeModel) View() string {
 		styles.HelpGroup{Label: "Manage", Items: mgmtItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "navigate") + "  " + styles.HelpItem("↵", "next")))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
 
 	return b.String()
 }

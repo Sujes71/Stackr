@@ -202,15 +202,15 @@ func (m *LogsModel) View() string {
 	}
 	b.WriteString("\n")
 	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Scroll", Items: []string{
+		styles.HelpGroup{Label: "Scroll", Items: []styles.HelpItemResult{
 			styles.HelpItem("g/G", "top/bottom"),
 		}},
-		styles.HelpGroup{Label: "View", Items: []string{
+		styles.HelpGroup{Label: "View", Items: []styles.HelpItemResult{
 			styles.HelpItem("f", followLabel),
 		}},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back")))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render()))
 
 	return b.String()
 }

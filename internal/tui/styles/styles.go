@@ -106,23 +106,37 @@ var (
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// HelpItemResult holds a rendered key and its description separately
+// so that HelpBar can align keys within a group.
+type HelpItemResult struct {
+	keyStyled string
+	desc      string
+	keyWidth  int
+}
+
+// Render returns the formatted "key + desc" string.
+func (h HelpItemResult) Render() string {
+	return h.keyStyled + " " + h.desc
+}
+
 // HelpItem formats a key + description pair for the help bar.
-// Keys are padded to 4 chars so descriptions start at the same column.
-func HelpItem(key, desc string) string {
+// Keys are rendered in accent color but NOT padded here — padding
+// is applied by HelpBar per-group for alignment.
+func HelpItem(key, desc string) HelpItemResult {
 	styledKey := lipgloss.NewStyle().
 		Foreground(ColorAccent).
 		Render(key)
-	pad := 4 - lipgloss.Width(styledKey)
-	if pad < 1 {
-		pad = 1
+	return HelpItemResult{
+		keyStyled: styledKey,
+		desc:      desc,
+		keyWidth:  lipgloss.Width(styledKey),
 	}
-	return styledKey + strings.Repeat(" ", pad) + desc
 }
 
 // HelpGroup defines a labeled section of help items for HelpBar.
 type HelpGroup struct {
 	Label string
-	Items []string // pre-rendered via HelpItem()
+	Items []HelpItemResult
 }
 
 // helpPanelStyle is used for each HelpBar section box.
@@ -144,30 +158,40 @@ func HelpBar(groups ...HelpGroup) string {
 			continue
 		}
 
-		// Pad all items to the same width so both rows have equal
-		// column positions.
-		maxW := 0
+		// 1. Pad keys within the group so descriptions align.
+		maxKeyW := 0
 		for _, item := range g.Items {
-			if w := lipgloss.Width(item); w > maxW {
+			if item.keyWidth > maxKeyW {
+				maxKeyW = item.keyWidth
+			}
+		}
+		rendered := make([]string, len(g.Items))
+		for i, item := range g.Items {
+			pad := maxKeyW - item.keyWidth
+			rendered[i] = item.keyStyled + strings.Repeat(" ", pad) + " " + item.desc
+		}
+
+		// 2. Pad all rendered items to the same total width so
+		//    rows have equal column positions.
+		maxW := 0
+		for _, r := range rendered {
+			if w := lipgloss.Width(r); w > maxW {
 				maxW = w
 			}
 		}
-		padded := make([]string, len(g.Items))
-		for i, item := range g.Items {
-			if d := maxW - lipgloss.Width(item); d > 0 {
-				padded[i] = item + strings.Repeat(" ", d)
-			} else {
-				padded[i] = item
+		for i, r := range rendered {
+			if d := maxW - lipgloss.Width(r); d > 0 {
+				rendered[i] = r + strings.Repeat(" ", d)
 			}
 		}
 
 		lines := []string{helpLabelStyle.Render(g.Label), ""}
-		mid := (len(padded) + 1) / 2
+		mid := (len(rendered) + 1) / 2
 		if mid > 0 {
-			lines = append(lines, strings.Join(padded[:mid], "  "))
+			lines = append(lines, strings.Join(rendered[:mid], "  "))
 		}
-		if mid < len(padded) {
-			lines = append(lines, strings.Join(padded[mid:], "  "))
+		if mid < len(rendered) {
+			lines = append(lines, strings.Join(rendered[mid:], "  "))
 		}
 
 		cols = append(cols, helpPanelStyle.Render(

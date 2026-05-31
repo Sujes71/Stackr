@@ -288,11 +288,10 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 	}
 
 	b.WriteString("\n\n")
-	var actItems []string
+	var actItems []styles.HelpItemResult
 	actItems = append(actItems, styles.HelpItem("a", "add"))
 	svc = m.currentService()
 	if svc != nil && len(svc.SyncEnvs) > 0 {
-		actItems = append(actItems, styles.HelpItem("↵", "next"))
 		actItems = append(actItems, styles.HelpItem("e", "edit"))
 		actItems = append(actItems, styles.HelpItem("d d", "delete"))
 	}
@@ -300,7 +299,7 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back")))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 	return b.String()
 }
 
@@ -416,15 +415,7 @@ func (m *DBOpsModel) viewActions() string {
 	}
 
 	b.WriteString("\n")
-	var actItems []string
-	if !m.running {
-		actItems = append(actItems, styles.HelpItem("↵", "next"))
-	}
-	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Action", Items: actItems},
-	))
-	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back")))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 	return b.String()
 }
 

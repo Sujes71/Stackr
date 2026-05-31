@@ -506,7 +506,7 @@ func (m *ProfileViewModel) View() string {
 	}
 
 	// ── Help bar ──
-	var envItems, svcItems, stackItems []string
+	var envItems, svcItems, stackItems []styles.HelpItemResult
 	envItems = append(envItems, styles.HelpItem("tab", "switch env"))
 	envItems = append(envItems, styles.HelpItem("e", "add env"))
 	if len(m.profile.Environments) > 0 {
@@ -515,7 +515,7 @@ func (m *ProfileViewModel) View() string {
 	envItems = append(envItems, styles.HelpItem("a", "add service"))
 
 	if len(svcs) > 0 {
-		svcItems = append(svcItems, styles.HelpItem("↵", "next"))
+		svcItems = append(svcItems, styles.HelpItem("↵", "start/stop"))
 		svcItems = append(svcItems, styles.HelpItem("l", "logs"))
 		if m.selectedDBType() != "" {
 			svcItems = append(svcItems, styles.HelpItem("o", "db ops"))
@@ -537,7 +537,7 @@ func (m *ProfileViewModel) View() string {
 		styles.HelpGroup{Label: "Stack", Items: stackItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back")))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render()))
 
 	return b.String()
 }

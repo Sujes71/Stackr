@@ -539,14 +539,9 @@ func (m *AddSyncEnvModel) viewNameStep() string {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Action", Items: []string{
-			styles.HelpItem("↵", "next"),
-		}},
-	))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render()))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "cancel")))
-
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "cancel").Render()))
 	return b.String()
 }
 
@@ -632,15 +627,9 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 
 	b.WriteString("\n")
 	b.WriteString("\n")
-	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Action", Items: []string{
-			styles.HelpItem("↵", "next"),
-		}},
-	))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("tab", "next field").Render()))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "next field")))
-	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back")))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render()))
 
 	return b.String()
 }
@@ -674,14 +663,9 @@ func (m *AddSyncEnvModel) viewReviewStep() string {
 	b.WriteString("  " + styles.StyleButton.Render(" Save Sync Environment ") + "\n")
 
 	b.WriteString("\n")
-	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Action", Items: []string{
-			styles.HelpItem("↵", "next"),
-		}},
-	))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render()))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back")))
-
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render()))
 	return b.String()
 }
 
