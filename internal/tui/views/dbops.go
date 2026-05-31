@@ -299,7 +299,7 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("esc", "back").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↵", "next").Render()))
 	return b.String()
 }
 
@@ -415,7 +415,7 @@ func (m *DBOpsModel) viewActions() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("esc", "back").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↵", "next").Render()))
 	return b.String()
 }
 
