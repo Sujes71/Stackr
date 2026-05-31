@@ -295,26 +295,16 @@ func (m *AddSyncEnvModel) updateCredentialsStep(msg tea.Msg) (*AddSyncEnvModel, 
 			return m, textinput.Blink
 
 		case key.Matches(msg, wizardNext):
-			// On last field → validate all and advance
-			if m.credFocus >= m.maxFocus {
-				if err := m.validateCredentials(); err != "" {
-					m.credErr = err
-					return m, nil
-				}
-				m.credErr = ""
-				m.step = syncEnvStepReview
-				return m, nil
-			}
-
-			// Validate current field and advance to next
-			if err := m.validateCurrentField(); err != "" {
+			// Always validate all fields and advance
+			if err, failIdx := m.validateCredentials(); err != "" {
 				m.credErr = err
-				return m, nil
+				m.credFocus = failIdx
+				m.updateCredFocus()
+				return m, textinput.Blink
 			}
 			m.credErr = ""
-			m.credFocus++
-			m.updateCredFocus()
-			return m, textinput.Blink
+			m.step = syncEnvStepReview
+			return m, nil
 		}
 	}
 
@@ -468,15 +458,19 @@ func (m *AddSyncEnvModel) validateCurrentField() string {
 }
 
 // validateCredentials validates all credential fields in order.
-// Returns the first error found, or "" if all valid.
-func (m *AddSyncEnvModel) validateCredentials() string {
+// Returns the first error found and the index of the failing field,
+// or ("", 0) if all valid.
+func (m *AddSyncEnvModel) validateCredentials() (string, int) {
 	for focus := 0; focus <= m.maxFocus; focus++ {
+		cur := m.credFocus
 		m.credFocus = focus
-		if err := m.validateCurrentField(); err != "" {
-			return err
+		err := m.validateCurrentField()
+		m.credFocus = cur
+		if err != "" {
+			return err, focus
 		}
 	}
-	return ""
+	return "", 0
 }
 
 // ── findService ───────────────────────────────────────────────────────────────
