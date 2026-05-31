@@ -313,7 +313,7 @@ func (m *ProfileViewModel) View() string {
 	helpItems = append(helpItems, styles.HelpItem("tab", "switch env"))
 	svcs := m.currentEnvServices()
 	if len(svcs) > 0 {
-		helpItems = append(helpItems, styles.HelpItem("↵", "start svc"))
+		helpItems = append(helpItems, styles.HelpItem("↵", "start/stop"))
 		helpItems = append(helpItems, styles.HelpItem("s", "stack"))
 		hasRunning := false
 		for _, st := range m.statuses {
