@@ -27,6 +27,7 @@ type ProfileViewModel struct {
 	lastAction     string
 	deleteArmed    bool
 	deleteEnvArmed bool
+	resetArmed     bool
 	inputtingEnv   bool
 	envInput       textinput.Model
 }
@@ -93,7 +94,7 @@ func (m *ProfileViewModel) loadStatus() tea.Cmd {
 }
 
 var profileKeys = struct {
-	back, up, down, enter, start, stop, logs, addSvc, svcDelete, dbOps, switchEnv, addEnv, envDelete key.Binding
+	back, up, down, enter, start, stop, logs, addSvc, svcDelete, dbOps, switchEnv, addEnv, envDelete, resetVol key.Binding
 }{
 	back:      key.NewBinding(key.WithKeys("esc", "backspace")),
 	up:        key.NewBinding(key.WithKeys("up", "k")),
@@ -108,6 +109,7 @@ var profileKeys = struct {
 	switchEnv: key.NewBinding(key.WithKeys("tab")),
 	addEnv:    key.NewBinding(key.WithKeys("e")),
 	envDelete: key.NewBinding(key.WithKeys("D")),
+	resetVol:  key.NewBinding(key.WithKeys("r")),
 }
 
 func (m *ProfileViewModel) Init() tea.Cmd {
@@ -271,6 +273,27 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case key.Matches(msg, profileKeys.resetVol):
+			env := m.currentEnv()
+			if env == nil || len(m.statuses) == 0 {
+				break
+			}
+			if !m.resetArmed {
+				m.resetArmed = true
+				return m, nil // return early so disarm at bottom doesn't fire
+			}
+			// Second r: reset volumes
+			m.resetArmed = false
+			m.loading = true
+			m.lastAction = "Resetting volumes..."
+			return m, func() tea.Msg {
+				err := docker.DownVolumes(m.profile.Name, env.Name)
+				if err != nil {
+					return actionDoneMsg{label: "Reset volumes", err: err}
+				}
+				return actionDoneMsg{label: "Volumes reset. Run start to recreate.", err: nil}
+			}
+
 		case key.Matches(msg, profileKeys.logs):
 			svcs := m.currentEnvServices()
 			if len(svcs) > 0 && m.cursor < len(svcs) {
@@ -385,6 +408,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	m.deleteArmed = false
 	m.deleteEnvArmed = false
+	m.resetArmed = false
 	return m, nil
 }
 
@@ -453,6 +477,14 @@ func (m *ProfileViewModel) View() string {
 		b.WriteString("\n")
 	}
 
+	if m.resetArmed {
+		if m.lastAction == "" {
+			b.WriteString("\n")
+		}
+		b.WriteString(styles.StyleError.Render("  Press r again to confirm reset volumes"))
+		b.WriteString("\n")
+	}
+
 	if m.inputtingEnv {
 		b.WriteString("\n")
 		b.WriteString(styles.StyleInputLabel.Render("  New env name:"))
@@ -473,6 +505,7 @@ func (m *ProfileViewModel) View() string {
 	if len(svcs) > 0 {
 		helpItems = append(helpItems, styles.HelpItem("↵", "start/stop"))
 		helpItems = append(helpItems, styles.HelpItem("s", "stack"))
+		helpItems = append(helpItems, styles.HelpItem("r r", "reset vols"))
 		hasRunning := false
 		for _, st := range m.statuses {
 			if st.State == "running" {
