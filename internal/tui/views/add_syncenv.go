@@ -539,7 +539,7 @@ func (m *AddSyncEnvModel) viewNameStep() string {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("esc", "cancel").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 	return b.String()
 }
 
