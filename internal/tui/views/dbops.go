@@ -21,7 +21,6 @@ const (
 	dbActionImportSchema
 	dbActionImportData
 	dbActionSyncFromEnv
-	dbActionReset
 )
 
 type dbOpItem struct {
@@ -73,12 +72,6 @@ func (m *DBOpsModel) actions() []dbOpItem {
 	}
 
 	var items []dbOpItem
-
-	// Reset volumes — always available
-	items = append(items, dbOpItem{
-		label: "Reset volumes", desc: "docker compose down -v",
-		action: dbActionReset, dbType: "",
-	})
 
 	// DB-specific actions — only for the selected service's DB type
 	if filterType != "" {
@@ -257,12 +250,6 @@ func (m *DBOpsModel) runAction(item dbOpItem) tea.Cmd {
 				return dbOpsDoneMsg{err: fmt.Errorf("import data to local: %w", err)}
 			}
 			return dbOpsDoneMsg{result: "Synced dev → local successfully"}
-
-		case dbActionReset:
-			if err := docker.DownVolumes(m.profile.Name, m.envName); err != nil {
-				return dbOpsDoneMsg{err: err}
-			}
-			return dbOpsDoneMsg{result: "Volumes removed. Run 'start' to recreate."}
 		}
 		return dbOpsDoneMsg{err: fmt.Errorf("unknown action")}
 	}
