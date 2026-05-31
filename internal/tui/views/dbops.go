@@ -145,6 +145,11 @@ func (m *DBOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.lastResult = styles.StyleSuccess.Render("✓ " + msg.result)
 		}
+		return m, ClearActionAfter(3 * time.Second)
+
+	case ClearActionMsg:
+		m.lastResult = ""
+
 	case dbOpsLogMsg:
 		m.log = append(m.log, string(msg))
 		if len(m.log) > 12 {

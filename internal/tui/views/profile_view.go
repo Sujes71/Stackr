@@ -70,11 +70,11 @@ type actionDoneMsg struct {
 	err   error
 }
 
-type clearActionMsg struct{}
+type ClearActionMsg struct{}
 
-func clearActionAfter(d time.Duration) tea.Cmd {
+func ClearActionAfter(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(t time.Time) tea.Msg {
-		return clearActionMsg{}
+		return ClearActionMsg{}
 	})
 }
 
@@ -131,10 +131,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastAction = "✓ " + msg.label
 		}
 		// Auto-clear action message after 3 seconds
-		cmds := []tea.Cmd{m.loadStatus(), clearActionAfter(3 * time.Second)}
+		cmds := []tea.Cmd{m.loadStatus(), ClearActionAfter(3 * time.Second)}
 		return m, tea.Batch(cmds...)
 
-	case clearActionMsg:
+	case ClearActionMsg:
 		m.lastAction = ""
 
 	case tea.KeyMsg:
