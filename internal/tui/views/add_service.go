@@ -584,18 +584,19 @@ func (m *AddServiceModel) viewSource() string {
 	var b strings.Builder
 	b.WriteString("  How do you want to find the image?\n\n")
 	for i, o := range opts {
-		// Use a simple 4-char prefix: "  > " for selected, "    " for others
-		// This keeps ALL lines at the same indentation without relying on
-		// lipgloss padding or alignment.
 		prefix := "    "
 		if i == m.sourceCursor {
 			prefix = "  > "
 		}
-		line := prefix + o.emoji + "  " + o.label
-		for len(line)-len(prefix) < maxW+4+2 { // align descriptions
-			line += " "
+		// Build emoji + separator + label, measure display width with lipgloss.
+		// Use lipgloss.Width() because len() counts bytes, not terminal cells —
+		// emojis like ✏️ have 6 bytes but display as 2 cells.
+		content := o.emoji + "  " + o.label
+		padding := (maxW + 4) - lipgloss.Width(content) // 4 = emoji(2) + separator(2)
+		if padding < 0 {
+			padding = 0
 		}
-		line += " (" + o.desc + ")"
+		line := prefix + content + strings.Repeat(" ", padding) + "  (" + o.desc + ")"
 		if i == m.sourceCursor {
 			b.WriteString(selStyle.Render(line))
 		} else {
@@ -631,7 +632,7 @@ func (m *AddServiceModel) viewCatalog() string {
 
 func (m *AddServiceModel) viewSearch() string {
 	var b strings.Builder
-	b.WriteString(styles.StyleSubtitle.Render("  Search Docker Hub:\n\n"))
+	b.WriteString("  Search Docker Hub:\n\n")
 	b.WriteString("  " + m.searchInput.View() + "  ")
 	if m.searching {
 		b.WriteString(styles.StyleSubtitle.Render("searching…"))
@@ -640,6 +641,7 @@ func (m *AddServiceModel) viewSearch() string {
 	if m.searchErr != "" {
 		b.WriteString(styles.StyleError.Render("  " + m.searchErr) + "\n")
 	}
+	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 	for i, r := range m.searchResults {
 		official := ""
 		if r.IsOfficial {
@@ -648,14 +650,14 @@ func (m *AddServiceModel) viewSearch() string {
 		label := fmt.Sprintf("%-32s  ★ %d%s  — %s",
 			r.Name, r.StarCount, official, truncate(r.Description, 38))
 		if i == m.searchCursor {
-			b.WriteString(styles.StyleListItemSelected.Render(label))
+			b.WriteString(selStyle.Render("  > " + label))
 		} else {
-			b.WriteString(styles.StyleListItem.Render(label))
+			b.WriteString("    " + label)
 		}
 		b.WriteString("\n")
 	}
 	if len(m.searchResults) == 0 && !m.searching {
-		b.WriteString(styles.StyleSubtitle.Render("  Type a name and press ↵ to search\n"))
+		b.WriteString("  Type a name and press ↵ to search\n")
 	}
 	b.WriteString("\n" + styles.StyleHelp.Render(
 		styles.HelpItem("↵", "search / select")+"   "+styles.HelpItem("↑↓", "navigate results")))
@@ -664,11 +666,12 @@ func (m *AddServiceModel) viewSearch() string {
 
 func (m *AddServiceModel) viewTags() string {
 	var b strings.Builder
-	b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  Select tag for %s:\n\n", m.svc.Image)))
+	b.WriteString(fmt.Sprintf("  Select tag for %s:\n\n", m.svc.Image))
 	if m.loadingTags {
 		b.WriteString(styles.StyleSubtitle.Render("  Loading tags from Docker Hub…\n"))
 		return b.String()
 	}
+	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 	for i, tag := range m.tags {
 		size := ""
 		if tag.FullSize > 0 {
@@ -676,9 +679,9 @@ func (m *AddServiceModel) viewTags() string {
 		}
 		label := fmt.Sprintf("%-24s%s", tag.Name, size)
 		if i == m.tagCursor {
-			b.WriteString(styles.StyleListItemSelected.Render(label))
+			b.WriteString(selStyle.Render("  > " + label))
 		} else {
-			b.WriteString(styles.StyleListItem.Render(label))
+			b.WriteString("    " + label)
 		}
 		b.WriteString("\n")
 	}
@@ -688,22 +691,21 @@ func (m *AddServiceModel) viewTags() string {
 
 func (m *AddServiceModel) viewName() string {
 	var b strings.Builder
-	b.WriteString(styles.StyleSubtitle.Render(
-		fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage()))))
+	b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
 	b.WriteString(styles.StyleInputLabel.Render("Service name") + "\n")
 	b.WriteString("  " + m.nameInput.View() + "\n")
-	b.WriteString(styles.StyleSubtitle.Render("  Used as the compose service key and container name suffix\n"))
+	b.WriteString("  Used as the compose service key and container name suffix\n")
 	b.WriteString("\n" + styles.StyleHelp.Render(styles.HelpItem("↵", "next")))
 	return b.String()
 }
 
 func (m *AddServiceModel) viewPorts() string {
 	var b strings.Builder
-	b.WriteString(styles.StyleSubtitle.Render("  Port mappings  (host:container)\n\n"))
+	b.WriteString("  Port mappings  (host:container)\n\n")
 	b.WriteString("  " + styles.StyleInputLabel.Render("Host port") + "  " + m.portHost.View() + "\n")
 	b.WriteString("  " + styles.StyleInputLabel.Render("Container port") + "  " + m.portContainer.View() + "\n\n")
 	for _, p := range m.ports {
-		b.WriteString(styles.StyleListItem.Render("  " + styles.StyleCode.Render(p.String()) + "\n"))
+		b.WriteString("    " + styles.StyleCode.Render(p.String()) + "\n")
 	}
 	b.WriteString("\n" + styles.StyleHelp.Render(
 		styles.HelpItem("tab", "switch field")+"   "+
@@ -713,12 +715,11 @@ func (m *AddServiceModel) viewPorts() string {
 
 func (m *AddServiceModel) viewEnvVars() string {
 	var b strings.Builder
-	b.WriteString(styles.StyleSubtitle.Render("  Environment variables\n\n"))
+	b.WriteString("  Environment variables\n\n")
 	b.WriteString("  " + styles.StyleInputLabel.Render("Key") + "  " + m.envKey.View() + "\n")
 	b.WriteString("  " + styles.StyleInputLabel.Render("Value") + "  " + m.envVal.View() + "\n\n")
 	for _, e := range m.envVars {
-		b.WriteString(styles.StyleListItem.Render(
-			"  " + styles.StyleCode.Render(e.Key) + " = " + e.Value) + "\n")
+		b.WriteString("    " + styles.StyleCode.Render(e.Key) + " = " + e.Value + "\n")
 	}
 	b.WriteString("\n" + styles.StyleHelp.Render(
 		styles.HelpItem("tab", "switch field")+"   "+
@@ -732,13 +733,12 @@ func (m *AddServiceModel) viewVolumes() string {
 		namedLabel = "named volume"
 	}
 	var b strings.Builder
-	b.WriteString(styles.StyleSubtitle.Render("  Volumes\n\n"))
+	b.WriteString("  Volumes\n\n")
 	b.WriteString("  " + styles.StyleInputLabel.Render("Source") + "  " + m.volSource.View() + "\n")
 	b.WriteString("  " + styles.StyleInputLabel.Render("Target") + "  " + m.volTarget.View() + "\n")
 	b.WriteString("  Type: " + styles.StyleCode.Render(namedLabel) + "\n\n")
 	for _, v := range m.volumes {
-		b.WriteString(styles.StyleListItem.Render(
-			fmt.Sprintf("  %s → %s", v.Source, v.Target)) + "\n")
+		b.WriteString(fmt.Sprintf("    %s → %s\n", v.Source, v.Target))
 	}
 	b.WriteString("\n" + styles.StyleHelp.Render(
 		styles.HelpItem("tab", "switch field")+"   "+
@@ -754,7 +754,7 @@ func (m *AddServiceModel) viewReview() string {
 	svc.Volumes = m.volumes
 
 	var b strings.Builder
-	b.WriteString(styles.StyleSubtitle.Render("  Review service configuration\n\n"))
+	b.WriteString("  Review service configuration\n\n")
 	b.WriteString(styles.StylePanel.Render(
 		lipgloss.JoinVertical(lipgloss.Left,
 			styles.StyleHeader.Render(svc.Name)+"  "+styles.StyleCode.Render(svc.FullImage()),
