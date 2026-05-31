@@ -215,7 +215,7 @@ var addSvcBack = key.NewBinding(key.WithKeys("esc"))
 var addSvcNext = key.NewBinding(key.WithKeys("enter"))
 var addSvcUp = key.NewBinding(key.WithKeys("up", "k"))
 var addSvcDown = key.NewBinding(key.WithKeys("down", "j"))
-var addSvcTab = key.NewBinding(key.WithKeys("left", "right"))
+var addSvcTab = key.NewBinding(key.WithKeys("up", "down"))
 var addSvcToggle = key.NewBinding(key.WithKeys("t"))
 var addSvcDelete = key.NewBinding(key.WithKeys("d"))
 var addSvcReset = key.NewBinding(key.WithKeys("r"))
@@ -1135,7 +1135,7 @@ func (m *AddServiceModel) viewName() string {
 			b.WriteString(styles.StyleInputLabel.Render("Service name") + "\n")
 			b.WriteString("  " + m.nameInput.View() + "\n")
 			b.WriteString("  Used as the compose service key and container name suffix\n")
-			b.WriteString("\n  " + styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("← →", "edit image").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+			b.WriteString("\n  " + styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "edit image").Render() + "  " + styles.HelpItem("↵", "next").Render()))
 		}
 	} else {
 		b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
@@ -1175,7 +1175,7 @@ func (m *AddServiceModel) viewPorts() string {
 		styles.HelpGroup{Label: "Action", Items: actItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("← →", "switch field").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "switch field").Render() + "  " + styles.HelpItem("↵", "next").Render()))
 	return b.String()
 }
 
@@ -1259,7 +1259,7 @@ func (m *AddServiceModel) viewEnvVars() string {
 		styles.HelpGroup{Label: "Action", Items: actItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("← →", "switch field").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "switch field").Render() + "  " + styles.HelpItem("↵", "next").Render()))
 	return b.String()
 }
 
