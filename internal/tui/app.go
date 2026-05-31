@@ -139,7 +139,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 	case views.NavDBOps:
 		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
 			a.screen = ScreenDBOps
-			a.dbOps = views.NewDBOps(a.cfg, p, nav.EnvName)
+			a.dbOps = views.NewDBOps(a.cfg, p, nav.EnvName, nav.ServiceName)
 			return a, a.dbOps.Init()
 		}
 

@@ -19,6 +19,7 @@ type NavigateTo struct {
 	Screen      NavTarget
 	ProfileName string
 	EnvName     string
+	ServiceName string // optional: for service-specific screens (logs, db ops)
 }
 
 // ProfileSavedMsg is sent when a profile is created or updated.

@@ -255,13 +255,16 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.loadStatus()
 
 		case key.Matches(msg, profileKeys.dbOps):
-			if m.currentEnvHasDB() {
+			svcs := m.currentEnvServices()
+			if m.cursor < len(svcs) && m.selectedDBType() != "" {
 				env := m.currentEnv()
+				svc := svcs[m.cursor]
 				return m, func() tea.Msg {
 					return NavigateTo{
 						Screen:      NavDBOps,
 						ProfileName: m.profile.Name,
 						EnvName:     env.Name,
+						ServiceName: svc.Name,
 					}
 				}
 			}
@@ -271,9 +274,12 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *ProfileViewModel) currentEnvHasDB() bool {
-	env := m.currentEnv()
-	return env != nil && env.HasDatabaseServices()
+func (m *ProfileViewModel) selectedDBType() string {
+	svcs := m.currentEnvServices()
+	if m.cursor >= len(svcs) {
+		return ""
+	}
+	return svcs[m.cursor].DBType()
 }
 
 func (m *ProfileViewModel) currentEnv() *config.Environment {
@@ -348,7 +354,7 @@ func (m *ProfileViewModel) View() string {
 		}
 	}
 	helpItems = append(helpItems, styles.HelpItem("a", "add service"))
-	if m.currentEnvHasDB() {
+	if m.selectedDBType() != "" {
 		helpItems = append(helpItems, styles.HelpItem("o", "db ops"))
 	}
 	helpItems = append(helpItems, styles.HelpItem("esc", "back"))

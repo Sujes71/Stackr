@@ -32,17 +32,18 @@ type dbOpItem struct {
 }
 
 type DBOpsModel struct {
-	cfg        *config.Config
-	profile    *config.Profile
-	envName    string
-	cursor     int
-	running    bool
-	lastResult string
-	log        []string
+	cfg         *config.Config
+	profile     *config.Profile
+	envName     string
+	serviceName string // selected service; "" means show all
+	cursor      int
+	running     bool
+	lastResult  string
+	log         []string
 }
 
-func NewDBOps(cfg *config.Config, p *config.Profile, envName string) *DBOpsModel {
-	return &DBOpsModel{cfg: cfg, profile: p, envName: envName}
+func NewDBOps(cfg *config.Config, p *config.Profile, envName, serviceName string) *DBOpsModel {
+	return &DBOpsModel{cfg: cfg, profile: p, envName: envName, serviceName: serviceName}
 }
 
 type dbOpsDoneMsg struct {
@@ -60,6 +61,17 @@ func (m *DBOpsModel) actions() []dbOpItem {
 		return nil
 	}
 
+	// Determine the DB type for the selected service
+	filterType := ""
+	if m.serviceName != "" {
+		for _, svc := range env.Services {
+			if svc.Name == m.serviceName {
+				filterType = svc.DBType()
+				break
+			}
+		}
+	}
+
 	var items []dbOpItem
 
 	// Reset volumes — always available
@@ -68,44 +80,48 @@ func (m *DBOpsModel) actions() []dbOpItem {
 		action: dbActionReset, dbType: "",
 	})
 
-	// DB-specific actions
-	for _, dt := range env.DatabaseTypes() {
-		switch dt {
-		case "postgres":
-			items = append(items,
-				dbOpItem{label: "Export schema (" + dt + ")", desc: "pg_dump -s", action: dbActionExportSchema, dbType: dt},
-				dbOpItem{label: "Export data (" + dt + ")", desc: "pg_dump -a", action: dbActionExportData, dbType: dt},
-				dbOpItem{label: "Import schema (" + dt + ")", desc: "psql ← schema.sql", action: dbActionImportSchema, dbType: dt},
-				dbOpItem{label: "Import data (" + dt + ")", desc: "psql ← data.sql", action: dbActionImportData, dbType: dt},
-			)
-			if m.findEnv("dev") != nil && env.Name != "dev" {
-				items = append(items, dbOpItem{
-					label: "Sync from dev (" + dt + ")", desc: "export dev → import here",
-					action: dbActionSyncFromEnv, dbType: dt,
-				})
-			}
-
-		case "mongo":
-			items = append(items,
-				dbOpItem{label: "Export data (" + dt + ")", desc: "mongodump → dump/", action: dbActionExportData, dbType: dt},
-				dbOpItem{label: "Import data (" + dt + ")", desc: "mongorestore ← dump/", action: dbActionImportData, dbType: dt},
-			)
-
-		case "mysql":
-			items = append(items,
-				dbOpItem{label: "Export data (" + dt + ")", desc: "mysqldump → data.sql", action: dbActionExportData, dbType: dt},
-				dbOpItem{label: "Import data (" + dt + ")", desc: "mysql ← data.sql", action: dbActionImportData, dbType: dt},
-			)
-
-		case "mssql":
-			items = append(items,
-				dbOpItem{label: "Export data (" + dt + ")", desc: "sqlpackage export → .bacpac", action: dbActionExportData, dbType: dt},
-				dbOpItem{label: "Import data (" + dt + ")", desc: "sqlpackage import ← .bacpac", action: dbActionImportData, dbType: dt},
-			)
-		}
+	// DB-specific actions — only for the selected service's DB type
+	if filterType != "" {
+		m.appendDBActions(&items, filterType, env)
 	}
 
 	return items
+}
+
+func (m *DBOpsModel) appendDBActions(items *[]dbOpItem, dt string, env *config.Environment) {
+	switch dt {
+	case "postgres":
+		*items = append(*items,
+			dbOpItem{label: "Export schema (" + dt + ")", desc: "pg_dump -s", action: dbActionExportSchema, dbType: dt},
+			dbOpItem{label: "Export data (" + dt + ")", desc: "pg_dump -a", action: dbActionExportData, dbType: dt},
+			dbOpItem{label: "Import schema (" + dt + ")", desc: "psql ← schema.sql", action: dbActionImportSchema, dbType: dt},
+			dbOpItem{label: "Import data (" + dt + ")", desc: "psql ← data.sql", action: dbActionImportData, dbType: dt},
+		)
+		if m.findEnv("dev") != nil && env.Name != "dev" {
+			*items = append(*items, dbOpItem{
+				label: "Sync from dev (" + dt + ")", desc: "export dev → import here",
+				action: dbActionSyncFromEnv, dbType: dt,
+			})
+		}
+
+	case "mongo":
+		*items = append(*items,
+			dbOpItem{label: "Export data (" + dt + ")", desc: "mongodump → dump/", action: dbActionExportData, dbType: dt},
+			dbOpItem{label: "Import data (" + dt + ")", desc: "mongorestore ← dump/", action: dbActionImportData, dbType: dt},
+		)
+
+	case "mysql":
+		*items = append(*items,
+			dbOpItem{label: "Export data (" + dt + ")", desc: "mysqldump → data.sql", action: dbActionExportData, dbType: dt},
+			dbOpItem{label: "Import data (" + dt + ")", desc: "mysql ← data.sql", action: dbActionImportData, dbType: dt},
+		)
+
+	case "mssql":
+		*items = append(*items,
+			dbOpItem{label: "Export data (" + dt + ")", desc: "sqlpackage export → .bacpac", action: dbActionExportData, dbType: dt},
+			dbOpItem{label: "Import data (" + dt + ")", desc: "sqlpackage import ← .bacpac", action: dbActionImportData, dbType: dt},
+		)
+	}
 }
 
 var dbOpsUp = key.NewBinding(key.WithKeys("up", "k"))
@@ -291,13 +307,17 @@ func (m *DBOpsModel) View() string {
 
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(styles.StyleTitle.Render(
-		fmt.Sprintf(" DB Ops — %s / %s ", m.profile.Name, m.envName)))
+	if m.serviceName != "" {
+		b.WriteString(styles.StyleTitle.Render(
+			fmt.Sprintf(" DB Ops — %s / %s / %s ", m.profile.Name, m.envName, m.serviceName)))
+	} else {
+		b.WriteString(styles.StyleTitle.Render(
+			fmt.Sprintf(" DB Ops — %s / %s ", m.profile.Name, m.envName)))
+	}
 	b.WriteString("\n\n")
 
 	if len(acts) == 0 {
-		b.WriteString(styles.StyleSubtitle.Render("  No database services detected in this environment.\n"))
-		b.WriteString(styles.StyleSubtitle.Render("  Add a PostgreSQL, MySQL, or MongoDB service first.\n"))
+		b.WriteString(styles.StyleSubtitle.Render("  No database operations available for this service.\n"))
 	} else {
 		for i, item := range acts {
 			label := fmt.Sprintf("%-24s  %s", item.label, styles.StyleSubtitle.Render(item.desc))
