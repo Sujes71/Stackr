@@ -523,10 +523,6 @@ func (m *AddSyncEnvModel) View() string {
 		b.WriteString("\n" + styles.StyleError.Render("  ✗ "+m.err))
 	}
 
-	b.WriteString("\n\n")
-	b.WriteString(styles.StyleHelp.Render(
-		styles.HelpItem("esc", "cancel"),
-	))
 	return b.String()
 }
 
@@ -534,16 +530,9 @@ func (m *AddSyncEnvModel) viewNameStep() string {
 	var b strings.Builder
 
 	b.WriteString(fmt.Sprintf("  DB type: %s\n\n", styles.StyleCode.Render(m.dbType)))
-
-	if m.editMode {
-		b.WriteString("  " + styles.StyleInputLabel.Render("Name") + "\n")
-		b.WriteString("  " + styles.StyleCode.Render(m.nameInput.Value()) + "  ")
-		b.WriteString(styles.StyleSubtitle.Render("(not editable)"))
-	} else {
-		b.WriteString("  " + styles.StyleInputLabel.Render("Display name") + "\n")
-		b.WriteString("  " + m.nameInput.View() + "\n")
-		b.WriteString("  " + styles.StyleSubtitle.Render("e.g., staging, prod, dev"))
-	}
+	b.WriteString("  " + styles.StyleInputLabel.Render("Name") + "\n")
+	b.WriteString("  " + m.nameInput.View() + "\n")
+	b.WriteString("  " + styles.StyleSubtitle.Render("e.g., staging, prod, dev"))
 
 	if m.nameErr != "" {
 		b.WriteString("\n\n  " + styles.StyleError.Render("✗ "+m.nameErr))
