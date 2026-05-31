@@ -77,6 +77,10 @@ func Down(profileName, envName string) error {
 	return exec.Command("docker", composeArgs(profileName, envName, "down")...).Run()
 }
 
+func DownService(profileName, envName, serviceName string) error {
+	return exec.Command("docker", composeArgs(profileName, envName, "stop", serviceName)...).Run()
+}
+
 func DownVolumes(profileName, envName string) error {
 	return exec.Command("docker", composeArgs(profileName, envName, "down", "-v")...).Run()
 }

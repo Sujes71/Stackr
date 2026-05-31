@@ -134,10 +134,26 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			svcs := m.currentEnvServices()
 			if len(svcs) > 0 && m.cursor < len(svcs) {
 				svc := svcs[m.cursor]
+				envName := m.profile.Environments[m.activeEnv].Name
+				containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, envName, svc.Name)
+				isRunning := false
+				for _, st := range m.statuses {
+					if st.Name == containerName && st.State == "running" {
+						isRunning = true
+						break
+					}
+				}
 				m.loading = true
+				if isRunning {
+					m.lastAction = "Stopping " + svc.Name + "..."
+					return m, func() tea.Msg {
+						err := docker.DownService(m.profile.Name, envName, svc.Name)
+						return actionDoneMsg{label: svc.Name + " stopped", err: err}
+					}
+				}
 				m.lastAction = "Starting " + svc.Name + "..."
 				return m, func() tea.Msg {
-					err := docker.UpService(m.profile.Name, m.profile.Environments[m.activeEnv].Name, svc.Name)
+					err := docker.UpService(m.profile.Name, envName, svc.Name)
 					return actionDoneMsg{label: svc.Name + " started", err: err}
 				}
 			}
