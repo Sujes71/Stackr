@@ -12,9 +12,10 @@ import (
 )
 
 type HomeModel struct {
-	cfg      *config.Config
-	cursor   int
-	profiles []config.Profile
+	cfg         *config.Config
+	cursor      int
+	profiles    []config.Profile
+	deleteArmed bool
 }
 
 func NewHome(cfg *config.Config) *HomeModel {
@@ -62,14 +63,22 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return NavigateTo{Screen: NavNewProfile}
 			}
 		case key.Matches(msg, homeKeys.delete):
-			if len(m.profiles) > 0 {
-				name := m.profiles[m.cursor].Name
-				_ = m.cfg.DeleteProfile(name)
-				m.profiles = m.cfg.Profiles
-				if m.cursor >= len(m.profiles) && m.cursor > 0 {
-					m.cursor--
-				}
+			if len(m.profiles) == 0 {
+				break
 			}
+			if !m.deleteArmed {
+				m.deleteArmed = true
+				break
+			}
+			m.deleteArmed = false
+			name := m.profiles[m.cursor].Name
+			_ = m.cfg.DeleteProfile(name)
+			m.profiles = m.cfg.Profiles
+			if m.cursor >= len(m.profiles) && m.cursor > 0 {
+				m.cursor--
+			}
+		default:
+			m.deleteArmed = false
 		}
 	}
 	return m, nil
@@ -97,6 +106,10 @@ func (m *HomeModel) View() string {
 		}
 	}
 
+	if m.deleteArmed {
+		b.WriteString(styles.StyleError.Render("  Press d again to confirm deletion"))
+		b.WriteString("\n")
+	}
 	b.WriteString("\n")
 	b.WriteString(styles.StyleHelp.Render(
 		strings.Join([]string{

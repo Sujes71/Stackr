@@ -106,12 +106,13 @@ func containsSlash(s string) bool {
 // ── Curated catalog ──────────────────────────────────────────────────────────
 
 type CatalogEntry struct {
-	Name         string
-	Image        string
-	Description  string
-	DefaultTag   string
-	DefaultPorts []string
-	DefaultEnv   map[string]string
+	Name               string
+	Image              string
+	Description        string
+	DefaultTag         string
+	DefaultPorts       []string
+	DefaultEnv         map[string]string
+	DefaultVolumeTarget string // e.g. /var/lib/postgresql/data
 }
 
 // Catalog returns the built-in curated list of common dev services.
@@ -128,6 +129,7 @@ var Catalog = []CatalogEntry{
 			"POSTGRES_USER":     "postgres",
 			"POSTGRES_PASSWORD": "postgres",
 		},
+		DefaultVolumeTarget: "/var/lib/postgresql/data",
 	},
 	{
 		Name:        "MongoDB",
@@ -140,6 +142,7 @@ var Catalog = []CatalogEntry{
 			"MONGO_INITDB_ROOT_PASSWORD": "admin",
 			"MONGO_INITDB_DATABASE":      "mydb",
 		},
+		DefaultVolumeTarget: "/data/db",
 	},
 	{
 		Name:        "Redis",
@@ -148,6 +151,7 @@ var Catalog = []CatalogEntry{
 		DefaultTag:  "7-alpine",
 		DefaultPorts: []string{"6379:6379"},
 		DefaultEnv:  map[string]string{},
+		DefaultVolumeTarget: "/data",
 	},
 	{
 		Name:        "MySQL",
@@ -161,6 +165,7 @@ var Catalog = []CatalogEntry{
 			"MYSQL_USER":          "user",
 			"MYSQL_PASSWORD":      "password",
 		},
+		DefaultVolumeTarget: "/var/lib/mysql",
 	},
 	{
 		Name:        "ActiveMQ",
@@ -173,6 +178,7 @@ var Catalog = []CatalogEntry{
 			"ACTIVEMQ_PASSWORD":    "admin",
 			"ACTIVEMQ_SSL_ENABLED": "false",
 		},
+		DefaultVolumeTarget: "/opt/activemq/data",
 	},
 	{
 		Name:        "RabbitMQ",
@@ -184,6 +190,7 @@ var Catalog = []CatalogEntry{
 			"RABBITMQ_DEFAULT_USER": "admin",
 			"RABBITMQ_DEFAULT_PASS": "admin",
 		},
+		DefaultVolumeTarget: "/var/lib/rabbitmq",
 	},
 	{
 		Name:        "Kafka",
@@ -199,6 +206,7 @@ var Catalog = []CatalogEntry{
 			"KAFKA_CFG_CONTROLLER_QUORUM_VOTERS":       "0@kafka:9093",
 			"KAFKA_CFG_CONTROLLER_LISTENER_NAMES":      "CONTROLLER",
 		},
+		DefaultVolumeTarget: "/bitnami/kafka/data",
 	},
 	{
 		Name:        "Elasticsearch",
@@ -211,6 +219,7 @@ var Catalog = []CatalogEntry{
 			"ELASTIC_PASSWORD":       "elastic",
 			"xpack.security.enabled": "true",
 		},
+		DefaultVolumeTarget: "/usr/share/elasticsearch/data",
 	},
 	{
 		Name:        "MinIO",
@@ -222,6 +231,7 @@ var Catalog = []CatalogEntry{
 			"MINIO_ROOT_USER":     "minioadmin",
 			"MINIO_ROOT_PASSWORD": "minioadmin",
 		},
+		DefaultVolumeTarget: "./data",
 	},
 	{
 		Name:        "Mailpit",
