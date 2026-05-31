@@ -318,6 +318,9 @@ func (m *ProfileViewModel) View() string {
 	}
 
 	if m.deleteArmed {
+		if m.lastAction == "" {
+			b.WriteString("\n")
+		}
 		b.WriteString(styles.StyleError.Render("  Press d again to confirm removal"))
 		b.WriteString("\n")
 	}
