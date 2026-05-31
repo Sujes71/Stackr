@@ -116,7 +116,7 @@ func (m *HomeModel) View() string {
 			styles.HelpItem("↑↓ / jk", "navigate"),
 			styles.HelpItem("↵", "open"),
 			styles.HelpItem("n", "new profile"),
-			styles.HelpItem("d", "delete"),
+			styles.HelpItem("d d", "delete"),
 		}, "   "),
 	))
 
