@@ -2,10 +2,13 @@ package views
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stackr/stackr/internal/config"
@@ -14,21 +17,30 @@ import (
 )
 
 type ProfileViewModel struct {
-	cfg         *config.Config
-	profile     *config.Profile
-	activeEnv   int
-	cursor      int
-	statuses    []docker.ServiceStatus
-	statusErr   string
-	loading     bool
-	lastAction  string
-	deleteArmed bool
+	cfg            *config.Config
+	profile        *config.Profile
+	activeEnv      int
+	cursor         int
+	statuses       []docker.ServiceStatus
+	statusErr      string
+	loading        bool
+	lastAction     string
+	deleteArmed    bool
+	deleteEnvArmed bool
+	inputtingEnv   bool
+	envInput       textinput.Model
 }
 
 func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
+	ti := textinput.New()
+	ti.Placeholder = "env name"
+	ti.CharLimit = 40
+	ti.Width = 24
+
 	m := &ProfileViewModel{
 		cfg:     cfg,
 		profile: p,
+		envInput: ti,
 	}
 	// set activeEnv to the profile's saved active env
 	for i, env := range p.Environments {
@@ -81,7 +93,7 @@ func (m *ProfileViewModel) loadStatus() tea.Cmd {
 }
 
 var profileKeys = struct {
-	back, up, down, enter, start, stop, logs, addSvc, svcDelete, dbOps, switchEnv key.Binding
+	back, up, down, enter, start, stop, logs, addSvc, svcDelete, dbOps, switchEnv, addEnv, envDelete key.Binding
 }{
 	back:      key.NewBinding(key.WithKeys("esc", "backspace")),
 	up:        key.NewBinding(key.WithKeys("up", "k")),
@@ -94,6 +106,8 @@ var profileKeys = struct {
 	svcDelete: key.NewBinding(key.WithKeys("d")),
 	dbOps:     key.NewBinding(key.WithKeys("o")),
 	switchEnv: key.NewBinding(key.WithKeys("tab")),
+	addEnv:    key.NewBinding(key.WithKeys("e")),
+	envDelete: key.NewBinding(key.WithKeys("D")),
 }
 
 func (m *ProfileViewModel) Init() tea.Cmd {
@@ -122,6 +136,62 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastAction = ""
 
 	case tea.KeyMsg:
+		// ── Input mode: add environment ──────────────────────────
+		if m.inputtingEnv {
+			switch {
+			case key.Matches(msg, profileKeys.back):
+				m.inputtingEnv = false
+				m.envInput.SetValue("")
+				m.envInput.Blur()
+				return m, nil
+
+			case key.Matches(msg, profileKeys.enter):
+				name := strings.TrimSpace(m.envInput.Value())
+				m.inputtingEnv = false
+				m.envInput.SetValue("")
+				m.envInput.Blur()
+
+				if name == "" || name == "." || name == ".." {
+					m.lastAction = "✗ Invalid environment name"
+					return m, nil
+				}
+
+				// Check for duplicates
+				for _, env := range m.profile.Environments {
+					if env.Name == name {
+						m.lastAction = "✗ Environment " + name + " already exists"
+						return m, nil
+					}
+				}
+
+				// Sanitize for docker-compose safety
+				sanitized := config.SanitizeComposeName(name)
+				if sanitized != name {
+					m.lastAction = "✗ Invalid name: use letters, numbers, dots, hyphens or underscores"
+					return m, nil
+				}
+
+				m.profile.Environments = append(m.profile.Environments, config.Environment{Name: name})
+				if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+					m.lastAction = "✗ " + err.Error()
+					return m, nil
+				}
+				// Generate empty compose for the new env
+				if _, err := config.GenerateCompose(*m.profile, name); err != nil {
+					m.lastAction = "✗ compose gen: " + err.Error()
+					return m, nil
+				}
+				m.lastAction = "✓ Added environment " + name
+				return m, m.loadStatus()
+
+			default:
+				var cmd tea.Cmd
+				m.envInput, cmd = m.envInput.Update(msg)
+				return m, cmd
+			}
+		}
+
+		// ── Normal mode ──────────────────────────────────────────
 		switch {
 		case key.Matches(msg, profileKeys.back):
 			return m, func() tea.Msg { return NavigateTo{Screen: NavHome} }
@@ -132,6 +202,12 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statuses = nil
 				return m, m.loadStatus()
 			}
+
+		case key.Matches(msg, profileKeys.addEnv):
+			m.inputtingEnv = true
+			m.envInput.Focus()
+			m.envInput.SetValue("")
+			return m, textinput.Blink
 
 		case key.Matches(msg, profileKeys.up):
 			if m.cursor > 0 {
@@ -256,6 +332,41 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.loadStatus()
 
+		case key.Matches(msg, profileKeys.envDelete):
+			if len(m.profile.Environments) == 0 {
+				break
+			}
+			if !m.deleteEnvArmed {
+				m.deleteEnvArmed = true
+				return m, nil
+			}
+			// Second D: delete current environment
+			m.deleteEnvArmed = false
+			envName := m.profile.Environments[m.activeEnv].Name
+			envIdx := m.activeEnv
+			m.lastAction = "Deleting environment " + envName + "..."
+			// Stop containers for this env (fire and forget)
+			_ = docker.Down(m.profile.Name, envName)
+			// Remove env directory
+			_ = os.RemoveAll(filepath.Join(config.ProfileDir(m.profile.Name), envName))
+			// Remove env from profile
+			m.profile.Environments = append(
+				m.profile.Environments[:envIdx],
+				m.profile.Environments[envIdx+1:]...,
+			)
+			if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+				m.lastAction = "✗ " + err.Error()
+				return m, nil
+			}
+			// Adjust activeEnv if needed
+			if m.activeEnv >= len(m.profile.Environments) && m.activeEnv > 0 {
+				m.activeEnv = len(m.profile.Environments) - 1
+			}
+			// Reset cursor
+			m.cursor = 0
+			m.lastAction = "✓ Deleted environment " + envName
+			return m, m.loadStatus()
+
 		case key.Matches(msg, profileKeys.dbOps):
 			svcs := m.currentEnvServices()
 			if m.cursor < len(svcs) && m.selectedDBType() != "" {
@@ -273,6 +384,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.deleteArmed = false
+	m.deleteEnvArmed = false
 	return m, nil
 }
 
@@ -309,7 +421,7 @@ func (m *ProfileViewModel) View() string {
 
 	env := m.currentEnv()
 	if env == nil {
-		b.WriteString(styles.StyleSubtitle.Render("  No environments configured. Press 'a' to add a service."))
+		b.WriteString(styles.StyleSubtitle.Render("  No environments configured."))
 		b.WriteString("\n")
 	} else {
 		b.WriteString(m.renderServices(env))
@@ -333,9 +445,30 @@ func (m *ProfileViewModel) View() string {
 		b.WriteString("\n")
 	}
 
+	if m.deleteEnvArmed {
+		if m.lastAction == "" {
+			b.WriteString("\n")
+		}
+		b.WriteString(styles.StyleError.Render("  Press D again to confirm environment removal"))
+		b.WriteString("\n")
+	}
+
+	if m.inputtingEnv {
+		b.WriteString("\n")
+		b.WriteString(styles.StyleInputLabel.Render("  New env name:"))
+		b.WriteString(" ")
+		b.WriteString(m.envInput.View())
+		b.WriteString(styles.StyleSubtitle.Render("   ↵ confirm   esc cancel"))
+		b.WriteString("\n")
+	}
+
 	b.WriteString("\n")
 	var helpItems []string
 	helpItems = append(helpItems, styles.HelpItem("tab", "switch env"))
+	helpItems = append(helpItems, styles.HelpItem("e", "add env"))
+	if len(m.profile.Environments) > 0 {
+		helpItems = append(helpItems, styles.HelpItem("D D", "delete env"))
+	}
 	svcs := m.currentEnvServices()
 	if len(svcs) > 0 {
 		helpItems = append(helpItems, styles.HelpItem("↵", "start/stop"))
@@ -399,28 +532,29 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 		}
 
 		name := styles.StyleHeader.Render(svc.Name)
-		image := styles.StyleCode.Render(svc.FullImage())
 
-		ports := ""
+		// Line 1: ● <state>  <name> (always fits in 62 content chars)
+		line1 := lipgloss.JoinHorizontal(lipgloss.Center, dot, "  ", name)
+
+		// Line 2: indented image (always fits)
+		line2 := "   " + styles.StyleCode.Render(svc.FullImage())
+
+		// Line 3: state + ports on one line (always fits)
+		state := st.State
+		if state == "" {
+			state = "not running"
+		}
+		stateStr := "     " + state
 		if len(svc.Ports) > 0 {
 			ps := make([]string, len(svc.Ports))
 			for j, p := range svc.Ports {
 				ps[j] = p.String()
 			}
-			ports = styles.StyleSubtitle.Render("  " + strings.Join(ps, ", "))
+			stateStr += "  " + styles.StyleSubtitle.Render(strings.Join(ps, ", "))
 		}
+		line3 := styles.StyleSubtitle.Render(stateStr)
 
-		line1 := lipgloss.JoinHorizontal(lipgloss.Center,
-			dot, "  ", name, "  ", image, ports,
-		)
-
-		state := st.State
-		if state == "" {
-			state = "not running"
-		}
-		line2 := styles.StyleSubtitle.Render("     " + state)
-
-		row := lipgloss.JoinVertical(lipgloss.Left, line1, line2)
+		row := lipgloss.JoinVertical(lipgloss.Left, line1, line2, line3)
 
 		if i == m.cursor {
 			rows = append(rows, styles.StylePanelFocused.Width(66).Render(row))
