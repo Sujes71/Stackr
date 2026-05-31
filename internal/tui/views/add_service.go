@@ -1005,10 +1005,11 @@ func (m *AddServiceModel) viewSource() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "select")))
-	b.WriteString("\n" + styles.HelpBar(
+	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "next")}},
 	))
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "select")))
 	return b.String()
 }
 
@@ -1031,10 +1032,11 @@ func (m *AddServiceModel) viewCatalog() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "select")))
-	b.WriteString("\n" + styles.HelpBar(
+	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "next")}},
 	))
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "select")))
 	return b.String()
 }
 
@@ -1068,10 +1070,11 @@ func (m *AddServiceModel) viewSearch() string {
 		b.WriteString("  Type a name and press ↵ to search\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "navigate results")))
-	b.WriteString("\n" + styles.HelpBar(
+	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "next")}},
 	))
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "navigate results")))
 	return b.String()
 }
 
@@ -1097,10 +1100,11 @@ func (m *AddServiceModel) viewTags() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "select")))
-	b.WriteString("\n" + styles.HelpBar(
+	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "next")}},
 	))
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "select")))
 	return b.String()
 }
 
@@ -1121,10 +1125,10 @@ func (m *AddServiceModel) viewName() string {
 			b.WriteString(styles.StyleInputLabel.Render("Service name") + "\n")
 			b.WriteString("  " + m.nameInput.View() + "\n")
 			b.WriteString("  Used as the compose service key and container name suffix\n")
-			b.WriteString("\n  " + styles.StyleHelp.Render(styles.HelpItem("tab", "edit image")))
 			b.WriteString("\n  " + styles.HelpBar(
 				styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "next")}},
 			))
+			b.WriteString("\n  " + styles.StyleHelp.Render(styles.HelpItem("tab", "edit image")))
 		}
 	} else {
 		b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
@@ -1163,10 +1167,11 @@ func (m *AddServiceModel) viewPorts() string {
 		actItems = append(actItems, styles.HelpItem("r r", "reset"))
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "switch field")))
-	b.WriteString("\n" + styles.HelpBar(
+	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Action", Items: actItems},
 	))
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "switch field")))
 	return b.String()
 }
 
@@ -1247,10 +1252,11 @@ func (m *AddServiceModel) viewEnvVars() string {
 		actItems = append(actItems, styles.HelpItem("r r", "reset"))
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "switch field")))
-	b.WriteString("\n" + styles.HelpBar(
+	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Action", Items: actItems},
 	))
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "switch field")))
 	return b.String()
 }
 
@@ -1287,10 +1293,11 @@ func (m *AddServiceModel) viewVolumes() string {
 		actItems = append(actItems, styles.HelpItem("r r", "reset"))
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("t", "toggle type")))
-	b.WriteString("\n" + styles.HelpBar(
+	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Action", Items: actItems},
 	))
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("t", "toggle type")))
 	return b.String()
 }
 

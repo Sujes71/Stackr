@@ -632,12 +632,13 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 
 	b.WriteString("\n")
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "next field")))
-	b.WriteString("\n" + styles.HelpBar(
+	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Action", Items: []string{
 			styles.HelpItem("↵", "next"),
 		}},
 	))
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "next field")))
 	b.WriteString("\n")
 	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back")))
 

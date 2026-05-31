@@ -107,10 +107,16 @@ var (
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // HelpItem formats a key + description pair for the help bar.
+// Keys are padded to 4 chars so descriptions start at the same column.
 func HelpItem(key, desc string) string {
-	return lipgloss.NewStyle().
+	styledKey := lipgloss.NewStyle().
 		Foreground(ColorAccent).
-		Render(key) + " " + desc
+		Render(key)
+	pad := 4 - lipgloss.Width(styledKey)
+	if pad < 1 {
+		pad = 1
+	}
+	return styledKey + strings.Repeat(" ", pad) + desc
 }
 
 // HelpGroup defines a labeled section of help items for HelpBar.
@@ -155,7 +161,7 @@ func HelpBar(groups ...HelpGroup) string {
 			}
 		}
 
-		lines := []string{helpLabelStyle.Render(g.Label)}
+		lines := []string{helpLabelStyle.Render(g.Label), ""}
 		mid := (len(padded) + 1) / 2
 		if mid > 0 {
 			lines = append(lines, strings.Join(padded[:mid], "  "))

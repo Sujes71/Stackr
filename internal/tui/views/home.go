@@ -110,9 +110,6 @@ func (m *HomeModel) View() string {
 		b.WriteString(styles.StyleError.Render("  Press d again to confirm deletion"))
 		b.WriteString("\n")
 	}
-	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "navigate") + "  " + styles.HelpItem("↵", "next")))
-	b.WriteString("\n")
 	var mgmtItems []string
 	mgmtItems = append(mgmtItems, styles.HelpItem("n", "new profile"))
 	if len(m.profiles) > 0 {
@@ -121,6 +118,8 @@ func (m *HomeModel) View() string {
 	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Manage", Items: mgmtItems},
 	))
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "navigate") + "  " + styles.HelpItem("↵", "next")))
 
 	return b.String()
 }
