@@ -130,6 +130,7 @@ func (m *AddServiceModel) ProfileName() string { return m.profile.Name }
 // to the given step. Call this when navigating BACK to a step so
 // keyboard input goes to the right field.
 func (m *AddServiceModel) resetServiceData() {
+	m.err = ""
 	m.ports = nil
 	m.envVars = nil
 	m.volumes = nil
@@ -267,9 +268,11 @@ func (m *AddServiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.sourcePath = ""
 					return m, nil
 				}
+				m.err = ""
 				m.step--
 				return m, m.refocusInputs(m.step)
 			default:
+				m.err = ""
 				m.step--
 				return m, m.refocusInputs(m.step)
 			}
@@ -345,6 +348,7 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						break
 					}
 				}
+				m.err = ""
 				m.step = svcStepPorts
 				m.nameInput.Blur()
 				m.portHost.Focus()
@@ -369,6 +373,7 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						break
 					}
 				}
+				m.err = ""
 				m.step = svcStepPorts
 				m.nameInput.Blur()
 				m.portHost.Focus()
@@ -613,6 +618,7 @@ func (m *AddServiceModel) handlePorts(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Empty inputs → advance to next step
 		m.portsDeleteArmed = false
 		m.svc.Ports = m.ports
+		m.err = ""
 		m.step = svcStepEnvVars
 		m.envKey.Focus()
 		return m, textinput.Blink
@@ -707,6 +713,7 @@ func (m *AddServiceModel) handleEnvVars(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Empty key → advance to next step
 		m.envVarsDeleteArmed = false
 		m.svc.EnvVars = m.envVars
+		m.err = ""
 		m.step = svcStepVolumes
 		m.volSource.Focus()
 		return m, textinput.Blink
@@ -840,6 +847,7 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Empty source → advance to next step
 		m.volumesDeleteArmed = false
 		m.svc.Volumes = m.volumes
+		m.err = ""
 		m.step = svcStepReview
 	case key.Matches(msg, addSvcDelete):
 		src := strings.TrimSpace(m.volSource.Value())
