@@ -507,7 +507,6 @@ func (m *ProfileViewModel) View() string {
 
 	// ── Help bar ──
 	var envItems, svcItems, stackItems []styles.HelpItemResult
-	envItems = append(envItems, styles.HelpItem("tab", "switch env"))
 	envItems = append(envItems, styles.HelpItem("e", "add env"))
 	if len(m.profile.Environments) > 0 {
 		envItems = append(envItems, styles.HelpItem("d d", "delete env"))
@@ -537,7 +536,7 @@ func (m *ProfileViewModel) View() string {
 		styles.HelpGroup{Label: "Stack", Items: stackItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("tab", "switch env").Render()))
 
 	return b.String()
 }

@@ -334,6 +334,17 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.err = "service name required"
 					return m, nil
 				}
+				for _, env := range m.profile.Environments {
+					if env.Name == m.envName {
+						for _, svc := range env.Services {
+							if svc.Name == m.svc.Name {
+								m.err = "service name already exists"
+								return m, nil
+							}
+						}
+						break
+					}
+				}
 				m.step = svcStepPorts
 				m.nameInput.Blur()
 				m.portHost.Focus()
@@ -346,6 +357,17 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if m.svc.Name == "" {
 					m.err = "service name required"
 					return m, nil
+				}
+				for _, env := range m.profile.Environments {
+					if env.Name == m.envName {
+						for _, svc := range env.Services {
+							if svc.Name == m.svc.Name {
+								m.err = "service name already exists"
+								return m, nil
+							}
+						}
+						break
+					}
 				}
 				m.step = svcStepPorts
 				m.nameInput.Blur()
