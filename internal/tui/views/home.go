@@ -112,6 +112,7 @@ func (m *HomeModel) View() string {
 	}
 	b.WriteString("\n")
 	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "navigate") + "  " + styles.HelpItem("↵", "next")))
+	b.WriteString("\n")
 	var mgmtItems []string
 	mgmtItems = append(mgmtItems, styles.HelpItem("n", "new profile"))
 	if len(m.profiles) > 0 {
