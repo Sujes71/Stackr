@@ -106,7 +106,7 @@ var profileKeys = struct {
 	addSvc:    key.NewBinding(key.WithKeys("a")),
 	svcDelete: key.NewBinding(key.WithKeys("d")),
 	dbOps:     key.NewBinding(key.WithKeys("o")),
-	switchEnv: key.NewBinding(key.WithKeys("tab")),
+	switchEnv: key.NewBinding(key.WithKeys("left", "right")),
 	addEnv:    key.NewBinding(key.WithKeys("e")),
 	envDelete: key.NewBinding(key.WithKeys("D")),
 	resetVol:  key.NewBinding(key.WithKeys("r")),
@@ -536,7 +536,7 @@ func (m *ProfileViewModel) View() string {
 		styles.HelpGroup{Label: "Stack", Items: stackItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("tab", "switch env").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("← →", "switch env").Render()))
 
 	return b.String()
 }

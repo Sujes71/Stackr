@@ -87,7 +87,7 @@ type AddSyncEnvModel struct {
 var (
 	wizardBack = key.NewBinding(key.WithKeys("esc"))
 	wizardNext = key.NewBinding(key.WithKeys("enter"))
-	wizardTab  = key.NewBinding(key.WithKeys("tab"))
+	wizardTab  = key.NewBinding(key.WithKeys("left", "right"))
 )
 
 // ── Constructor ───────────────────────────────────────────────────────────────
@@ -619,7 +619,7 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 
 	b.WriteString("\n")
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("tab", "next field").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("← →", "next field").Render() + "  " + styles.HelpItem("↵", "next").Render()))
 
 	return b.String()
 }
