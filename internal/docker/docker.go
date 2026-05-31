@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/stackr/stackr/internal/config"
@@ -157,46 +158,46 @@ func LocalImages() ([]LocalImage, error) {
 }
 
 // PgDump runs pg_dump. flag: "-s" schema, "-a" data, "" full.
-func PgDump(pg *config.PostgresOps, outPath, flag string) error {
-	args := []string{"-h", pg.Host, "-U", pg.User}
+func PgDump(syncEnv *config.SyncEnv, outPath, flag string) error {
+	args := []string{"-h", syncEnv.Host, "-p", syncEnv.Port, "-U", syncEnv.User}
 	if flag != "" {
 		args = append(args, flag)
 	}
-	args = append(args, pg.Database)
+	args = append(args, syncEnv.Database)
 	cmd := exec.Command("pg_dump", args...)
-	cmd.Env = append(os.Environ(), "PGPASSWORD="+pg.Password)
+	cmd.Env = append(os.Environ(), "PGPASSWORD="+syncEnv.Password)
 	out, err := cmd.Output()
 	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return fmt.Errorf("pg_dump: %s: %w", strings.TrimSpace(string(exitErr.Stderr)), err)
+		}
 		return fmt.Errorf("pg_dump: %w", err)
 	}
 	return os.WriteFile(outPath, out, 0644)
 }
 
-// PgRestore restores a dump file via psql.
-func PgRestore(pg *config.PostgresOps, inPath string) error {
-	args := []string{"-h", pg.Host, "-U", pg.User, "-d", pg.Database, "-f", inPath}
-	cmd := exec.Command("psql", args...)
-	cmd.Env = append(os.Environ(), "PGPASSWORD="+pg.Password)
-	return cmd.Run()
-}
-
 // MongoDump runs mongodump.
-func MongoDump(m *config.MongoOps, outDir string) error {
-	return exec.Command("mongodump",
-		"--host", m.Host+":"+m.Port,
-		"--username", m.User,
-		"--password", m.Password,
-		"--authenticationDatabase", m.AuthDB,
-		"--db", m.Database,
+func MongoDump(syncEnv *config.SyncEnv, outDir string) error {
+	cmd := exec.Command("mongodump",
+		"--host", syncEnv.Host+":"+syncEnv.Port,
+		"--username", syncEnv.User,
+		"--password", syncEnv.Password,
+		"--authenticationDatabase", syncEnv.AuthDB,
+		"--db", syncEnv.Database,
 		"--out", outDir,
-	).Run()
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mongodump: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
 }
 
 // MySqlDump runs mysqldump.
-func MySqlDump(m *config.MySqlOps, outPath string) error {
-	args := []string{"-h", m.Host, "-P", m.Port, "-u", m.User, m.Database}
+func MySqlDump(syncEnv *config.SyncEnv, outPath string) error {
+	args := []string{"-h", syncEnv.Host, "-P", syncEnv.Port, "-u", syncEnv.User, syncEnv.Database}
 	cmd := exec.Command("mysqldump", args...)
-	cmd.Env = append(os.Environ(), "MYSQL_PWD="+m.Password)
+	cmd.Env = append(os.Environ(), "MYSQL_PWD="+syncEnv.Password)
 	out, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("mysqldump: %w", err)
@@ -204,23 +205,233 @@ func MySqlDump(m *config.MySqlOps, outPath string) error {
 	return os.WriteFile(outPath, out, 0644)
 }
 
-// MySqlRestore restores a mysql dump via mysql client.
-func MySqlRestore(m *config.MySqlOps, inPath string) error {
-	args := []string{"-h", m.Host, "-P", m.Port, "-u", m.User, m.Database, "-e", "source " + inPath}
-	cmd := exec.Command("mysql", args...)
-	cmd.Env = append(os.Environ(), "MYSQL_PWD="+m.Password)
-	return cmd.Run()
+// ================================================================
+// Container helpers (for import via docker exec)
+// ================================================================
+
+// ContainerName returns the predictable container name for a service.
+func ContainerName(profileName, envName, serviceName string) string {
+	return fmt.Sprintf("stackr-%s-%s-%s", profileName, envName, config.SanitizeComposeName(serviceName))
 }
 
-// MongoRestore runs mongorestore with --drop.
-func MongoRestore(m *config.MongoOps, inDir string) error {
-	return exec.Command("mongorestore",
-		"--host", m.Host+":"+m.Port,
-		"--username", m.User,
-		"--password", m.Password,
-		"--authenticationDatabase", m.AuthDB,
-		"--db", m.Database,
-		"--drop",
-		filepath.Join(inDir, m.Database),
-	).Run()
+// ContainerEnv reads a single environment variable from a running container.
+func ContainerEnv(container, envVar string) (string, error) {
+	out, err := exec.Command("docker", "exec", container, "printenv", envVar).Output()
+	if err != nil {
+		return "", fmt.Errorf("docker exec printenv %s: %w", envVar, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// ContainerCopy copies a local file into the container.
+func ContainerCopy(container, srcPath, destPath string) error {
+	return exec.Command("docker", "cp", srcPath, container+":"+destPath).Run()
+}
+
+// ContainerExec runs an arbitrary command inside the container.
+func ContainerExec(container string, args ...string) (string, error) {
+	cmd := exec.Command("docker", append([]string{"exec", container}, args...)...)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("docker exec: %w", err)
+	}
+	return string(out), nil
+}
+
+// ContainerExecWithEnv runs a command inside the container with env vars set via -e flags.
+func ContainerExecWithEnv(container string, env []string, args ...string) (string, error) {
+	dockerArgs := []string{"exec"}
+	for _, e := range env {
+		dockerArgs = append(dockerArgs, "-e", e)
+	}
+	dockerArgs = append(dockerArgs, container)
+	dockerArgs = append(dockerArgs, args...)
+	cmd := exec.Command("docker", dockerArgs...)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("docker exec: %w", err)
+	}
+	return string(out), nil
+}
+
+// ToolAvailable checks if a CLI tool is in PATH.
+func ToolAvailable(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+// HasDumpFile returns true if any file matching the given glob pattern exists in the directory.
+func HasDumpFile(dumpDir, pattern string) bool {
+	matches, err := filepath.Glob(filepath.Join(dumpDir, pattern))
+	if err != nil {
+		return false
+	}
+	return len(matches) > 0
+}
+
+// HasAnyDump returns true if any file matching any of the given patterns exists in the directory.
+func HasAnyDump(dumpDir string, patterns []string) bool {
+	for _, p := range patterns {
+		if HasDumpFile(dumpDir, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// FindLatestDump returns the most recent dump file matching the given pattern
+// in the dump directory. Pattern "" means check for subdirectories (mongo).
+// Returns the full path to the most recent dump.
+func FindLatestDump(dumpDir, pattern string) (string, error) {
+	if pattern == "" {
+		entries, err := os.ReadDir(dumpDir)
+		if err != nil {
+			return "", err
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				return filepath.Join(dumpDir, e.Name()), nil
+			}
+		}
+		return "", fmt.Errorf("no dump directories found in %s", dumpDir)
+	}
+	matches, err := filepath.Glob(filepath.Join(dumpDir, pattern))
+	if err != nil {
+		return "", err
+	}
+	if len(matches) == 0 {
+		return "", fmt.Errorf("no files matching %q in %s", pattern, dumpDir)
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		fi, _ := os.Stat(matches[i])
+		fj, _ := os.Stat(matches[j])
+		if fi == nil || fj == nil {
+			return false
+		}
+		return fi.ModTime().After(fj.ModTime())
+	})
+	return matches[0], nil
+}
+
+// ================================================================
+// Import functions (docker exec based)
+// ================================================================
+
+// ExecPgRestore restores a Postgres dump file into the container via docker exec.
+// Steps:
+//  1. Read POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB from container env
+//  2. docker cp the dump file into /tmp/
+//  3. docker exec psql -U <user> -d <db> -f /tmp/<file>
+func ExecPgRestore(profileName, envName, serviceName, dumpPath string) error {
+	container := ContainerName(profileName, envName, serviceName)
+
+	user, err := ContainerEnv(container, "POSTGRES_USER")
+	if err != nil {
+		return fmt.Errorf("read POSTGRES_USER: %w", err)
+	}
+	pass, _ := ContainerEnv(container, "POSTGRES_PASSWORD")
+	db, err := ContainerEnv(container, "POSTGRES_DB")
+	if err != nil {
+		return fmt.Errorf("read POSTGRES_DB: %w", err)
+	}
+
+	filename := filepath.Base(dumpPath)
+	tmpPath := "/tmp/" + filename
+	if err := ContainerCopy(container, dumpPath, tmpPath); err != nil {
+		return fmt.Errorf("docker cp: %w", err)
+	}
+
+	env := []string{}
+	if pass != "" {
+		env = append(env, "PGPASSWORD="+pass)
+	}
+	_, err = ContainerExecWithEnv(container, env, "psql", "-U", user, "-d", db, "-f", tmpPath)
+	return err
+}
+
+// ExecMongoRestore restores a MongoDB dump directory into the container via docker exec.
+func ExecMongoRestore(profileName, envName, serviceName, dumpDir string) error {
+	container := ContainerName(profileName, envName, serviceName)
+
+	tmpDir := "/tmp/" + filepath.Base(dumpDir)
+	if err := ContainerCopy(container, dumpDir, tmpDir); err != nil {
+		return fmt.Errorf("docker cp: %w", err)
+	}
+
+	_, err := ContainerExec(container, "mongorestore", "--drop", "--dir", tmpDir)
+	return err
+}
+
+// ExecMySqlRestore restores a MySQL dump file into the container via docker exec.
+func ExecMySqlRestore(profileName, envName, serviceName, dumpPath string) error {
+	container := ContainerName(profileName, envName, serviceName)
+
+	user, err := ContainerEnv(container, "MYSQL_ROOT_USER")
+	if err != nil {
+		user, err = ContainerEnv(container, "MYSQL_USER")
+		if err != nil {
+			return fmt.Errorf("read MYSQL_USER: %w", err)
+		}
+	}
+	pass, _ := ContainerEnv(container, "MYSQL_ROOT_PASSWORD")
+	if pass == "" {
+		pass, _ = ContainerEnv(container, "MYSQL_PASSWORD")
+	}
+	db, err := ContainerEnv(container, "MYSQL_DATABASE")
+	if err != nil {
+		return fmt.Errorf("read MYSQL_DATABASE: %w", err)
+	}
+
+	filename := filepath.Base(dumpPath)
+	tmpPath := "/tmp/" + filename
+	if err := ContainerCopy(container, dumpPath, tmpPath); err != nil {
+		return fmt.Errorf("docker cp: %w", err)
+	}
+
+	_, err = ContainerExec(container, "sh", "-c",
+		fmt.Sprintf("mysql -u %s -p'%s' %s < %s", user, pass, db, tmpPath))
+	return err
+}
+
+// ================================================================
+// SqlPackage helpers (MSSQL — runs on host, targets container port)
+// ================================================================
+
+// SqlPackageExport exports an MSSQL database to a .bacpac file using sqlpackage CLI.
+func SqlPackageExport(syncEnv *config.SyncEnv, outPath string) error {
+	if !ToolAvailable("sqlpackage") {
+		return fmt.Errorf("sqlpackage CLI not found. Install via: dotnet tool install -g microsoft.sqlpackage")
+	}
+	args := []string{
+		"/Action:Export",
+		"/SourceServerName:" + syncEnv.Host + "," + syncEnv.Port,
+		"/SourceDatabaseName:" + syncEnv.Database,
+		"/SourceUser:" + syncEnv.User,
+		"/SourcePassword:" + syncEnv.Password,
+		"/TargetFile:" + outPath,
+	}
+	return exec.Command("sqlpackage", args...).Run()
+}
+
+// SqlPackageImport imports a .bacpac file into the MSSQL container using sqlpackage CLI.
+// sqlpackage runs on the HOST targeting localhost:mapped_port.
+// The SA password is read from the running container's MSSQL_SA_PASSWORD env var.
+func SqlPackageImport(profileName, envName, serviceName string, inPath string, hostPort string) error {
+	if !ToolAvailable("sqlpackage") {
+		return fmt.Errorf("sqlpackage CLI not found. Install via: dotnet tool install -g microsoft.sqlpackage")
+	}
+	container := ContainerName(profileName, envName, serviceName)
+	saPass, err := ContainerEnv(container, "MSSQL_SA_PASSWORD")
+	if err != nil {
+		return fmt.Errorf("read MSSQL_SA_PASSWORD from container: %w", err)
+	}
+	args := []string{
+		"/Action:Import",
+		"/TargetServerName:localhost," + hostPort,
+		"/TargetDatabaseName:master",
+		"/TargetUser:sa",
+		"/TargetPassword:" + saPass,
+		"/SourceFile:" + inPath,
+	}
+	return exec.Command("sqlpackage", args...).Run()
 }
