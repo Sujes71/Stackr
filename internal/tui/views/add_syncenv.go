@@ -539,9 +539,7 @@ func (m *AddSyncEnvModel) viewNameStep() string {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render()))
-	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "cancel").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("esc", "cancel").Render()))
 	return b.String()
 }
 
@@ -627,9 +625,7 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 
 	b.WriteString("\n")
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("tab", "next field").Render()))
-	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("tab", "next field").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 
 	return b.String()
 }
@@ -663,9 +659,7 @@ func (m *AddSyncEnvModel) viewReviewStep() string {
 	b.WriteString("  " + styles.StyleButton.Render(" Save Sync Environment ") + "\n")
 
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render()))
-	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 	return b.String()
 }
 

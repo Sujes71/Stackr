@@ -943,8 +943,6 @@ func (m *AddServiceModel) View() string {
 	if m.err != "" {
 		b.WriteString("\n" + styles.StyleError.Render("  ✗ "+m.err))
 	}
-	b.WriteString("\n\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render()))
 	return b.String()
 }
 
@@ -1005,7 +1003,7 @@ func (m *AddServiceModel) viewSource() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("tab", "select").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("↑↓", "select").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 	return b.String()
 }
 
@@ -1028,7 +1026,7 @@ func (m *AddServiceModel) viewCatalog() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("tab", "select").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("↑↓", "select").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 	return b.String()
 }
 
@@ -1062,7 +1060,7 @@ func (m *AddServiceModel) viewSearch() string {
 		b.WriteString("  Type a name and press ↵ to search\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "navigate results").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↑↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 	return b.String()
 }
 
@@ -1088,7 +1086,7 @@ func (m *AddServiceModel) viewTags() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("tab", "select").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("↑↓", "select").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 	return b.String()
 }
 
@@ -1100,21 +1098,21 @@ func (m *AddServiceModel) viewName() string {
 			b.WriteString("  Image\n\n")
 			b.WriteString("  " + m.imageInput.View() + "\n")
 			b.WriteString("  Docker image to pull (e.g. postgres:16, mongo:4.2)\n")
-			b.WriteString("\n  " + styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render()))
+			b.WriteString("\n  " + styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 		} else {
 			// Step 2: confirm/enter service name
 			b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
 			b.WriteString(styles.StyleInputLabel.Render("Service name") + "\n")
 			b.WriteString("  " + m.nameInput.View() + "\n")
 			b.WriteString("  Used as the compose service key and container name suffix\n")
-			b.WriteString("\n  " + styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("tab", "edit image").Render()))
+			b.WriteString("\n  " + styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("tab", "edit image").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 		}
 	} else {
 		b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
 		b.WriteString(styles.StyleInputLabel.Render("Service name") + "\n")
 		b.WriteString("  " + m.nameInput.View() + "\n")
 		b.WriteString("  Used as the compose service key and container name suffix\n")
-		b.WriteString("\n" + styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render()))
+		b.WriteString("\n" + styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 	}
 	return b.String()
 }
@@ -1147,7 +1145,7 @@ func (m *AddServiceModel) viewPorts() string {
 		styles.HelpGroup{Label: "Action", Items: actItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("tab", "switch field").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("tab", "switch field").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 	return b.String()
 }
 
@@ -1231,7 +1229,7 @@ func (m *AddServiceModel) viewEnvVars() string {
 		styles.HelpGroup{Label: "Action", Items: actItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("tab", "switch field").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("tab", "switch field").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 	return b.String()
 }
 
@@ -1271,7 +1269,7 @@ func (m *AddServiceModel) viewVolumes() string {
 		styles.HelpGroup{Label: "Action", Items: actItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("t", "toggle type").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("t", "toggle type").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 	return b.String()
 }
 
@@ -1304,7 +1302,7 @@ func (m *AddServiceModel) viewReview() string {
 	))
 	b.WriteString("\n\n")
 	b.WriteString(styles.StyleButton.Render(" Save service "))
-	b.WriteString("   " + styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render()))
+	b.WriteString("   " + styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 	return b.String()
 }
 

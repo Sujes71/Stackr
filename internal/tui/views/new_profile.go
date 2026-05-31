@@ -255,9 +255,7 @@ func (m *NewProfileModel) View() string {
 		b.WriteString("\n")
 		b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render()))
 	} else {
-		b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render()))
-		b.WriteString("\n")
-		b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render()))
+		b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↵", "next").Render() + "  " + styles.HelpItem("esc", "back").Render()))
 	}
 
 	return b.String()
