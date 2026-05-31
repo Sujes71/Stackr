@@ -94,7 +94,7 @@ func (m *HomeModel) View() string {
 			lipgloss.JoinVertical(lipgloss.Center,
 				styles.StyleSubtitle.Render("No profiles yet."),
 				"",
-				styles.HelpItem("n", "create your first profile"),
+				styles.HelpItem("n", "new profile"),
 			),
 		)
 		b.WriteString(lipgloss.PlaceHorizontal(60, lipgloss.Center, empty))
@@ -111,17 +111,13 @@ func (m *HomeModel) View() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	navItems := []string{styles.HelpItem("tab", "navigate")}
-	if len(m.profiles) > 0 {
-		navItems = append(navItems, styles.HelpItem("↵", "open"))
-	}
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "navigate") + "  " + styles.HelpItem("↵", "next")))
 	var mgmtItems []string
 	mgmtItems = append(mgmtItems, styles.HelpItem("n", "new profile"))
 	if len(m.profiles) > 0 {
 		mgmtItems = append(mgmtItems, styles.HelpItem("d d", "delete"))
 	}
 	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Navigation", Items: navItems},
 		styles.HelpGroup{Label: "Manage", Items: mgmtItems},
 	))
 

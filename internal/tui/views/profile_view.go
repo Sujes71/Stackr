@@ -490,7 +490,7 @@ func (m *ProfileViewModel) View() string {
 		b.WriteString(styles.StyleInputLabel.Render("  New env name:"))
 		b.WriteString(" ")
 		b.WriteString(m.envInput.View())
-		b.WriteString(styles.StyleSubtitle.Render("   ↵ confirm   esc cancel"))
+		b.WriteString(styles.StyleSubtitle.Render("   ↵ open   esc cancel"))
 		b.WriteString("\n")
 	}
 
@@ -510,12 +510,12 @@ func (m *ProfileViewModel) View() string {
 	envItems = append(envItems, styles.HelpItem("tab", "switch env"))
 	envItems = append(envItems, styles.HelpItem("e", "add env"))
 	if len(m.profile.Environments) > 0 {
-		envItems = append(envItems, styles.HelpItem("D D", "delete env"))
+		envItems = append(envItems, styles.HelpItem("d d", "delete env"))
 	}
 	envItems = append(envItems, styles.HelpItem("a", "add service"))
 
 	if len(svcs) > 0 {
-		svcItems = append(svcItems, styles.HelpItem("↵", "start/stop"))
+		svcItems = append(svcItems, styles.HelpItem("↵", "next"))
 		svcItems = append(svcItems, styles.HelpItem("l", "logs"))
 		if m.selectedDBType() != "" {
 			svcItems = append(svcItems, styles.HelpItem("o", "db ops"))

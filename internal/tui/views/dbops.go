@@ -288,17 +288,15 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 	}
 
 	b.WriteString("\n\n")
-	navItems := []string{styles.HelpItem("tab", "select")}
 	var actItems []string
 	actItems = append(actItems, styles.HelpItem("a", "add"))
 	svc = m.currentService()
 	if svc != nil && len(svc.SyncEnvs) > 0 {
-		actItems = append(actItems, styles.HelpItem("\u21B5", "actions"))
+		actItems = append(actItems, styles.HelpItem("↵", "next"))
 		actItems = append(actItems, styles.HelpItem("e", "edit"))
 		actItems = append(actItems, styles.HelpItem("d d", "delete"))
 	}
 	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Navigate", Items: navItems},
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
 	b.WriteString("\n")
@@ -418,13 +416,11 @@ func (m *DBOpsModel) viewActions() string {
 	}
 
 	b.WriteString("\n")
-	navItems := []string{styles.HelpItem("tab", "select")}
 	var actItems []string
 	if !m.running {
-		actItems = append(actItems, styles.HelpItem("\u21B5", "run"))
+		actItems = append(actItems, styles.HelpItem("↵", "next"))
 	}
 	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Navigate", Items: navItems},
 		styles.HelpGroup{Label: "Action", Items: actItems},
 	))
 	b.WriteString("\n")

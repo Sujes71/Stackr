@@ -631,10 +631,9 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Navigate", Items: []string{
-			styles.HelpItem("tab", "next field"),
-		}},
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "next field")))
+	b.WriteString("\n" + styles.HelpBar(
 		styles.HelpGroup{Label: "Action", Items: []string{
 			styles.HelpItem("↵", "next"),
 		}},
@@ -676,7 +675,7 @@ func (m *AddSyncEnvModel) viewReviewStep() string {
 	b.WriteString("\n")
 	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Action", Items: []string{
-			styles.HelpItem("↵", "save"),
+			styles.HelpItem("↵", "next"),
 		}},
 	))
 	b.WriteString("\n")

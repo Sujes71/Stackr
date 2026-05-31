@@ -1004,9 +1004,10 @@ func (m *AddServiceModel) viewSource() string {
 		}
 		b.WriteString("\n")
 	}
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "select")))
 	b.WriteString("\n" + styles.HelpBar(
-		styles.HelpGroup{Label: "Navigate", Items: []string{styles.HelpItem("tab", "select")}},
-		styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "confirm")}},
+		styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "next")}},
 	))
 	return b.String()
 }
@@ -1029,9 +1030,10 @@ func (m *AddServiceModel) viewCatalog() string {
 		}
 		b.WriteString("\n")
 	}
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "select")))
 	b.WriteString("\n" + styles.HelpBar(
-		styles.HelpGroup{Label: "Navigate", Items: []string{styles.HelpItem("tab", "select")}},
-		styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "confirm")}},
+		styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "next")}},
 	))
 	return b.String()
 }
@@ -1065,9 +1067,10 @@ func (m *AddServiceModel) viewSearch() string {
 	if len(m.searchResults) == 0 && !m.searching {
 		b.WriteString("  Type a name and press ↵ to search\n")
 	}
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "navigate results")))
 	b.WriteString("\n" + styles.HelpBar(
-		styles.HelpGroup{Label: "Navigate", Items: []string{styles.HelpItem("tab", "navigate results")}},
-		styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "search / select")}},
+		styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "next")}},
 	))
 	return b.String()
 }
@@ -1093,9 +1096,10 @@ func (m *AddServiceModel) viewTags() string {
 		}
 		b.WriteString("\n")
 	}
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "select")))
 	b.WriteString("\n" + styles.HelpBar(
-		styles.HelpGroup{Label: "Navigate", Items: []string{styles.HelpItem("tab", "select")}},
-		styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "confirm")}},
+		styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "next")}},
 	))
 	return b.String()
 }
@@ -1109,7 +1113,7 @@ func (m *AddServiceModel) viewName() string {
 			b.WriteString("  " + m.imageInput.View() + "\n")
 			b.WriteString("  Docker image to pull (e.g. postgres:16, mongo:4.2)\n")
 			b.WriteString("\n  " + styles.HelpBar(
-				styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "set image")}},
+				styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "next")}},
 			))
 		} else {
 			// Step 2: confirm/enter service name
@@ -1117,8 +1121,8 @@ func (m *AddServiceModel) viewName() string {
 			b.WriteString(styles.StyleInputLabel.Render("Service name") + "\n")
 			b.WriteString("  " + m.nameInput.View() + "\n")
 			b.WriteString("  Used as the compose service key and container name suffix\n")
+			b.WriteString("\n  " + styles.StyleHelp.Render(styles.HelpItem("tab", "edit image")))
 			b.WriteString("\n  " + styles.HelpBar(
-				styles.HelpGroup{Label: "Navigate", Items: []string{styles.HelpItem("tab", "edit image")}},
 				styles.HelpGroup{Label: "Action", Items: []string{styles.HelpItem("↵", "next")}},
 			))
 		}
@@ -1150,17 +1154,17 @@ func (m *AddServiceModel) viewPorts() string {
 		b.WriteString(styles.StyleError.Render("  Press r again to reset to defaults"))
 		b.WriteString("\n")
 	}
-	var navItems, actItems []string
-	navItems = append(navItems, styles.HelpItem("tab", "switch field"))
-	actItems = append(actItems, styles.HelpItem("↵", "next step"))
+	var actItems []string
+	actItems = append(actItems, styles.HelpItem("↵", "next"))
 	if len(m.ports) > 1 {
 		actItems = append(actItems, styles.HelpItem("d d", "remove last"))
 	}
 	if m.portsCanReset() {
 		actItems = append(actItems, styles.HelpItem("r r", "reset"))
 	}
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "switch field")))
 	b.WriteString("\n" + styles.HelpBar(
-		styles.HelpGroup{Label: "Navigate", Items: navItems},
 		styles.HelpGroup{Label: "Action", Items: actItems},
 	))
 	return b.String()
@@ -1234,17 +1238,17 @@ func (m *AddServiceModel) viewEnvVars() string {
 		b.WriteString(styles.StyleError.Render("  Press r again to reset to defaults"))
 		b.WriteString("\n")
 	}
-	var navItems, actItems []string
-	navItems = append(navItems, styles.HelpItem("tab", "switch field"))
-	actItems = append(actItems, styles.HelpItem("↵", "next step"))
+	var actItems []string
+	actItems = append(actItems, styles.HelpItem("↵", "next"))
 	if m.envVarsRemovable() {
 		actItems = append(actItems, styles.HelpItem("d d", "remove last"))
 	}
 	if m.envVarsCanReset() {
 		actItems = append(actItems, styles.HelpItem("r r", "reset"))
 	}
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("tab", "switch field")))
 	b.WriteString("\n" + styles.HelpBar(
-		styles.HelpGroup{Label: "Navigate", Items: navItems},
 		styles.HelpGroup{Label: "Action", Items: actItems},
 	))
 	return b.String()
@@ -1274,17 +1278,17 @@ func (m *AddServiceModel) viewVolumes() string {
 		b.WriteString(styles.StyleError.Render("  Press r again to reset to defaults"))
 		b.WriteString("\n")
 	}
-	var navItems, actItems []string
-	navItems = append(navItems, styles.HelpItem("t", "toggle type"))
-	actItems = append(actItems, styles.HelpItem("↵", "next step"))
+	var actItems []string
+	actItems = append(actItems, styles.HelpItem("↵", "next"))
 	if len(m.volumes) > 1 {
 		actItems = append(actItems, styles.HelpItem("d d", "remove last"))
 	}
 	if m.volumesCanReset() {
 		actItems = append(actItems, styles.HelpItem("r r", "reset"))
 	}
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("t", "toggle type")))
 	b.WriteString("\n" + styles.HelpBar(
-		styles.HelpGroup{Label: "Navigate", Items: navItems},
 		styles.HelpGroup{Label: "Action", Items: actItems},
 	))
 	return b.String()
@@ -1319,7 +1323,7 @@ func (m *AddServiceModel) viewReview() string {
 	))
 	b.WriteString("\n\n")
 	b.WriteString(styles.StyleButton.Render(" Save service "))
-	b.WriteString("   " + styles.StyleHelp.Render(styles.HelpItem("↵", "confirm")))
+	b.WriteString("   " + styles.StyleHelp.Render(styles.HelpItem("↵", "next")))
 	return b.String()
 }
 
