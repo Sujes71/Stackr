@@ -1,0 +1,269 @@
+package views
+
+import (
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/stackr/stackr/internal/config"
+	"github.com/stackr/stackr/internal/tui/styles"
+)
+
+type newProfileStep int
+
+const (
+	npStepName newProfileStep = iota
+	npStepDesc
+	npStepEnvs // add environments
+	npStepDone
+)
+
+type NewProfileModel struct {
+	cfg   *config.Config
+	step  newProfileStep
+	name  textinput.Model
+	desc  textinput.Model
+	envs  []string // environment names being built
+	envInput textinput.Model
+	err   string
+	confirmRemove bool // double-tap d protection
+}
+
+func NewNewProfile(cfg *config.Config) *NewProfileModel {
+	name := textinput.New()
+	name.Placeholder = "my-project"
+	name.Focus()
+	name.CharLimit = 40
+
+	desc := textinput.New()
+	desc.Placeholder = "Optional description"
+	desc.CharLimit = 80
+
+	envInput := textinput.New()
+	envInput.Placeholder = "dev, staging, qa..."
+	envInput.CharLimit = 30
+
+	return &NewProfileModel{
+		cfg:      cfg,
+		step:     npStepName,
+		name:     name,
+		desc:     desc,
+		envInput: envInput,
+		envs:     []string{"local"}, // sensible default — always present
+	}
+}
+
+var npKeys = struct {
+	next, back, removeEnv key.Binding
+}{
+	next:      key.NewBinding(key.WithKeys("enter", "tab")),
+	back:      key.NewBinding(key.WithKeys("esc")),
+	removeEnv: key.NewBinding(key.WithKeys("d")),
+}
+
+func (m *NewProfileModel) Init() tea.Cmd {
+	return textinput.Blink
+}
+
+func (m *NewProfileModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		// Reset double-tap confirmation on ANY key press
+		resetConfirm := m.confirmRemove
+		m.confirmRemove = false
+
+		switch {
+		case key.Matches(msg, npKeys.back):
+			if m.step == npStepName {
+				return m, func() tea.Msg { return NavigateTo{Screen: NavHome} }
+			}
+			m.step--
+			m.confirmRemove = false
+			return m, nil
+
+		case key.Matches(msg, npKeys.next):
+			return m.advance()
+
+		case key.Matches(msg, npKeys.removeEnv):
+			if m.step == npStepEnvs && m.envInput.Value() == "" && len(m.envs) > 1 {
+				if resetConfirm {
+					// second consecutive d → actually remove
+					m.envs = m.envs[:len(m.envs)-1]
+					return m, nil
+				}
+				// first d → arm confirmation
+				m.confirmRemove = true
+				return m, nil
+			}
+		}
+		return m.updateInputs(msg)
+	}
+	return m, nil
+}
+
+func (m *NewProfileModel) advance() (tea.Model, tea.Cmd) {
+	m.err = ""
+	switch m.step {
+	case npStepName:
+		if strings.TrimSpace(m.name.Value()) == "" {
+			m.err = "profile name cannot be empty"
+			return m, nil
+		}
+		m.step = npStepDesc
+		m.name.Blur()
+		m.desc.Focus()
+		return m, textinput.Blink
+
+	case npStepDesc:
+		m.step = npStepEnvs
+		m.desc.Blur()
+		m.envInput.Focus()
+		return m, textinput.Blink
+
+	case npStepEnvs:
+		val := strings.TrimSpace(m.envInput.Value())
+		if val != "" {
+			// Text in input → add environment and stay
+			if !contains(m.envs, val) {
+				m.envs = append(m.envs, val)
+			}
+			m.envInput.Reset()
+			m.err = ""
+			return m, nil
+		}
+		// Empty input → proceed to save
+		return m, m.saveProfile()
+	}
+	return m, nil
+}
+
+func (m *NewProfileModel) saveProfile() tea.Cmd {
+	return func() tea.Msg {
+		envs := make([]config.Environment, len(m.envs))
+		for i, name := range m.envs {
+			envs[i] = config.Environment{Name: name}
+		}
+		profile := config.Profile{
+			Name:         strings.TrimSpace(m.name.Value()),
+			Description:  strings.TrimSpace(m.desc.Value()),
+			CreatedAt:    time.Now(),
+			UpdatedAt:    time.Now(),
+			Environments: envs,
+			ActiveEnv:    m.envs[0],
+		}
+		if err := m.cfg.AddProfile(profile); err != nil {
+			return ErrorMsg(err.Error())
+		}
+		return ProfileSavedMsg{Config: m.cfg}
+	}
+}
+
+func (m *NewProfileModel) updateInputs(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	switch m.step {
+	case npStepName:
+		m.name, cmd = m.name.Update(msg)
+	case npStepDesc:
+		m.desc, cmd = m.desc.Update(msg)
+	case npStepEnvs:
+		m.envInput, cmd = m.envInput.Update(msg)
+	}
+	return m, cmd
+}
+
+func (m *NewProfileModel) View() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(styles.StyleTitle.Render(" New Profile "))
+	b.WriteString("\n\n")
+
+	switch m.step {
+	case npStepName:
+		b.WriteString(styles.StyleInputLabel.Render("Profile name"))
+		b.WriteString("\n")
+		b.WriteString("  " + m.name.View())
+		b.WriteString("\n")
+		b.WriteString(styles.StyleSubtitle.Render("  Will be used as folder name: ~/.stackr/<name>/"))
+
+	case npStepDesc:
+		b.WriteString(styles.StyleInputLabel.Render("Description"))
+		b.WriteString("\n")
+		b.WriteString("  " + m.desc.View())
+		b.WriteString("\n")
+		b.WriteString(styles.StyleSubtitle.Render("  Optional — helps identify the profile at a glance"))
+
+	case npStepEnvs:
+		b.WriteString(styles.StyleSubtitle.Render("  Each profile can have multiple environments (local, dev, staging, ...)"))
+		b.WriteString("\n")
+		b.WriteString(styles.StyleSubtitle.Render("  Each environment has its own services, ports, and DB config."))
+		b.WriteString("\n\n")
+
+		b.WriteString(styles.StylePanel.Render(
+			lipgloss.JoinVertical(lipgloss.Left,
+				styles.StyleSubtitle.Render("Default environment"),
+				"", // lipgloss join needs non-empty
+				styles.EnvBadge("local"),
+			),
+		))
+		b.WriteString("\n\n")
+
+		if len(m.envs) > 1 {
+			b.WriteString(styles.StyleInputLabel.Render("Extra environments"))
+			b.WriteString("\n")
+			for _, env := range m.envs {
+				if env == "local" {
+					continue
+				}
+				b.WriteString("    " + styles.EnvBadge(env) + "\n")
+			}
+			b.WriteString("\n")
+		}
+
+		b.WriteString(styles.StyleSubtitle.Render("  Add more?"))
+		b.WriteString("\n")
+		b.WriteString("  " + m.envInput.View())
+		b.WriteString("\n")
+		b.WriteString(styles.StyleSubtitle.Render("  Type a name and press ↵ to add it  |  ↵ empty to continue"))
+		if len(m.envs) > 1 {
+			b.WriteString("\n")
+			if m.confirmRemove {
+				b.WriteString(styles.StyleError.Render("  Press d again to confirm removal"))
+			} else {
+				b.WriteString(styles.StyleSubtitle.Render("  Press d twice to remove the last environment"))
+			}
+		}
+	}
+
+	if m.err != "" {
+		b.WriteString("\n")
+		b.WriteString(styles.StyleError.Render("  ✗ " + m.err))
+	}
+
+	b.WriteString("\n\n")
+	if m.step == npStepEnvs {
+		b.WriteString(styles.StyleHelp.Render(
+			styles.HelpItem("↵", "add / continue") + "   " +
+				styles.HelpItem("d d", "remove last") + "   " +
+				styles.HelpItem("esc", "back"),
+		))
+	} else {
+		b.WriteString(styles.StyleHelp.Render(
+			styles.HelpItem("↵", "next") + "   " +
+				styles.HelpItem("esc", "back"),
+		))
+	}
+
+	return b.String()
+}
+
+func contains(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}

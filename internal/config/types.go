@@ -1,0 +1,250 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// Root config lives at ~/.stackr/config.yaml
+// Each profile lives at ~/.stackr/<profile-name>/
+//   └── docker-compose.yml  (generated)
+//   └── profile.yaml        (source of truth)
+
+type Config struct {
+	Profiles []Profile `yaml:"profiles"`
+}
+
+type Profile struct {
+	Name        string      `yaml:"name"`
+	Description string      `yaml:"description,omitempty"`
+	CreatedAt   time.Time   `yaml:"created_at"`
+	UpdatedAt   time.Time   `yaml:"updated_at"`
+	Environments []Environment `yaml:"environments"`
+	ActiveEnv   string      `yaml:"active_env"`
+}
+
+type Environment struct {
+	Name     string    `yaml:"name"`        // local, dev, staging...
+	Services []Service `yaml:"services"`
+	DBOps    *DBOps    `yaml:"db_ops,omitempty"`
+}
+
+type Service struct {
+	Name        string            `yaml:"name"`
+	Image       string            `yaml:"image"`
+	Tag         string            `yaml:"tag"`
+	Ports       []PortMapping     `yaml:"ports,omitempty"`
+	EnvVars     []EnvVar          `yaml:"env_vars,omitempty"`
+	Volumes     []VolumeMapping   `yaml:"volumes,omitempty"`
+	DependsOn   []string          `yaml:"depends_on,omitempty"`
+	HealthCheck *HealthCheck      `yaml:"healthcheck,omitempty"`
+	Restart     string            `yaml:"restart,omitempty"`
+	Networks    []string          `yaml:"networks,omitempty"`
+}
+
+func (s Service) FullImage() string {
+	if s.Tag == "" {
+		return s.Image
+	}
+	return s.Image + ":" + s.Tag
+}
+
+// DBType returns the database type this service provides, or "" if not a DB.
+// Supported: postgres, mysql, mongo, oracle, mssql.
+func (s Service) DBType() string {
+	img := s.Image
+	switch {
+	case containsFold(img, "postgres") || containsFold(img, "postgis"):
+		return "postgres"
+	case containsFold(img, "mysql") || containsFold(img, "mariadb"):
+		return "mysql"
+	case containsFold(img, "mongo"):
+		return "mongo"
+	case containsFold(img, "oracle"):
+		return "oracle"
+	case containsFold(img, "mssql") || containsFold(img, "sqlserver") || containsFold(img, "azuresql"):
+		return "mssql"
+	case containsFold(img, "cockroach"):
+		return "postgres" // cockroachdb is postgres-compatible
+	default:
+		return ""
+	}
+}
+
+func containsFold(s, substr string) bool {
+	s, substr = strings.ToLower(s), strings.ToLower(substr)
+	return strings.Contains(s, substr)
+}
+
+// HasDatabaseServices returns true if any service in this environment is a known database.
+func (e Environment) HasDatabaseServices() bool {
+	for _, s := range e.Services {
+		if s.DBType() != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// DatabaseTypes returns the set of distinct DB types in this environment.
+func (e Environment) DatabaseTypes() []string {
+	seen := map[string]bool{}
+	var types []string
+	for _, s := range e.Services {
+		t := s.DBType()
+		if t != "" && !seen[t] {
+			seen[t] = true
+			types = append(types, t)
+		}
+	}
+	return types
+}
+
+type PortMapping struct {
+	Host      string `yaml:"host"`
+	Container string `yaml:"container"`
+}
+
+func (p PortMapping) String() string {
+	return fmt.Sprintf("%s:%s", p.Host, p.Container)
+}
+
+type EnvVar struct {
+	Key   string `yaml:"key"`
+	Value string `yaml:"value"`
+}
+
+type VolumeMapping struct {
+	Source string `yaml:"source"`
+	Target string `yaml:"target"`
+	Named  bool   `yaml:"named"` // true = named volume, false = bind mount
+}
+
+type HealthCheck struct {
+	Test     string `yaml:"test"`
+	Interval string `yaml:"interval"`
+	Timeout  string `yaml:"timeout"`
+	Retries  int    `yaml:"retries"`
+}
+
+// DBOps defines how to interact with databases in this environment
+type DBOps struct {
+	Postgres *PostgresOps `yaml:"postgres,omitempty"`
+	Mongo    *MongoOps    `yaml:"mongo,omitempty"`
+	MySQL    *MySqlOps    `yaml:"mysql,omitempty"`
+}
+
+type PostgresOps struct {
+	Host     string `yaml:"host"`
+	Port     string `yaml:"port"`
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+	Database string `yaml:"database"`
+}
+
+type MongoOps struct {
+	Host     string `yaml:"host"`
+	Port     string `yaml:"port"`
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+	Database string `yaml:"database"`
+	AuthDB   string `yaml:"auth_db"`
+}
+
+type MySqlOps struct {
+	Host     string `yaml:"host"`
+	Port     string `yaml:"port"`
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+	Database string `yaml:"database"`
+}
+
+// ── Persistence ──────────────────────────────────────────────────────────────
+
+func StackrDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".stackr")
+}
+
+func ProfileDir(profileName string) string {
+	return filepath.Join(StackrDir(), profileName)
+}
+
+func configPath() string {
+	return filepath.Join(StackrDir(), "config.yaml")
+}
+
+func Load() (*Config, error) {
+	if err := os.MkdirAll(StackrDir(), 0755); err != nil {
+		return nil, err
+	}
+	path := configPath()
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		cfg := &Config{}
+		return cfg, cfg.Save()
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var cfg Config
+	return &cfg, yaml.Unmarshal(data, &cfg)
+}
+
+func (c *Config) Save() error {
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath(), data, 0644)
+}
+
+func (c *Config) AddProfile(p Profile) error {
+	for _, existing := range c.Profiles {
+		if existing.Name == p.Name {
+			return fmt.Errorf("profile %q already exists", p.Name)
+		}
+	}
+	// Create profile directory
+	if err := os.MkdirAll(ProfileDir(p.Name), 0755); err != nil {
+		return err
+	}
+	c.Profiles = append(c.Profiles, p)
+	return c.Save()
+}
+
+func (c *Config) UpdateProfile(p Profile) error {
+	for i, existing := range c.Profiles {
+		if existing.Name == p.Name {
+			p.UpdatedAt = time.Now()
+			c.Profiles[i] = p
+			return c.Save()
+		}
+	}
+	return fmt.Errorf("profile %q not found", p.Name)
+}
+
+func (c *Config) DeleteProfile(name string) error {
+	for i, p := range c.Profiles {
+		if p.Name == name {
+			c.Profiles = append(c.Profiles[:i], c.Profiles[i+1:]...)
+			_ = os.RemoveAll(ProfileDir(name))
+			return c.Save()
+		}
+	}
+	return fmt.Errorf("profile %q not found", name)
+}
+
+func (c *Config) GetProfile(name string) (*Profile, bool) {
+	for i := range c.Profiles {
+		if c.Profiles[i].Name == name {
+			return &c.Profiles[i], true
+		}
+	}
+	return nil, false
+}
