@@ -146,7 +146,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 	case views.NavLogs:
 		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
 			a.screen = ScreenLogs
-			a.logs = views.NewLogs(p, nav.EnvName)
+			a.logs = views.NewLogs(p, nav.EnvName, nav.ServiceName)
 			return a, a.logs.Init()
 		}
 	}

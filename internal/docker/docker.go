@@ -106,11 +106,12 @@ func UpAndStream(profileName, envName string, ch chan<- string) error {
 	return err
 }
 
-func Logs(profileName, envName string, follow bool, ch chan<- string, done <-chan struct{}) {
+func Logs(profileName, envName string, follow bool, ch chan<- string, done <-chan struct{}, svcName ...string) {
 	args := composeArgs(profileName, envName, "logs", "--tail=200")
 	if follow {
 		args = append(args, "-f")
 	}
+	args = append(args, svcName...)
 	cmd := exec.Command("docker", args...)
 	stdout, _ := cmd.StdoutPipe()
 	if err := cmd.Start(); err != nil {

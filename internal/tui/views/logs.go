@@ -17,6 +17,7 @@ import (
 type LogsModel struct {
 	profile    *config.Profile
 	envName    string
+	svcName    string // empty = all services
 	viewport   viewport.Model
 	lines      []string
 	mu         sync.Mutex
@@ -26,16 +27,17 @@ type LogsModel struct {
 	statusText string
 }
 
-func NewLogs(p *config.Profile, envName string) *LogsModel {
+func NewLogs(p *config.Profile, envName, svcName string) *LogsModel {
 	vp := viewport.New(80, 20)
 	vp.YPosition = 0
 	return &LogsModel{
-		profile: p,
-		envName: envName,
+		profile:  p,
+		envName:  envName,
+		svcName:  svcName,
 		viewport: vp,
-		follow:  true,
-		done:    make(chan struct{}),
-		lines:   []string{"── Logs ──"},
+		follow:   true,
+		done:     make(chan struct{}),
+		lines:    []string{"── Logs ──"},
 	}
 }
 
@@ -46,14 +48,22 @@ type logsDoneMsg struct{}
 func (m *LogsModel) ProfileName() string { return m.profile.Name }
 
 func (m *LogsModel) Init() tea.Cmd {
-	m.statusText = "Streaming logs from " + m.envName + "..."
+	if m.svcName != "" {
+		m.statusText = "Streaming logs from " + m.svcName + "..."
+	} else {
+		m.statusText = "Streaming logs from " + m.envName + "..."
+	}
 	return m.startLogStream()
 }
 
 func (m *LogsModel) startLogStream() tea.Cmd {
 	return func() tea.Msg {
 		ch := make(chan string, 100)
-		go docker.Logs(m.profile.Name, m.envName, m.follow, ch, m.done)
+		if m.svcName != "" {
+			go docker.Logs(m.profile.Name, m.envName, m.follow, ch, m.done, m.svcName)
+		} else {
+			go docker.Logs(m.profile.Name, m.envName, m.follow, ch, m.done)
+		}
 		for line := range ch {
 			m.mu.Lock()
 			m.lines = append(m.lines, line)
@@ -168,8 +178,13 @@ func (m *LogsModel) View() string {
 
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(styles.StyleTitle.Render(
-		fmt.Sprintf(" Logs — %s / %s ", m.profile.Name, m.envName)))
+	if m.svcName != "" {
+		b.WriteString(styles.StyleTitle.Render(
+			fmt.Sprintf(" Logs — %s / %s / %s ", m.profile.Name, m.envName, m.svcName)))
+	} else {
+		b.WriteString(styles.StyleTitle.Render(
+			fmt.Sprintf(" Logs — %s / %s ", m.profile.Name, m.envName)))
+	}
 	b.WriteString("\n")
 
 	if m.statusText != "" {

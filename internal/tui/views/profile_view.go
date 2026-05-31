@@ -196,13 +196,14 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, profileKeys.logs):
-			env := m.currentEnv()
-			if env != nil {
+			svcs := m.currentEnvServices()
+			if len(svcs) > 0 && m.cursor < len(svcs) {
 				return m, func() tea.Msg {
 					return NavigateTo{
 						Screen:      NavLogs,
 						ProfileName: m.profile.Name,
-						EnvName:     env.Name,
+						EnvName:     m.currentEnv().Name,
+						ServiceName: svcs[m.cursor].ComposeName(),
 					}
 				}
 			}
