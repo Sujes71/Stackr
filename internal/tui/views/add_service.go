@@ -185,19 +185,9 @@ func (m *AddServiceModel) refocusInputs(step addSvcStep) tea.Cmd {
 		return textinput.Blink
 	case svcStepVolumes:
 		m.volSource.Focus()
-		m.autoFillVolumeSource()
 		return textinput.Blink
 	}
 	return nil
-}
-
-// autoFillVolumeSource generates a volume name when the step shows a named volume
-// with an empty source (e.g. after prefillFromCatalog set Named:true but Source:"").
-func (m *AddServiceModel) autoFillVolumeSource() {
-	if m.volNamed && m.volSource.Value() == "" {
-		gen := m.profile.Name + "_" + strings.ReplaceAll(m.svc.Name, "-", "_") + "_data"
-		m.volSource.SetValue(gen)
-	}
 }
 
 // ── Messages ─────────────────────────────────────────────────────────────────
@@ -696,7 +686,6 @@ func (m *AddServiceModel) handleEnvVars(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.svc.EnvVars = m.envVars
 		m.step = svcStepVolumes
 		m.volSource.Focus()
-		m.autoFillVolumeSource()
 		return m, textinput.Blink
 	case key.Matches(msg, addSvcDelete):
 		k := strings.TrimSpace(m.envKey.Value())
@@ -1249,11 +1238,11 @@ func (m *AddServiceModel) viewVolumes() string {
 	b.WriteString("  " + styles.StyleInputLabel.Render("Source") + "  " + m.volSource.View() + "  ")
 	b.WriteString(styles.StyleCode.Render(namedLabel) + "\n\n")
 	for _, v := range m.volumes {
-		if v.Named && v.Source == "" {
-			b.WriteString(fmt.Sprintf("    named → %s\n", v.Target))
-		} else {
-			b.WriteString(fmt.Sprintf("    %s → %s\n", v.Source, v.Target))
+		source := v.Source
+		if v.Named && source == "" {
+			source = fmt.Sprintf("%s_%s_%s_data", m.profile.Name, m.envName, m.svc.Name)
 		}
+		b.WriteString(fmt.Sprintf("    %s → %s\n", source, v.Target))
 	}
 	if m.volumesDeleteArmed {
 		b.WriteString(styles.StyleError.Render("  Press d again to confirm removal"))
