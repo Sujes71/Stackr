@@ -143,6 +143,11 @@ func HelpBar(groups ...HelpGroup) string {
 	if len(cols) == 0 {
 		return ""
 	}
+	// Add gap between columns
+	gapStyle := lipgloss.NewStyle().PaddingRight(4)
+	for i := 0; i < len(cols)-1; i++ {
+		cols[i] = gapStyle.Render(cols[i])
+	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, cols...)
 }
 
