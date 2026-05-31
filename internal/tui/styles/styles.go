@@ -62,6 +62,10 @@ var (
 				Bold(true).
 				Padding(0, 2)
 
+	StyleListItemDisabled = lipgloss.NewStyle().
+				Foreground(ColorMuted).
+				Padding(0, 2)
+
 	StyleBadgeEnv = lipgloss.NewStyle().
 			Foreground(ColorBg).
 			Background(ColorPrimary).

@@ -69,10 +69,11 @@ type DBOpsModel struct {
 
 // actionItem describes a single export/import action in the actions screen.
 type actionItem struct {
-	label           string
-	enabled         bool
-	disabledReason  string
-	execute         func() tea.Cmd
+	label          string
+	enabled        bool
+	disabledReason string
+	spacer         bool // visual separator between action groups
+	execute        func() tea.Cmd
 }
 
 // ── Key bindings ──────────────────────────────────────────────────────────────
@@ -316,9 +317,17 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, dbOpsUp) && m.actionCursor > 0 && !m.running:
 			m.actionCursor--
+			// Skip over spacers
+			for m.actionCursor > 0 && m.actions[m.actionCursor].spacer {
+				m.actionCursor--
+			}
 
 		case key.Matches(msg, dbOpsDown) && m.actionCursor < len(m.actions)-1 && !m.running:
 			m.actionCursor++
+			// Skip over spacers
+			for m.actionCursor < len(m.actions)-1 && m.actions[m.actionCursor].spacer {
+				m.actionCursor++
+			}
 
 		case key.Matches(msg, dbOpsEnter) && !m.running:
 			if m.actionCursor < len(m.actions) {
@@ -371,6 +380,11 @@ func (m *DBOpsModel) viewActions() string {
 
 	actions := m.actions
 	for i, act := range actions {
+		if act.spacer {
+			b.WriteString("\n")
+			continue
+		}
+
 		prefix := "    "
 		if i == m.actionCursor {
 			prefix = "  > "
@@ -384,12 +398,8 @@ func (m *DBOpsModel) viewActions() string {
 				b.WriteString(styles.StyleListItem.Render(line))
 			}
 		} else {
-			// Disabled or running — dimmed
-			display := act.label
-			if !act.enabled && act.disabledReason != "" {
-				display = act.label + " (" + act.disabledReason + ")"
-			}
-			b.WriteString(styles.StyleSubtitle.Render(prefix + display))
+			// Disabled or running — same format, just dimmed
+			b.WriteString(styles.StyleListItemDisabled.Render(prefix + act.label))
 		}
 		b.WriteString("\n")
 	}
@@ -424,6 +434,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 		return []actionItem{
 			{label: "Export schema", enabled: true, execute: func() tea.Cmd { return m.exportSchema(se) }},
 			{label: "Export data", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
+			{spacer: true},
 			{label: "Import schema", enabled: hasSchema, disabledReason: "no schema dump", execute: func() tea.Cmd { return m.importSchema(se) }},
 			{label: "Import data", enabled: hasData, disabledReason: "no data dump", execute: func() tea.Cmd { return m.importData(se) }},
 		}
@@ -432,6 +443,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 		hasData := m.hasMongoDump(dDir)
 		return []actionItem{
 			{label: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
+			{spacer: true},
 			{label: "Import", enabled: hasData, disabledReason: "no dump", execute: func() tea.Cmd { return m.importData(se) }},
 		}
 
@@ -439,6 +451,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 		hasData := docker.HasDumpFile(dDir, "data-*.sql")
 		return []actionItem{
 			{label: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
+			{spacer: true},
 			{label: "Import", enabled: hasData, disabledReason: "no dump file", execute: func() tea.Cmd { return m.importData(se) }},
 		}
 
@@ -446,6 +459,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 		hasData := docker.HasDumpFile(dDir, "data-*.bacpac")
 		return []actionItem{
 			{label: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
+			{spacer: true},
 			{label: "Import", enabled: hasData, disabledReason: "no .bacpac file", execute: func() tea.Cmd { return m.importData(se) }},
 		}
 	}
