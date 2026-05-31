@@ -42,11 +42,12 @@ type AddServiceModel struct {
 	catalogCursor int
 
 	// hub search
-	searchInput   textinput.Model
-	searchResults []hub.SearchResult
-	searchCursor  int
-	searching     bool
-	searchErr     string
+	searchInput      textinput.Model
+	searchResults    []hub.SearchResult
+	searchCursor     int
+	searching        bool
+	searchErr        string
+	lastSearchQuery  string // track last executed query; Enter re-searches if query changed
 
 	// tag selection
 	tags       []hub.Tag
@@ -130,6 +131,16 @@ func (m *AddServiceModel) resetServiceData() {
 	m.defaultVolumes = nil
 	m.protectedEnvKeys = make(map[string]bool)
 	m.svc = config.Service{}
+	m.searchInput.SetValue("")
+	m.searchResults = nil
+	m.searchCursor = 0
+	m.searching = false
+	m.searchErr = ""
+	m.lastSearchQuery = ""
+	m.tags = nil
+	m.tagCursor = 0
+	m.loadingTags = false
+	m.catalogCursor = 0
 }
 
 func (m *AddServiceModel) refocusInputs(step addSvcStep) tea.Cmd {
@@ -407,8 +418,12 @@ func (m *AddServiceModel) handleSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, addSvcNext):
 		query := strings.TrimSpace(m.searchInput.Value())
-		if len(m.searchResults) == 0 && query != "" {
-			// first enter = search
+		if query == "" {
+			break
+		}
+		if query != m.lastSearchQuery {
+			// query changed — search (or re-search)
+			m.lastSearchQuery = query
 			m.searching = true
 			return m, func() tea.Msg {
 				results, err := hub.Search(query, 15)
@@ -418,8 +433,9 @@ func (m *AddServiceModel) handleSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 				return hubSearchResultMsg{results: results, err: errStr}
 			}
-		} else if len(m.searchResults) > 0 {
-			// second enter on a result = select it
+		}
+		// same query + results exist → select result at cursor
+		if len(m.searchResults) > 0 {
 			result := m.searchResults[m.searchCursor]
 			m.svc.Image = result.Name
 			m.svc.Name = strings.ReplaceAll(result.Name, "/", "-")
