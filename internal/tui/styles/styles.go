@@ -143,7 +143,7 @@ func HelpBar(groups ...HelpGroup) string {
 	if len(cols) == 0 {
 		return ""
 	}
-	return strings.Join(cols, "    ")
+	return lipgloss.JoinHorizontal(lipgloss.Top, cols...)
 }
 
 // EnvBadge returns a styled environment name badge.
