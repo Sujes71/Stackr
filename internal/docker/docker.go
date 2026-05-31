@@ -69,6 +69,10 @@ func Up(profileName, envName string) error {
 	return exec.Command("docker", composeArgs(profileName, envName, "up", "-d")...).Run()
 }
 
+func UpService(profileName, envName, serviceName string) error {
+	return exec.Command("docker", composeArgs(profileName, envName, "up", "-d", serviceName)...).Run()
+}
+
 func Down(profileName, envName string) error {
 	return exec.Command("docker", composeArgs(profileName, envName, "down")...).Run()
 }

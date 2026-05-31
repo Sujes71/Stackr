@@ -72,11 +72,12 @@ func (m *ProfileViewModel) loadStatus() tea.Cmd {
 }
 
 var profileKeys = struct {
-	back, up, down, start, stop, logs, addSvc, svcDelete, dbOps, switchEnv key.Binding
+	back, up, down, enter, start, stop, logs, addSvc, svcDelete, dbOps, switchEnv key.Binding
 }{
 	back:      key.NewBinding(key.WithKeys("esc", "backspace")),
 	up:        key.NewBinding(key.WithKeys("up", "k")),
 	down:      key.NewBinding(key.WithKeys("down", "j")),
+	enter:     key.NewBinding(key.WithKeys("enter")),
 	start:     key.NewBinding(key.WithKeys("s")),
 	stop:      key.NewBinding(key.WithKeys("x")),
 	logs:      key.NewBinding(key.WithKeys("l")),
@@ -127,6 +128,18 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			envSvcs := m.currentEnvServices()
 			if m.cursor < len(envSvcs)-1 {
 				m.cursor++
+			}
+
+		case key.Matches(msg, profileKeys.enter):
+			svcs := m.currentEnvServices()
+			if len(svcs) > 0 && m.cursor < len(svcs) {
+				svc := svcs[m.cursor]
+				m.loading = true
+				m.lastAction = "Starting " + svc.Name + "..."
+				return m, func() tea.Msg {
+					err := docker.UpService(m.profile.Name, m.profile.Environments[m.activeEnv].Name, svc.Name)
+					return actionDoneMsg{label: svc.Name + " started", err: err}
+				}
 			}
 
 		case key.Matches(msg, profileKeys.start):
@@ -284,7 +297,8 @@ func (m *ProfileViewModel) View() string {
 	helpItems = append(helpItems, styles.HelpItem("tab", "switch env"))
 	svcs := m.currentEnvServices()
 	if len(svcs) > 0 {
-		helpItems = append(helpItems, styles.HelpItem("s", "start"))
+		helpItems = append(helpItems, styles.HelpItem("↵", "start svc"))
+		helpItems = append(helpItems, styles.HelpItem("s", "stack"))
 		hasRunning := false
 		for _, st := range m.statuses {
 			if st.State == "running" {
