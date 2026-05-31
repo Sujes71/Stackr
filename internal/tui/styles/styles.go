@@ -119,31 +119,58 @@ type HelpGroup struct {
 	Items []string // pre-rendered via HelpItem()
 }
 
-// sectionLabelStyle is used for section labels in HelpBar.
-var sectionLabelStyle = lipgloss.NewStyle().Foreground(ColorMuted)
+// helpPanelStyle is used for each HelpBar section box.
+var helpPanelStyle = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(ColorMuted).
+	Padding(0, 1)
 
-// HelpBar renders labeled help sections side by side as columns.
-// Each section: "── Label ──" on row 0, items in 2 rows below.
+// helpLabelStyle is used for the section label inside each box.
+var helpLabelStyle = lipgloss.NewStyle().Foreground(ColorMuted)
+
+// HelpBar renders labeled help sections as bordered boxes side by side.
+// Items within each group are padded to equal width so columns align
+// vertically across rows.
 func HelpBar(groups ...HelpGroup) string {
 	var cols []string
 	for _, g := range groups {
 		if len(g.Items) == 0 {
 			continue
 		}
-		lines := []string{sectionLabelStyle.Render("── " + g.Label + " ──")}
-		mid := (len(g.Items) + 1) / 2
+
+		// Pad all items to the same width so both rows have equal
+		// column positions.
+		maxW := 0
+		for _, item := range g.Items {
+			if w := lipgloss.Width(item); w > maxW {
+				maxW = w
+			}
+		}
+		padded := make([]string, len(g.Items))
+		for i, item := range g.Items {
+			if d := maxW - lipgloss.Width(item); d > 0 {
+				padded[i] = item + strings.Repeat(" ", d)
+			} else {
+				padded[i] = item
+			}
+		}
+
+		lines := []string{helpLabelStyle.Render(g.Label)}
+		mid := (len(padded) + 1) / 2
 		if mid > 0 {
-			lines = append(lines, strings.Join(g.Items[:mid], "  "))
+			lines = append(lines, strings.Join(padded[:mid], "  "))
 		}
-		if mid < len(g.Items) {
-			lines = append(lines, strings.Join(g.Items[mid:], "  "))
+		if mid < len(padded) {
+			lines = append(lines, strings.Join(padded[mid:], "  "))
 		}
-		cols = append(cols, lipgloss.JoinVertical(lipgloss.Left, lines...))
+
+		cols = append(cols, helpPanelStyle.Render(
+			lipgloss.JoinVertical(lipgloss.Left, lines...),
+		))
 	}
 	if len(cols) == 0 {
 		return ""
 	}
-	// Add space between columns
 	gapStyle := lipgloss.NewStyle().PaddingRight(4)
 	for i := 0; i < len(cols)-1; i++ {
 		cols[i] = gapStyle.Render(cols[i])
