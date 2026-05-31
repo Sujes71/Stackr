@@ -56,7 +56,9 @@ type AddServiceModel struct {
 
 	// service being built
 	svc        config.Service
+	imageInput textinput.Model // for manual entry — enter image name first
 	nameInput  textinput.Model
+	nameFocus  int // 0=image input, 1=service name input (manual mode only)
 
 	// ports editor
 	portHost          textinput.Model
@@ -94,6 +96,10 @@ func NewAddService(cfg *config.Config, p *config.Profile, envName string) *AddSe
 	ni.Placeholder = "postgres"
 	ni.CharLimit = 40
 
+	ii := textinput.New()
+	ii.Placeholder = "mongo:4.2, postgres:16, my-registry/image..."
+	ii.CharLimit = 120
+
 	ph := textinput.New(); ph.Placeholder = "5432"; ph.CharLimit = 10; ph.Width = 8
 	pc := textinput.New(); pc.Placeholder = "5432"; pc.CharLimit = 10; pc.Width = 8
 
@@ -107,6 +113,7 @@ func NewAddService(cfg *config.Config, p *config.Profile, envName string) *AddSe
 		envName:          envName,
 		step:             svcStepSource,
 		searchInput:      si,
+		imageInput:       ii,
 		nameInput:        ni,
 		portHost:         ph,
 		portContainer:    pc,
@@ -137,6 +144,9 @@ func (m *AddServiceModel) resetServiceData() {
 	m.searching = false
 	m.searchErr = ""
 	m.lastSearchQuery = ""
+	m.imageInput.SetValue("")
+	m.nameInput.SetValue("")
+	m.nameFocus = 0
 	m.tags = nil
 	m.tagCursor = 0
 	m.loadingTags = false
@@ -145,6 +155,7 @@ func (m *AddServiceModel) resetServiceData() {
 
 func (m *AddServiceModel) refocusInputs(step addSvcStep) tea.Cmd {
 	m.searchInput.Blur()
+	m.imageInput.Blur()
 	m.nameInput.Blur()
 	m.portHost.Blur()
 	m.portContainer.Blur()
@@ -157,7 +168,12 @@ func (m *AddServiceModel) refocusInputs(step addSvcStep) tea.Cmd {
 		m.searchInput.Focus()
 		return textinput.Blink
 	case svcStepName:
-		m.nameInput.Focus()
+		if m.sourcePath == "manual" {
+			m.nameFocus = 0
+			m.imageInput.Focus()
+		} else {
+			m.nameInput.Focus()
+		}
 		return textinput.Blink
 	case svcStepPorts:
 		m.portHost.Focus()
@@ -273,16 +289,67 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case svcStepSelectTag:
 		return m.handleTagSelect(msg)
 	case svcStepName:
-		if key.Matches(msg, addSvcNext) {
-			m.svc.Name = strings.TrimSpace(m.nameInput.Value())
-			if m.svc.Name == "" {
-				m.err = "service name required"
-				return m, nil
+		if m.sourcePath == "manual" {
+			switch {
+			case key.Matches(msg, addSvcTab):
+				if m.nameFocus == 0 {
+					m.nameFocus = 1
+					m.imageInput.Blur()
+					m.nameInput.Focus()
+					m.err = ""
+				} else {
+					m.nameFocus = 0
+					m.nameInput.Blur()
+					m.imageInput.Focus()
+					m.err = ""
+				}
+				return m, textinput.Blink
+			case key.Matches(msg, addSvcNext):
+				if m.nameFocus == 0 {
+					// Enter on image input: set image, prefill, move to name
+					img := strings.TrimSpace(m.imageInput.Value())
+					if img == "" {
+						m.err = "image name required"
+						return m, nil
+					}
+					m.svc.Image = img
+					m.prefillFromCatalog(img)
+					// Auto-fill service name from image (strip tag)
+					name := img
+					if idx := strings.IndexByte(name, ':'); idx >= 0 {
+						name = name[:idx]
+					}
+					m.nameInput.SetValue(name)
+					m.nameFocus = 1
+					m.imageInput.Blur()
+					m.nameInput.Focus()
+					m.err = ""
+					return m, textinput.Blink
+				}
+				// Enter on service name: advance to ports
+				m.svc.Name = strings.TrimSpace(m.nameInput.Value())
+				if m.svc.Name == "" {
+					m.err = "service name required"
+					return m, nil
+				}
+				m.step = svcStepPorts
+				m.nameInput.Blur()
+				m.portHost.Focus()
+				return m, textinput.Blink
 			}
-			m.step = svcStepPorts
-			m.nameInput.Blur()
-			m.portHost.Focus()
-			return m, textinput.Blink
+		} else {
+			// Catalog / Search flow: image is read-only, just service name input
+			if key.Matches(msg, addSvcNext) {
+				m.svc.Name = strings.TrimSpace(m.nameInput.Value())
+				if m.svc.Name == "" {
+					m.err = "service name required"
+					return m, nil
+				}
+				m.step = svcStepPorts
+				m.nameInput.Blur()
+				m.portHost.Focus()
+				return m, textinput.Blink
+			}
 		}
 	case svcStepPorts:
 		return m.handlePorts(msg)
@@ -322,13 +389,15 @@ func (m *AddServiceModel) handleSource(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case 2:
 				m.sourcePath = "manual"
 				m.step = svcStepName
-				m.nameInput.Focus()
+				m.nameFocus = 0
+				m.imageInput.Focus()
 				return m, textinput.Blink
 			}
 		} else {
 			m.sourcePath = "manual"
 			m.step = svcStepName
-			m.nameInput.Focus()
+			m.nameFocus = 0
+			m.imageInput.Focus()
 			return m, textinput.Blink
 		}
 	}
@@ -344,6 +413,15 @@ func (m *AddServiceModel) prefillFromCatalog(image string) {
 	}
 	// If it looks like "library/xxx", strip the library/ prefix
 	base = strings.TrimPrefix(base, "library/")
+
+	// Reset before populating — prevents duplicates if called multiple times
+	m.ports = nil
+	m.envVars = nil
+	m.volumes = nil
+	m.defaultPorts = nil
+	m.defaultEnvVars = nil
+	m.defaultVolumes = nil
+	m.protectedEnvKeys = make(map[string]bool)
 
 	for _, entry := range hub.Catalog {
 		if entry.Image != base {
@@ -361,12 +439,13 @@ func (m *AddServiceModel) prefillFromCatalog(image string) {
 			m.envVars = append(m.envVars, config.EnvVar{Key: k, Value: v})
 			m.protectedEnvKeys[k] = true
 		}
-		// prefill volume
+		// prefill volume — use named volume so Docker manages permissions
+		// and each service has isolated data (no shared ./data collisions)
 		if entry.DefaultVolumeTarget != "" {
 			m.volumes = append(m.volumes, config.VolumeMapping{
-				Source: "./data",
+				Source: "",          // compose generator will create profile_env_service_data
 				Target: entry.DefaultVolumeTarget,
-				Named:  false,
+				Named:  true,
 			})
 		}
 		// snapshot defaults for reset on re-entry
@@ -806,7 +885,11 @@ func (m *AddServiceModel) updateActiveInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case svcStepSearch:
 		m.searchInput, cmd = m.searchInput.Update(msg)
 	case svcStepName:
-		m.nameInput, cmd = m.nameInput.Update(msg)
+		if m.sourcePath == "manual" && m.nameFocus == 0 {
+			m.imageInput, cmd = m.imageInput.Update(msg)
+		} else {
+			m.nameInput, cmd = m.nameInput.Update(msg)
+		}
 	case svcStepPorts:
 		if m.portHost.Focused() {
 			m.portHost, cmd = m.portHost.Update(msg)
@@ -1005,11 +1088,33 @@ func (m *AddServiceModel) viewTags() string {
 
 func (m *AddServiceModel) viewName() string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
-	b.WriteString(styles.StyleInputLabel.Render("Service name") + "\n")
-	b.WriteString("  " + m.nameInput.View() + "\n")
-	b.WriteString("  Used as the compose service key and container name suffix\n")
-	b.WriteString("\n" + styles.StyleHelp.Render(styles.HelpItem("↵", "next")))
+	if m.sourcePath == "manual" {
+		if m.nameFocus == 0 {
+			// Step 1: enter image name
+			b.WriteString("  Image\n\n")
+			b.WriteString("  " + m.imageInput.View() + "\n")
+			b.WriteString("  Docker image to pull (e.g. postgres:16, mongo:4.2)\n")
+			b.WriteString("\n  " + styles.StyleHelp.Render(
+				styles.HelpItem("↵", "set image"),
+			))
+		} else {
+			// Step 2: confirm/enter service name
+			b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
+			b.WriteString(styles.StyleInputLabel.Render("Service name") + "\n")
+			b.WriteString("  " + m.nameInput.View() + "\n")
+			b.WriteString("  Used as the compose service key and container name suffix\n")
+			b.WriteString("\n  " + styles.StyleHelp.Render(
+				styles.HelpItem("tab", "edit image")+"   "+
+					styles.HelpItem("↵", "next"),
+			))
+		}
+	} else {
+		b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
+		b.WriteString(styles.StyleInputLabel.Render("Service name") + "\n")
+		b.WriteString("  " + m.nameInput.View() + "\n")
+		b.WriteString("  Used as the compose service key and container name suffix\n")
+		b.WriteString("\n" + styles.StyleHelp.Render(styles.HelpItem("↵", "next")))
+	}
 	return b.String()
 }
 
@@ -1131,7 +1236,11 @@ func (m *AddServiceModel) viewVolumes() string {
 	b.WriteString("  " + styles.StyleInputLabel.Render("Source") + "  " + m.volSource.View() + "  ")
 	b.WriteString(styles.StyleCode.Render(namedLabel) + "\n\n")
 	for _, v := range m.volumes {
-		b.WriteString(fmt.Sprintf("    %s → %s\n", v.Source, v.Target))
+		if v.Named && v.Source == "" {
+			b.WriteString(fmt.Sprintf("    named → %s\n", v.Target))
+		} else {
+			b.WriteString(fmt.Sprintf("    %s → %s\n", v.Source, v.Target))
+		}
 	}
 	if m.volumesDeleteArmed {
 		b.WriteString(styles.StyleError.Render("  Press d again to confirm removal"))
