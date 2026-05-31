@@ -147,6 +147,7 @@ func (m *AddServiceModel) resetServiceData() {
 	m.imageInput.SetValue("")
 	m.nameInput.SetValue("")
 	m.nameFocus = 0
+	m.volNamed = false
 	m.tags = nil
 	m.tagCursor = 0
 	m.loadingTags = false
@@ -184,9 +185,19 @@ func (m *AddServiceModel) refocusInputs(step addSvcStep) tea.Cmd {
 		return textinput.Blink
 	case svcStepVolumes:
 		m.volSource.Focus()
+		m.autoFillVolumeSource()
 		return textinput.Blink
 	}
 	return nil
+}
+
+// autoFillVolumeSource generates a volume name when the step shows a named volume
+// with an empty source (e.g. after prefillFromCatalog set Named:true but Source:"").
+func (m *AddServiceModel) autoFillVolumeSource() {
+	if m.volNamed && m.volSource.Value() == "" {
+		gen := m.profile.Name + "_" + strings.ReplaceAll(m.svc.Name, "-", "_") + "_data"
+		m.volSource.SetValue(gen)
+	}
 }
 
 // ── Messages ─────────────────────────────────────────────────────────────────
@@ -447,6 +458,7 @@ func (m *AddServiceModel) prefillFromCatalog(image string) {
 				Target: entry.DefaultVolumeTarget,
 				Named:  true,
 			})
+			m.volNamed = true // sync toggle to match the prefilled volume
 		}
 		// snapshot defaults for reset on re-entry
 		m.defaultPorts = append([]config.PortMapping{}, m.ports...)
@@ -684,6 +696,7 @@ func (m *AddServiceModel) handleEnvVars(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.svc.EnvVars = m.envVars
 		m.step = svcStepVolumes
 		m.volSource.Focus()
+		m.autoFillVolumeSource()
 		return m, textinput.Blink
 	case key.Matches(msg, addSvcDelete):
 		k := strings.TrimSpace(m.envKey.Value())
