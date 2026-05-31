@@ -128,12 +128,11 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		if msg.err != nil {
 			m.lastAction = "✗ " + msg.err.Error()
-		} else {
-			m.lastAction = "✓ " + msg.label
+			return m, m.loadStatus()
 		}
-		// Auto-clear action message after 3 seconds
-		cmds := []tea.Cmd{m.loadStatus(), ClearActionAfter(3 * time.Second)}
-		return m, tea.Batch(cmds...)
+		m.lastAction = "✓ " + msg.label
+		// Auto-clear info message after 3 seconds
+		return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
 
 	case ClearActionMsg:
 		m.lastAction = ""
@@ -185,7 +184,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				m.lastAction = "✓ Added environment " + name
-				return m, m.loadStatus()
+				return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
 
 			default:
 				var cmd tea.Cmd
@@ -361,7 +360,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursor--
 				}
 			}
-			return m, m.loadStatus()
+			return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
 
 		case key.Matches(msg, profileKeys.envDelete):
 			if len(m.profile.Environments) == 0 {
@@ -396,7 +395,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Reset cursor
 			m.cursor = 0
 			m.lastAction = "✓ Deleted environment " + envName
-			return m, m.loadStatus()
+			return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
 
 		case key.Matches(msg, profileKeys.dbOps):
 			svcs := m.currentEnvServices()
