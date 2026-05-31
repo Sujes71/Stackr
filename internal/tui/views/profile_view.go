@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -56,6 +57,14 @@ type actionDoneMsg struct {
 	err   error
 }
 
+type clearActionMsg struct{}
+
+func clearActionAfter(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(t time.Time) tea.Msg {
+		return clearActionMsg{}
+	})
+}
+
 func (m *ProfileViewModel) loadStatus() tea.Cmd {
 	return func() tea.Msg {
 		if len(m.profile.Environments) == 0 {
@@ -105,7 +114,12 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.lastAction = "✓ " + msg.label
 		}
-		return m, m.loadStatus()
+		// Auto-clear action message after 3 seconds
+		cmds := []tea.Cmd{m.loadStatus(), clearActionAfter(3 * time.Second)}
+		return m, tea.Batch(cmds...)
+
+	case clearActionMsg:
+		m.lastAction = ""
 
 	case tea.KeyMsg:
 		switch {
