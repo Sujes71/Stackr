@@ -246,10 +246,10 @@ func (m *NewProfileModel) View() string {
 	if m.step == npStepEnvs {
 		b.WriteString(styles.HelpBar(
 			styles.HelpGroup{Label: "Action", Items: []styles.HelpItemResult{
-				styles.HelpItem("↵", "add / continue"),
+				styles.HelpItem("↵", "continue"),
 			}},
 			styles.HelpGroup{Label: "Manage", Items: []styles.HelpItemResult{
-				styles.HelpItem("d d", "remove last"),
+				styles.HelpItem("d d", "remove"),
 			}},
 		))
 		b.WriteString("\n")

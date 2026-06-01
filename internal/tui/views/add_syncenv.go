@@ -624,7 +624,7 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 
 	b.WriteString("\n")
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "switch field").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "change").Render() + "  " + styles.HelpItem("↵", "next").Render()))
 
 	return b.String()
 }

@@ -543,7 +543,7 @@ func (m *ProfileViewModel) View() string {
 		styles.HelpGroup{Label: "Stack", Items: stackItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("← →", "switch env").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("← →", "env").Render()))
 
 	return b.String()
 }
