@@ -146,15 +146,15 @@ func addSvcTailWindow(total, height, overhead int) itemWindow {
 func NewAddService(cfg *config.Config, p *config.Profile, envName string) *AddServiceModel {
 	si := textinput.New()
 	si.Placeholder = "postgres, redis, my-image..."
-	si.CharLimit = 30
+	si.CharLimit = 64
 
 	ni := textinput.New()
 	ni.Placeholder = "postgres"
-	ni.CharLimit = 20
+	ni.CharLimit = 64
 
 	ii := textinput.New()
 	ii.Placeholder = "mongo:4.2, postgres:16, my-registry/image..."
-	ii.CharLimit = 40
+	ii.CharLimit = 128
 
 	ph := textinput.New()
 	ph.Placeholder = "5432"
@@ -167,16 +167,16 @@ func NewAddService(cfg *config.Config, p *config.Profile, envName string) *AddSe
 
 	ek := textinput.New()
 	ek.Placeholder = "POSTGRES_USER"
-	ek.CharLimit = 30
+	ek.CharLimit = 64
 	ek.Width = 24
 	ev := textinput.New()
 	ev.Placeholder = "postgres"
-	ev.CharLimit = 60
+	ev.CharLimit = 512
 	ev.Width = 28
 
 	vs := textinput.New()
 	vs.Placeholder = "./data or volume name"
-	vs.CharLimit = 40
+	vs.CharLimit = 256
 	vs.Width = 30
 	return &AddServiceModel{
 		cfg:              cfg,

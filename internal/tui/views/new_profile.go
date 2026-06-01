@@ -36,11 +36,11 @@ func NewNewProfile(cfg *config.Config) *NewProfileModel {
 	name := textinput.New()
 	name.Placeholder = "my-project"
 	name.Focus()
-	name.CharLimit = 20
+	name.CharLimit = 30
 
 	desc := textinput.New()
 	desc.Placeholder = "Optional description"
-	desc.CharLimit = 40
+	desc.CharLimit = 60
 
 	envInput := textinput.New()
 	envInput.Placeholder = "dev, staging, qa..."

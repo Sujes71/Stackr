@@ -11,7 +11,6 @@ const (
 	NavProfileView
 	NavAddService
 	NavDBOps
-	NavLogs
 )
 
 // NavigateTo is a tea.Msg that tells the root App to switch screens.

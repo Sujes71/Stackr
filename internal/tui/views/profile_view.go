@@ -73,12 +73,12 @@ type ProfileNavState struct {
 func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
 	ti := textinput.New()
 	ti.Placeholder = "env name"
-	ti.CharLimit = 5
+	ti.CharLimit = 20
 	ti.Width = 12
 
 	portInput := textinput.New()
 	portInput.Placeholder = "8080"
-	portInput.CharLimit = 5
+	portInput.CharLimit = 10
 	portInput.Width = 8
 
 	m := &ProfileViewModel{
@@ -149,7 +149,7 @@ func (m *ProfileViewModel) loadStatus() tea.Cmd {
 }
 
 var profileKeys = struct {
-	back, up, down, enter, start, stop, logs, addSvc, svcDelete, dbOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort key.Binding
+	back, up, down, enter, start, stop, addSvc, svcDelete, dbOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort key.Binding
 }{
 	back:           key.NewBinding(key.WithKeys("esc", "backspace")),
 	up:             key.NewBinding(key.WithKeys("up")),
@@ -157,7 +157,6 @@ var profileKeys = struct {
 	enter:          key.NewBinding(key.WithKeys("enter")),
 	start:          key.NewBinding(key.WithKeys("s")),
 	stop:           key.NewBinding(key.WithKeys("x")),
-	logs:           key.NewBinding(key.WithKeys("l")),
 	addSvc:         key.NewBinding(key.WithKeys("a")),
 	svcDelete:      key.NewBinding(key.WithKeys("d")),
 	dbOps:          key.NewBinding(key.WithKeys("o")),
@@ -772,19 +771,6 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.keyPending = "r"
 			m.resetArmed = true
 			return m, nil
-
-		case key.Matches(msg, profileKeys.logs):
-			svcs := m.currentEnvServices()
-			if len(svcs) > 0 && m.cursor < len(svcs) {
-				return m, func() tea.Msg {
-					return NavigateTo{
-						Screen:      NavLogs,
-						ProfileName: m.profile.Name,
-						EnvName:     m.currentEnv().Name,
-						ServiceName: svcs[m.cursor].ComposeName(),
-					}
-				}
-			}
 
 		case key.Matches(msg, profileKeys.addSvc):
 			if m.isPortForwardEnv() {
@@ -1632,7 +1618,6 @@ func (m *ProfileViewModel) renderDockerHelpBar() string {
 
 	if len(svcs) > 0 {
 		svcItems = append(svcItems, styles.HelpItem("↵", "toggle"))
-		svcItems = append(svcItems, styles.HelpItem("l", "logs"))
 		if m.selectedDBType() != "" {
 			svcItems = append(svcItems, styles.HelpItem("o", "db ops"))
 		}

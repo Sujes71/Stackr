@@ -202,8 +202,8 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(syncEnvs) > 0 {
 				se := &syncEnvs[m.listCursor]
 				m.selectedEnv = se.Name
-				m.actionCursor = 0
 				m.actions = m.buildActionsList(se)
+				m.actionCursor = m.firstEnabledAction()
 				m.screen = dbScreenSyncEnvActions
 			}
 
@@ -231,7 +231,7 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				svc.SyncEnvs = append(syncEnvs[:m.listCursor], syncEnvs[m.listCursor+1:]...)
 				m.profile.UpdatedAt = time.Now()
 				if err := m.cfg.UpdateProfile(*m.profile); err != nil {
-					m.lastResult = styles.StyleError.Render("✗ " + err.Error())
+					m.lastResult = formatErrorMsg(err.Error())
 				} else {
 					m.lastResult = styles.StyleSuccess.Render("✓ Deleted " + name)
 					if m.listCursor >= len(svc.SyncEnvs) && m.listCursor > 0 {
@@ -346,11 +346,21 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selectedEnv = ""
 			m.actions = nil
 
-		case key.Matches(msg, dbOpsUp) && m.actionCursor > 0 && !m.running:
-			m.actionCursor--
+		case key.Matches(msg, dbOpsUp) && !m.running:
+			for i := m.actionCursor - 1; i >= 0; i-- {
+				if m.actions[i].enabled {
+					m.actionCursor = i
+					break
+				}
+			}
 
-		case key.Matches(msg, dbOpsDown) && m.actionCursor < len(m.actions)-1 && !m.running:
-			m.actionCursor++
+		case key.Matches(msg, dbOpsDown) && !m.running:
+			for i := m.actionCursor + 1; i < len(m.actions); i++ {
+				if m.actions[i].enabled {
+					m.actionCursor = i
+					break
+				}
+			}
 
 		case key.Matches(msg, dbOpsEnter) && !m.running:
 			if m.actionCursor < len(m.actions) {
@@ -368,10 +378,10 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case dbOpsDoneMsg:
+		case dbOpsDoneMsg:
 		m.running = false
 		if msg.err != nil {
-			m.lastResult = styles.StyleError.Render("\u2717 " + msg.err.Error())
+			m.lastResult = formatErrorMsg(msg.err.Error())
 		} else {
 			m.lastResult = styles.StyleSuccess.Render("\u2713 " + msg.result)
 			// Re-scan dump states — imports/exports affect dump availability
@@ -379,6 +389,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if svc != nil {
 				if se := svc.FindSyncEnv(m.selectedEnv); se != nil {
 					m.actions = m.buildActionsList(se)
+					m.actionCursor = m.firstEnabledAction()
 				}
 			}
 			// Track truncate vs import to toggle truncate availability
@@ -414,73 +425,44 @@ func (m *DBOpsModel) viewActions() string {
 		fmt.Sprintf(" Actions for: %s ", m.selectedEnv)))
 	b.WriteString("\n\n")
 
-	// Connection info panel
-	b.WriteString(styles.StylePanel.Render(
-		styles.StyleSubtitle.Render(
-			fmt.Sprintf("  %s  %s:%s  %s@%s", syncEnv.DBType, syncEnv.Host, syncEnv.Port, syncEnv.User, syncEnv.Database)),
+	// Connection info (inline, no border)
+	b.WriteString(styles.StyleSubtitle.Render(
+		fmt.Sprintf("  %s  %s:%s  %s@%s", syncEnv.DBType, syncEnv.Host, syncEnv.Port, syncEnv.User, syncEnv.Database),
 	))
 	b.WriteString("\n\n")
 
-	// Group actions by their group label
-	type actionGroup struct {
-		label   string
-		items   []actionItem
-		indices []int
-	}
-	groups := make(map[string]*actionGroup)
+	// Action group sections rendered inline (no boxes)
+	groupHeaderStyle := lipgloss.NewStyle().
+		Foreground(styles.ColorPrimary).
+		Bold(true)
+
+	currentGroup := ""
 	for i, act := range m.actions {
-		g, ok := groups[act.group]
-		if !ok {
-			g = &actionGroup{label: act.group}
-			groups[act.group] = g
-		}
-		g.items = append(g.items, act)
-		g.indices = append(g.indices, i)
-	}
-
-	// renderGroup renders a single action group panel
-	renderGroup := func(g *actionGroup) string {
-		var lines []string
-		for idx, act := range g.items {
-			origIdx := g.indices[idx]
-			prefix := " "
-			if origIdx == m.actionCursor {
-				prefix = ">"
+		if act.group != currentGroup {
+			currentGroup = act.group
+			if i > 0 {
+				b.WriteString("\n")
 			}
-			line := prefix + " " + act.label
-			if act.enabled && !m.running {
-				if origIdx == m.actionCursor {
-					lines = append(lines, styles.StyleListItemSelected.Render(line))
-				} else {
-					lines = append(lines, styles.StyleListItem.Render(line))
-				}
+			b.WriteString("  " + groupHeaderStyle.Render(currentGroup) + "\n")
+		}
+
+		isCursor := i == m.actionCursor
+
+		if act.enabled && !m.running {
+			if isCursor {
+				b.WriteString(styles.StyleListItemSelected.Render("> " + act.label) + "\n")
 			} else {
-				lines = append(lines, styles.StyleListItemDisabled.Render(line))
-				if act.disabledReason != "" {
-					lines = append(lines, styles.StyleSubtitle.Render("    unavailable: "+act.disabledReason))
-				}
+				b.WriteString(styles.StyleListItem.Render("  " + act.label) + "\n")
+			}
+		} else {
+			b.WriteString(styles.StyleListItemDisabled.Render("  " + act.label) + "\n")
+			if !act.enabled && act.disabledReason != "" {
+				b.WriteString(styles.StyleSubtitle.Render("      unavailable: " + act.disabledReason) + "\n")
 			}
 		}
-		content := styles.StyleSubtitle.Render(g.label) + "\n\n" + strings.Join(lines, "\n")
-		return styles.StylePanel.Render(content)
 	}
 
-	// Layout: Export + Truncate Functions side by side, Import below
-	if exportG := groups["Export"]; exportG != nil {
-		if truncG := groups["Functions"]; truncG != nil {
-			b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top,
-				renderGroup(exportG),
-				lipgloss.NewStyle().PaddingLeft(2).Render(renderGroup(truncG)),
-			))
-		} else {
-			b.WriteString(renderGroup(exportG))
-		}
-		b.WriteString("\n\n")
-	}
-	if importG := groups["Import"]; importG != nil {
-		b.WriteString(renderGroup(importG))
-		b.WriteString("\n\n")
-	}
+	b.WriteString("\n")
 
 	if m.running {
 		b.WriteString(styles.StyleSubtitle.Render("  Running\u2026") + "\n\n")
@@ -490,7 +472,7 @@ func (m *DBOpsModel) viewActions() string {
 		b.WriteString("  " + m.lastResult + "\n\n")
 	}
 
-	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "run")))
+	b.WriteString(styles.BackHelp(styles.HelpItem("\u2191 \u2193", "navigate"), styles.HelpItem("\u21b5", "run")))
 	return b.String()
 }
 
@@ -502,38 +484,42 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 
 	switch se.DBType {
 	case "postgres":
+		pgDumpAvailable := docker.ToolAvailable("pg_dump")
 		hasSchema := docker.HasDumpFile(dDir, "schema-*.sql")
 		hasData := docker.HasDumpFile(dDir, "data-*.sql")
 		return []actionItem{
-			{label: "Export schema", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportSchema(se) }},
-			{label: "Export data", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
-			{label: "Import schema", group: "Import", enabled: hasSchema, disabledReason: "no schema dump", execute: func() tea.Cmd { return m.importSchema(se) }},
-			{label: "Import data", group: "Import", enabled: hasData, disabledReason: "no data dump", execute: func() tea.Cmd { return m.importData(se) }},
-			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: "import data first", execute: truncate},
+			{label: "Export schema", group: "Export", enabled: pgDumpAvailable, disabledReason: disabledIf(!pgDumpAvailable, "pg_dump not found in PATH"), execute: func() tea.Cmd { return m.exportSchema(se) }},
+			{label: "Export data", group: "Export", enabled: pgDumpAvailable, disabledReason: disabledIf(!pgDumpAvailable, "pg_dump not found in PATH"), execute: func() tea.Cmd { return m.exportData(se) }},
+			{label: "Import schema", group: "Import", enabled: hasSchema, disabledReason: disabledIf(!hasSchema, "no schema dump"), execute: func() tea.Cmd { return m.importSchema(se) }},
+			{label: "Import data", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no data dump"), execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: disabledIf(!m.truncateEnabled(hasData), "import data first"), execute: truncate},
 		}
 
 	case "mongo":
+		mongodumpAvailable := docker.ToolAvailable("mongodump")
 		hasData := m.hasMongoDump(dDir)
 		return []actionItem{
-			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
-			{label: "Import", group: "Import", enabled: hasData, disabledReason: "no dump", execute: func() tea.Cmd { return m.importData(se) }},
-			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: "import data first", execute: truncate},
+			{label: "Export", group: "Export", enabled: mongodumpAvailable, disabledReason: disabledIf(!mongodumpAvailable, "mongodump not found in PATH"), execute: func() tea.Cmd { return m.exportData(se) }},
+			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump"), execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: disabledIf(!m.truncateEnabled(hasData), "import data first"), execute: truncate},
 		}
 
 	case "mysql":
+		mysqldumpAvailable := docker.ToolAvailable("mysqldump")
 		hasData := docker.HasDumpFile(dDir, "data-*.sql")
 		return []actionItem{
-			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
-			{label: "Import", group: "Import", enabled: hasData, disabledReason: "no dump file", execute: func() tea.Cmd { return m.importData(se) }},
-			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: "import data first", execute: truncate},
+			{label: "Export", group: "Export", enabled: mysqldumpAvailable, disabledReason: disabledIf(!mysqldumpAvailable, "mysqldump not found in PATH"), execute: func() tea.Cmd { return m.exportData(se) }},
+			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump file"), execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: disabledIf(!m.truncateEnabled(hasData), "import data first"), execute: truncate},
 		}
 
 	case "mssql":
+		sqlpackageAvailable := docker.ToolAvailable("sqlpackage")
 		hasData := docker.HasDumpFile(dDir, "data-*.bacpac")
 		return []actionItem{
-			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
-			{label: "Import", group: "Import", enabled: hasData, disabledReason: "no .bacpac file", execute: func() tea.Cmd { return m.importData(se) }},
-			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: "import data first", execute: truncate},
+			{label: "Export", group: "Export", enabled: sqlpackageAvailable, disabledReason: disabledIf(!sqlpackageAvailable, "sqlpackage not found in PATH"), execute: func() tea.Cmd { return m.exportData(se) }},
+			{label: "Import", group: "Import", enabled: hasData && sqlpackageAvailable, disabledReason: disabledIf(!hasData, "no .bacpac file"), execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: disabledIf(!m.truncateEnabled(hasData), "import data first"), execute: truncate},
 		}
 	}
 	return nil
@@ -843,6 +829,70 @@ func ts() string {
 // already performed since the last data import.
 func (m *DBOpsModel) truncateEnabled(hasData bool) bool {
 	return hasData && !m.truncatedSinceData
+}
+
+// disabledIf returns reason when cond is true, or empty string when false.
+func disabledIf(cond bool, reason string) string {
+	if cond {
+		return reason
+	}
+	return ""
+}
+
+// wordWrap splits s into lines of at most width characters,
+// breaking at word boundaries. Words longer than width are placed
+// on their own line without breaking.
+func wordWrap(s string, width int) []string {
+	var lines []string
+	for _, para := range strings.Split(s, "\n") {
+		if len(para) <= width {
+			lines = append(lines, para)
+			continue
+		}
+		var current string
+		for _, word := range strings.Fields(para) {
+			if current == "" {
+				current = word
+			} else if len(current)+1+len(word) <= width {
+				current += " " + word
+			} else {
+				lines = append(lines, current)
+				current = word
+			}
+		}
+		if current != "" {
+			lines = append(lines, current)
+		}
+	}
+	return lines
+}
+
+// formatErrorMsg formats an error string with a line break between the action
+// prefix and the underlying error detail, word-wrapping the detail at ~80 chars.
+func formatErrorMsg(err string) string {
+	idx := strings.Index(err, ": ")
+	if idx == -1 {
+		return styles.StyleError.Render("\u2717 " + err)
+	}
+	prefix := err[:idx]
+	detail := err[idx+2:]
+	wrapped := wordWrap(detail, 80)
+	var b strings.Builder
+	b.WriteString("\u2717 " + prefix + ":\n")
+	for _, line := range wrapped {
+		b.WriteString("  " + line + "\n")
+	}
+	return styles.StyleError.Render(strings.TrimSuffix(b.String(), "\n"))
+}
+
+// firstEnabledAction returns the index of the first enabled action, or 0 if all are disabled.
+func (m *DBOpsModel) firstEnabledAction() int {
+	for i, act := range m.actions {
+		if act.enabled {
+			return i
+		}
+	}
+	return 0
 }
 
 // hasImportPrefix returns true when label matches any "Import" action.

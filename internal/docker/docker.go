@@ -200,6 +200,9 @@ func LocalImages() ([]LocalImage, error) {
 
 // PgDump runs pg_dump. flag: "-s" schema, "-a" data, "" full.
 func PgDump(syncEnv *config.SyncEnv, outPath, flag string) error {
+	if !ToolAvailable("pg_dump") {
+		return fmt.Errorf("pg_dump not found in PATH. Install PostgreSQL client tools: brew install libpq")
+	}
 	args := []string{"-h", syncEnv.Host, "-p", syncEnv.Port, "-U", syncEnv.User}
 	if flag != "" {
 		args = append(args, flag)
@@ -219,6 +222,9 @@ func PgDump(syncEnv *config.SyncEnv, outPath, flag string) error {
 
 // MongoDump runs mongodump.
 func MongoDump(syncEnv *config.SyncEnv, outDir string) error {
+	if !ToolAvailable("mongodump") {
+		return fmt.Errorf("mongodump not found in PATH. Install MongoDB Database Tools: brew install mongodb-database-tools")
+	}
 	cmd := exec.Command("mongodump",
 		"--host", syncEnv.Host+":"+syncEnv.Port,
 		"--username", syncEnv.User,
@@ -236,6 +242,9 @@ func MongoDump(syncEnv *config.SyncEnv, outDir string) error {
 
 // MySqlDump runs mysqldump.
 func MySqlDump(syncEnv *config.SyncEnv, outPath string) error {
+	if !ToolAvailable("mysqldump") {
+		return fmt.Errorf("mysqldump not found in PATH. Install MySQL client tools: brew install mysql-client")
+	}
 	args := []string{"-h", syncEnv.Host, "-P", syncEnv.Port, "-u", syncEnv.User, syncEnv.Database}
 	cmd := exec.Command("mysqldump", args...)
 	cmd.Env = append(os.Environ(), "MYSQL_PWD="+syncEnv.Password)

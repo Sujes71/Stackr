@@ -39,7 +39,6 @@ const (
 	ScreenNewProfile
 	ScreenAddService
 	ScreenDBOps
-	ScreenLogs
 )
 
 // App is the root Bubble Tea model.
@@ -56,8 +55,6 @@ type App struct {
 	newProfile  *views.NewProfileModel
 	addService  *views.AddServiceModel
 	dbOps       *views.DBOpsModel
-	logs        *views.LogsModel
-
 	err string
 }
 
@@ -160,12 +157,6 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 			return a, a.dbOps.Init()
 		}
 
-	case views.NavLogs:
-		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
-			a.screen = ScreenLogs
-			a.logs = views.NewLogs(p, nav.EnvName, nav.ServiceName)
-			return a, a.logs.Init()
-		}
 	}
 	return a, nil
 }
@@ -206,10 +197,6 @@ func (a *App) updateActive(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ScreenDBOps:
 		m, c := a.dbOps.Update(msg)
 		a.dbOps = m.(*views.DBOpsModel)
-		cmd = c
-	case ScreenLogs:
-		m, c := a.logs.Update(msg)
-		a.logs = m.(*views.LogsModel)
 		cmd = c
 	}
 	return a, cmd
@@ -261,8 +248,6 @@ func (a *App) breadcrumb() string {
 		if a.dbOps != nil {
 			return "profiles / " + a.dbOps.ProfileName() + " / " + a.dbOps.EnvName() + " / " + a.dbOps.ServiceName() + " / db ops"
 		}
-	case ScreenLogs:
-		return "logs"
 	}
 	return ""
 }
@@ -279,8 +264,6 @@ func (a *App) renderBody() string {
 		return a.addService.View()
 	case ScreenDBOps:
 		return a.dbOps.View()
-	case ScreenLogs:
-		return a.logs.View()
 	}
 	return ""
 }

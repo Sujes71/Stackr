@@ -137,7 +137,7 @@ func NewAddSyncEnv(
 	// Step 1: name input
 	ni := textinput.New()
 	ni.Placeholder = "staging, prod, dev..."
-	ni.CharLimit = 20
+	ni.CharLimit = 64
 	ni.Width = 30
 	ni.Focus()
 	m.nameInput = ni
@@ -145,30 +145,30 @@ func NewAddSyncEnv(
 	// Step 2: credential inputs
 	hi := textinput.New()
 	hi.Placeholder = "db.example.com"
-	hi.CharLimit = 40
+	hi.CharLimit = 256
 	hi.Width = 30
 
 	pi := textinput.New()
 	pi.Placeholder = defaultPort
-	pi.CharLimit = 5
+	pi.CharLimit = 10
 	pi.Width = 8
 	pi.SetValue(defaultPort)
 
 	ui := textinput.New()
 	ui.Placeholder = "username"
-	ui.CharLimit = 30
+	ui.CharLimit = 128
 	ui.Width = 24
 
 	pai := textinput.New()
 	pai.Placeholder = "password (optional)"
-	pai.CharLimit = 60
+	pai.CharLimit = 256
 	pai.Width = 28
 	pai.EchoMode = textinput.EchoPassword
 	pai.EchoCharacter = '•'
 
 	di := textinput.New()
 	di.Placeholder = "database"
-	di.CharLimit = 30
+	di.CharLimit = 128
 	di.Width = 24
 
 	m.hostInput = hi
@@ -183,7 +183,7 @@ func NewAddSyncEnv(
 		m.maxFocus = 5
 		ai := textinput.New()
 		ai.Placeholder = "admin (auth db)"
-		ai.CharLimit = 30
+		ai.CharLimit = 128
 		ai.Width = 24
 		m.authDBInput = ai
 	}
