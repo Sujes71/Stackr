@@ -397,6 +397,104 @@ func ExecMySqlRestore(profileName, envName, serviceName, dumpPath string) error 
 // SqlPackage helpers (MSSQL — runs on host, targets container port)
 // ================================================================
 
+// ================================================================
+// Truncate functions (docker exec based)
+// ================================================================
+
+// PgTruncate truncates all tables in the public schema of a Postgres container.
+func PgTruncate(profileName, envName, serviceName string) error {
+	container := ContainerName(profileName, envName, serviceName)
+
+	user, err := ContainerEnv(container, "POSTGRES_USER")
+	if err != nil {
+		return fmt.Errorf("read POSTGRES_USER: %w", err)
+	}
+	pass, _ := ContainerEnv(container, "POSTGRES_PASSWORD")
+	db, err := ContainerEnv(container, "POSTGRES_DB")
+	if err != nil {
+		return fmt.Errorf("read POSTGRES_DB: %w", err)
+	}
+
+	env := []string{}
+	if pass != "" {
+		env = append(env, "PGPASSWORD="+pass)
+	}
+	_, err = ContainerExecWithEnv(container, env,
+		"psql", "-U", user, "-d", db,
+		"-c", `DO $$ DECLARE r RECORD; BEGIN FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname='public') LOOP EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' CASCADE'; END LOOP; END $$;`,
+	)
+	if err != nil {
+		return fmt.Errorf("truncate tables: %w", err)
+	}
+	return nil
+}
+
+// MySqlTruncate truncates all tables in a MySQL container.
+func MySqlTruncate(profileName, envName, serviceName string) error {
+	container := ContainerName(profileName, envName, serviceName)
+
+	user, err := ContainerEnv(container, "MYSQL_ROOT_USER")
+	if err != nil {
+		user, err = ContainerEnv(container, "MYSQL_USER")
+		if err != nil {
+			return fmt.Errorf("read MYSQL_USER: %w", err)
+		}
+	}
+	pass, _ := ContainerEnv(container, "MYSQL_ROOT_PASSWORD")
+	if pass == "" {
+		pass, _ = ContainerEnv(container, "MYSQL_PASSWORD")
+	}
+	db, err := ContainerEnv(container, "MYSQL_DATABASE")
+	if err != nil {
+		return fmt.Errorf("read MYSQL_DATABASE: %w", err)
+	}
+
+	_, err = ContainerExec(container, "sh", "-c",
+		fmt.Sprintf(`mysql -u %s -p'%s' %s -e "
+			SET FOREIGN_KEY_CHECKS=0;
+			SELECT GROUP_CONCAT(CONCAT('TRUNCATE TABLE ', table_name, ';') SEPARATOR ' ')
+			INTO @sql FROM information_schema.tables WHERE table_schema = '%s';
+			PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+		"`, user, pass, db, db),
+	)
+	if err != nil {
+		return fmt.Errorf("truncate tables: %w", err)
+	}
+	return nil
+}
+
+// MongoTruncate drops all non-system collections in the database via docker exec.
+func MongoTruncate(profileName, envName, serviceName string) error {
+	container := ContainerName(profileName, envName, serviceName)
+	_, err := ContainerExec(container, "mongosh", "--eval",
+		`db.getCollectionNames().forEach(function(c) {
+			if (c.indexOf("system.") == -1) db.getCollection(c).deleteMany({});
+		})`,
+	)
+	if err != nil {
+		return fmt.Errorf("truncate collections: %w", err)
+	}
+	return nil
+}
+
+// MsSqlTruncate truncates all tables in the default schema via docker exec.
+func MsSqlTruncate(profileName, envName, serviceName string) error {
+	container := ContainerName(profileName, envName, serviceName)
+
+	saPass, err := ContainerEnv(container, "MSSQL_SA_PASSWORD")
+	if err != nil {
+		return fmt.Errorf("read MSSQL_SA_PASSWORD: %w", err)
+	}
+
+	_, err = ContainerExec(container, "sh", "-c",
+		fmt.Sprintf(`/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P '%s' -d master -Q "EXEC sp_MSforeachtable 'TRUNCATE TABLE ?'"`, saPass),
+	)
+	if err != nil {
+		return fmt.Errorf("truncate tables: %w", err)
+	}
+	return nil
+}
+
 // SqlPackageExport exports an MSSQL database to a .bacpac file using sqlpackage CLI.
 func SqlPackageExport(syncEnv *config.SyncEnv, outPath string) error {
 	if !ToolAvailable("sqlpackage") {

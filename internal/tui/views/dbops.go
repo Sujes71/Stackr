@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stackr/stackr/internal/config"
 	"github.com/stackr/stackr/internal/docker"
 	"github.com/stackr/stackr/internal/tui/styles"
@@ -67,12 +68,12 @@ type DBOpsModel struct {
 	wizardModel *AddSyncEnvModel
 }
 
-// actionItem describes a single export/import action in the actions screen.
+// actionItem describes a single action in the actions screen.
 type actionItem struct {
 	label          string
+	group          string // panel group label: "Export", "Import", "Truncate"
 	enabled        bool
 	disabledReason string
-	spacer         bool // visual separator between action groups
 	execute        func() tea.Cmd
 }
 
@@ -319,17 +320,9 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, dbOpsUp) && m.actionCursor > 0 && !m.running:
 			m.actionCursor--
-			// Skip over spacers
-			for m.actionCursor > 0 && m.actions[m.actionCursor].spacer {
-				m.actionCursor--
-			}
 
 		case key.Matches(msg, dbOpsDown) && m.actionCursor < len(m.actions)-1 && !m.running:
 			m.actionCursor++
-			// Skip over spacers
-			for m.actionCursor < len(m.actions)-1 && m.actions[m.actionCursor].spacer {
-				m.actionCursor++
-			}
 
 		case key.Matches(msg, dbOpsEnter) && !m.running:
 			if m.actionCursor < len(m.actions) {
@@ -375,47 +368,82 @@ func (m *DBOpsModel) viewActions() string {
 	b.WriteString("\n")
 	b.WriteString(styles.StyleTitle.Render(
 		fmt.Sprintf(" Actions for: %s ", m.selectedEnv)))
-	b.WriteString("\n")
-	b.WriteString(styles.StyleSubtitle.Render(
-		fmt.Sprintf("  %s  %s:%s  %s@%s", syncEnv.DBType, syncEnv.Host, syncEnv.Port, syncEnv.User, syncEnv.Database)))
 	b.WriteString("\n\n")
 
-	actions := m.actions
-	for i, act := range actions {
-		if act.spacer {
-			b.WriteString("\n")
-			continue
-		}
+	// Connection info panel
+	b.WriteString(styles.StylePanel.Render(
+		styles.StyleSubtitle.Render(
+			fmt.Sprintf("  %s  %s:%s  %s@%s", syncEnv.DBType, syncEnv.Host, syncEnv.Port, syncEnv.User, syncEnv.Database)),
+	))
+	b.WriteString("\n\n")
 
-		prefix := "    "
-		if i == m.actionCursor {
-			prefix = "  > "
+	// Group actions by their group label
+	type actionGroup struct {
+		label   string
+		items   []actionItem
+		indices []int
+	}
+	groups := make(map[string]*actionGroup)
+	for i, act := range m.actions {
+		g, ok := groups[act.group]
+		if !ok {
+			g = &actionGroup{label: act.group}
+			groups[act.group] = g
 		}
+		g.items = append(g.items, act)
+		g.indices = append(g.indices, i)
+	}
 
-		if act.enabled && !m.running {
-			line := prefix + act.label
-			if i == m.actionCursor {
-				b.WriteString(styles.StyleListItemSelected.Render(line))
-			} else {
-				b.WriteString(styles.StyleListItem.Render(line))
+	// renderGroup renders a single action group panel
+	renderGroup := func(g *actionGroup) string {
+		var lines []string
+		for idx, act := range g.items {
+			origIdx := g.indices[idx]
+			prefix := " "
+			if origIdx == m.actionCursor {
+				prefix = ">"
 			}
-		} else {
-			// Disabled or running — same format, just dimmed
-			b.WriteString(styles.StyleListItemDisabled.Render(prefix + act.label))
+			line := prefix + " " + act.label
+			if act.enabled && !m.running {
+				if origIdx == m.actionCursor {
+					lines = append(lines, styles.StyleListItemSelected.Render(line))
+				} else {
+					lines = append(lines, styles.StyleListItem.Render(line))
+				}
+			} else {
+				lines = append(lines, styles.StyleListItemDisabled.Render(line))
+			}
 		}
-		b.WriteString("\n")
+		content := styles.StyleSubtitle.Render(g.label) + "\n\n" + strings.Join(lines, "\n")
+		return styles.StylePanel.Render(content)
+	}
+
+	// Layout: Export + Truncate Functions side by side, Import below
+	if exportG := groups["Export"]; exportG != nil {
+		if truncG := groups["Truncate Functions"]; truncG != nil {
+			b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top,
+				renderGroup(exportG),
+				lipgloss.NewStyle().PaddingLeft(2).Render(renderGroup(truncG)),
+			))
+		} else {
+			b.WriteString(renderGroup(exportG))
+		}
+		b.WriteString("\n\n")
+	}
+	if importG := groups["Import"]; importG != nil {
+		b.WriteString(renderGroup(importG))
+		b.WriteString("\n\n")
 	}
 
 	if m.running {
-		b.WriteString("\n" + styles.StyleSubtitle.Render("  Running\u2026"))
+		b.WriteString(styles.StyleSubtitle.Render("  Running\u2026") + "\n\n")
 	}
 
 	if m.lastResult != "" {
-		b.WriteString("\n  " + m.lastResult + "\n")
+		b.WriteString("  " + m.lastResult + "\n\n")
 	}
 
-	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
 	return b.String()
 }
 
@@ -423,41 +451,42 @@ func (m *DBOpsModel) viewActions() string {
 // checking dump file existence at render time.
 func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 	dDir := m.dumpDir(se)
+	truncate := func() tea.Cmd { return m.truncateTables(se) }
 
 	switch se.DBType {
 	case "postgres":
 		hasSchema := docker.HasDumpFile(dDir, "schema-*.sql")
 		hasData := docker.HasDumpFile(dDir, "data-*.sql")
 		return []actionItem{
-			{label: "Export schema", enabled: true, execute: func() tea.Cmd { return m.exportSchema(se) }},
-			{label: "Export data", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
-			{spacer: true},
-			{label: "Import schema", enabled: hasSchema, disabledReason: "no schema dump", execute: func() tea.Cmd { return m.importSchema(se) }},
-			{label: "Import data", enabled: hasData, disabledReason: "no data dump", execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Export schema", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportSchema(se) }},
+			{label: "Export data", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
+			{label: "Import schema", group: "Import", enabled: hasSchema, disabledReason: "no schema dump", execute: func() tea.Cmd { return m.importSchema(se) }},
+			{label: "Import data", group: "Import", enabled: hasData, disabledReason: "no data dump", execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Truncate tables", group: "Truncate Functions", enabled: hasData, disabledReason: "import data first", execute: truncate},
 		}
 
 	case "mongo":
 		hasData := m.hasMongoDump(dDir)
 		return []actionItem{
-			{label: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
-			{spacer: true},
-			{label: "Import", enabled: hasData, disabledReason: "no dump", execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
+			{label: "Import", group: "Import", enabled: hasData, disabledReason: "no dump", execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Truncate tables", group: "Truncate Functions", enabled: hasData, disabledReason: "import data first", execute: truncate},
 		}
 
 	case "mysql":
 		hasData := docker.HasDumpFile(dDir, "data-*.sql")
 		return []actionItem{
-			{label: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
-			{spacer: true},
-			{label: "Import", enabled: hasData, disabledReason: "no dump file", execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
+			{label: "Import", group: "Import", enabled: hasData, disabledReason: "no dump file", execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Truncate tables", group: "Truncate Functions", enabled: hasData, disabledReason: "import data first", execute: truncate},
 		}
 
 	case "mssql":
 		hasData := docker.HasDumpFile(dDir, "data-*.bacpac")
 		return []actionItem{
-			{label: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
-			{spacer: true},
-			{label: "Import", enabled: hasData, disabledReason: "no .bacpac file", execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
+			{label: "Import", group: "Import", enabled: hasData, disabledReason: "no .bacpac file", execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Truncate tables", group: "Truncate Functions", enabled: hasData, disabledReason: "import data first", execute: truncate},
 		}
 	}
 	return nil
@@ -607,6 +636,39 @@ func (m *DBOpsModel) importData(se *config.SyncEnv) tea.Cmd {
 		default:
 			return dbOpsDoneMsg{err: fmt.Errorf("unknown db type: %s", se.DBType)}
 		}
+	}
+}
+
+// ── Truncate Cmd factory ─────────────────────────────────────────────────────
+
+func (m *DBOpsModel) truncateTables(se *config.SyncEnv) tea.Cmd {
+	return func() tea.Msg {
+		container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
+		if !m.isContainerRunning(container) {
+			return dbOpsDoneMsg{err: fmt.Errorf("service '%s' is not running. Start it first.", m.serviceName)}
+		}
+
+		switch se.DBType {
+		case "postgres":
+			if err := docker.PgTruncate(m.profile.Name, m.envName, m.serviceName); err != nil {
+				return dbOpsDoneMsg{err: fmt.Errorf("truncate postgres: %w", err)}
+			}
+		case "mongo":
+			if err := docker.MongoTruncate(m.profile.Name, m.envName, m.serviceName); err != nil {
+				return dbOpsDoneMsg{err: fmt.Errorf("truncate mongo: %w", err)}
+			}
+		case "mysql":
+			if err := docker.MySqlTruncate(m.profile.Name, m.envName, m.serviceName); err != nil {
+				return dbOpsDoneMsg{err: fmt.Errorf("truncate mysql: %w", err)}
+			}
+		case "mssql":
+			if err := docker.MsSqlTruncate(m.profile.Name, m.envName, m.serviceName); err != nil {
+				return dbOpsDoneMsg{err: fmt.Errorf("truncate mssql: %w", err)}
+			}
+		default:
+			return dbOpsDoneMsg{err: fmt.Errorf("unknown db type: %s", se.DBType)}
+		}
+		return dbOpsDoneMsg{result: "All tables truncated"}
 	}
 }
 
