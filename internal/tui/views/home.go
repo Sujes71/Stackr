@@ -130,10 +130,11 @@ func (m *HomeModel) View() string {
 	if len(m.profiles) > 0 {
 		mgmtItems = append(mgmtItems, styles.HelpItem("d d", "delete"))
 	}
+	b.WriteString("\n")
 	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Manage", Items: mgmtItems},
 	))
-	b.WriteString("\n")
+	b.WriteString("\n\n")
 	var hints []string
 	if len(m.profiles) > 0 {
 		hints = append(hints, styles.HelpItem("↑ ↓", "navigate").Render())
@@ -150,8 +151,8 @@ func (m *HomeModel) homeWindow(total int) itemWindow {
 	if total == 0 || m.height <= 0 {
 		return w
 	}
-	// Overhead: \n + help bar (~4) + \n + hints (1) = ~7 lines
-	oh := 7
+	// Overhead: \n + blank line + help bar + \n + hints = ~10 lines
+	oh := 10
 	if m.deleteArmed {
 		oh += 1
 	}

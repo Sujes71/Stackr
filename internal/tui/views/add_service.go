@@ -1059,34 +1059,19 @@ func (m *AddServiceModel) View() string {
 }
 
 func (m *AddServiceModel) viewSource() string {
-	type srcOpt struct {
-		emoji string
-		label string
-		desc  string
-	}
-
-	var opts []srcOpt
+	var opts []string
 	if len(hub.Catalog) > 0 {
-		opts = []srcOpt{
-			{emoji: "📦", label: "Curated catalog", desc: "postgres, mongo, redis, kafka…"},
-			{emoji: "🔍", label: "Search Docker Hub", desc: "any public image"},
-			{emoji: "✏️", label: "Manual entry", desc: "type image name directly"},
+		opts = []string{
+			"Curated catalog        (postgres, mongo, redis, kafka…)",
+			"Search Docker Hub      (any public image)",
+			"Manual entry           (type image name directly)",
 		}
 	} else {
-		opts = []srcOpt{
-			{emoji: "✏️", label: "Manual entry", desc: "type image name directly"},
+		opts = []string{
+			"Manual entry           (type image name directly)",
 		}
 	}
 
-	// Find the widest label for description alignment
-	maxW := 0
-	for _, o := range opts {
-		if len(o.label) > maxW {
-			maxW = len(o.label)
-		}
-	}
-
-	// Selected style: just color+bold, NO padding/width/margin
 	selStyle := lipgloss.NewStyle().
 		Foreground(styles.ColorPrimary).
 		Bold(true)
@@ -1094,28 +1079,15 @@ func (m *AddServiceModel) viewSource() string {
 	var b strings.Builder
 	b.WriteString("  How do you want to find the image?\n\n")
 	for i, o := range opts {
-		prefix := "    "
 		if i == m.sourceCursor {
-			prefix = "  > "
-		}
-		// Build emoji + separator + label, measure display width with lipgloss.
-		// Use lipgloss.Width() because len() counts bytes, not terminal cells —
-		// emojis like ✏️ have 6 bytes but display as 2 cells.
-		content := o.emoji + "  " + o.label
-		padding := (maxW + 4) - lipgloss.Width(content) // 4 = emoji(2) + separator(2)
-		if padding < 0 {
-			padding = 0
-		}
-		line := prefix + content + strings.Repeat(" ", padding) + "  (" + o.desc + ")"
-		if i == m.sourceCursor {
-			b.WriteString(selStyle.Render(line))
+			b.WriteString(selStyle.Render("  > " + o))
 		} else {
-			b.WriteString(line)
+			b.WriteString("    " + o)
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("\n")
-	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "choose source")))
+	b.WriteString("\n\n")
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "add/continue")))
 	return b.String()
 }
 
@@ -1179,9 +1151,9 @@ func (m *AddServiceModel) viewSearch() string {
 		r := m.searchResults[i]
 		official := ""
 		if r.IsOfficial {
-			official = " ✓"
+			official = styles.StyleSuccess.Render(" [official]")
 		}
-		label := fmt.Sprintf("%-32s  ★ %d%s  — %s",
+		label := fmt.Sprintf("%-32s  stars: %d%s  — %s",
 			r.Name, r.StarCount, official, truncate(r.Description, 38))
 		if i == m.searchCursor {
 			b.WriteString(selStyle.Render("  > " + label))
@@ -1286,11 +1258,11 @@ func (m *AddServiceModel) viewPorts() string {
 		b.WriteString("\n")
 	}
 	if m.portsDeleteArmed {
-		b.WriteString(styles.StyleError.Render("  Press Ctrl+D again to confirm removal"))
+		b.WriteString(styles.StyleError.Render("  Press ctrl+d again to confirm removal"))
 		b.WriteString("\n")
 	}
 	if m.resetArmed {
-		b.WriteString(styles.StyleError.Render("  Press Ctrl+R again to reset to defaults"))
+		b.WriteString(styles.StyleError.Render("  Press ctrl+r again to reset to defaults"))
 		b.WriteString("\n")
 	}
 	var actItems []styles.HelpItemResult
@@ -1304,7 +1276,7 @@ func (m *AddServiceModel) viewPorts() string {
 	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
-	b.WriteString("\n")
+	b.WriteString("\n\n")
 	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "add/continue")))
 	return b.String()
 }
@@ -1379,11 +1351,11 @@ func (m *AddServiceModel) viewEnvVars() string {
 		b.WriteString("\n")
 	}
 	if m.envVarsDeleteArmed {
-		b.WriteString(styles.StyleError.Render("  Press Ctrl+D again to confirm removal"))
+		b.WriteString(styles.StyleError.Render("  Press ctrl+d again to confirm removal"))
 		b.WriteString("\n")
 	}
 	if m.resetArmed {
-		b.WriteString(styles.StyleError.Render("  Press Ctrl+R again to reset to defaults"))
+		b.WriteString(styles.StyleError.Render("  Press ctrl+r again to reset to defaults"))
 		b.WriteString("\n")
 	}
 	var actItems []styles.HelpItemResult
@@ -1397,7 +1369,7 @@ func (m *AddServiceModel) viewEnvVars() string {
 	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
-	b.WriteString("\n")
+	b.WriteString("\n\n")
 	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "add/continue")))
 	return b.String()
 }
@@ -1428,11 +1400,11 @@ func (m *AddServiceModel) viewVolumes() string {
 		b.WriteString("\n")
 	}
 	if m.volumesDeleteArmed {
-		b.WriteString(styles.StyleError.Render("  Press Ctrl+D again to confirm removal"))
+		b.WriteString(styles.StyleError.Render("  Press ctrl+d again to confirm removal"))
 		b.WriteString("\n")
 	}
 	if m.resetArmed {
-		b.WriteString(styles.StyleError.Render("  Press Ctrl+R again to reset to defaults"))
+		b.WriteString(styles.StyleError.Render("  Press ctrl+r again to reset to defaults"))
 		b.WriteString("\n")
 	}
 	var actItems []styles.HelpItemResult
@@ -1446,7 +1418,7 @@ func (m *AddServiceModel) viewVolumes() string {
 	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
-	b.WriteString("\n")
+	b.WriteString("\n\n")
 	b.WriteString(styles.BackHelp(styles.HelpItem("ctrl+t", "toggle type"), styles.HelpItem("↵", "add/continue")))
 	return b.String()
 }

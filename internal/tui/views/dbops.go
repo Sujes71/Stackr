@@ -283,6 +283,7 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 		b.WriteString(styles.StyleSubtitle.Render("  Press a to add one."))
 		b.WriteString("\n")
 	} else {
+		selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 		for i, se := range syncEnvs {
 			prefix := "    "
 			if i == m.listCursor {
@@ -290,14 +291,14 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 			}
 			dumpIndicator := ""
 			if m.hasDumpsFor(&se) {
-				dumpIndicator = "  \U0001F4E6"
+				dumpIndicator = styles.StyleSubtitle.Render("  [dump]")
 			}
 			line := fmt.Sprintf("%s%s  %s  %s:%s%s",
 				prefix, se.Name, se.DBType, se.Host, se.Port, dumpIndicator)
 			if i == m.listCursor {
-				b.WriteString(styles.StyleListItemSelected.Render(line))
+				b.WriteString(selStyle.Render(line))
 			} else {
-				b.WriteString(styles.StyleListItem.Render(line))
+				b.WriteString(line)
 			}
 			b.WriteString("\n")
 		}
@@ -312,7 +313,7 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 		b.WriteString("\n  " + m.lastResult + "\n")
 	}
 
-	b.WriteString("\n\n")
+	b.WriteString("\n")
 	var actItems []styles.HelpItemResult
 	actItems = append(actItems, styles.HelpItem("a", "add"))
 	svc = m.currentService()
@@ -323,7 +324,7 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
-	b.WriteString("\n")
+	b.WriteString("\n\n")
 	if len(syncEnvs) > 0 {
 		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "open actions")))
 	} else {
@@ -435,6 +436,7 @@ func (m *DBOpsModel) viewActions() string {
 	groupHeaderStyle := lipgloss.NewStyle().
 		Foreground(styles.ColorPrimary).
 		Bold(true)
+	selStyle := groupHeaderStyle
 
 	currentGroup := ""
 	for i, act := range m.actions {
@@ -450,12 +452,12 @@ func (m *DBOpsModel) viewActions() string {
 
 		if act.enabled && !m.running {
 			if isCursor {
-				b.WriteString(styles.StyleListItemSelected.Render("> " + act.label) + "\n")
+				b.WriteString(selStyle.Render("    > " + act.label) + "\n")
 			} else {
-				b.WriteString(styles.StyleListItem.Render("  " + act.label) + "\n")
+				b.WriteString("      " + act.label + "\n")
 			}
 		} else {
-			b.WriteString(styles.StyleListItemDisabled.Render("  " + act.label) + "\n")
+			b.WriteString(styles.StyleSubtitle.Render("      " + act.label) + "\n")
 			if !act.enabled && act.disabledReason != "" {
 				b.WriteString(styles.StyleSubtitle.Render("      unavailable: " + act.disabledReason) + "\n")
 			}

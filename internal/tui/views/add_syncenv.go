@@ -552,10 +552,11 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 		b.WriteString(fmt.Sprintf("%s  %s\n", label, m.hostInput.View()))
 	} else {
 		val := m.hostInput.Value()
+		display := styles.StyleCode.Render(val)
 		if val == "" {
-			val = "(empty)"
+			display = styles.StyleSubtitle.Render("(empty)")
 		}
-		b.WriteString(fmt.Sprintf("%s  %s\n", label, styles.StyleCode.Render(val)))
+		b.WriteString(fmt.Sprintf("%s  %s\n", label, display))
 	}
 
 	// Port
@@ -572,10 +573,11 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 		b.WriteString(fmt.Sprintf("%s  %s\n", label, m.userInput.View()))
 	} else {
 		val := m.userInput.Value()
+		display := styles.StyleCode.Render(val)
 		if val == "" {
-			val = "(empty)"
+			display = styles.StyleSubtitle.Render("(empty)")
 		}
-		b.WriteString(fmt.Sprintf("%s  %s\n", label, styles.StyleCode.Render(val)))
+		b.WriteString(fmt.Sprintf("%s  %s\n", label, display))
 	}
 
 	// Password
@@ -583,13 +585,11 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 	if m.credFocus == credFocusPass {
 		b.WriteString(fmt.Sprintf("%s  %s\n", label, m.passInput.View()))
 	} else {
-		masked := ""
+		masked := styles.StyleSubtitle.Render("(empty)")
 		if m.passInput.Value() != "" {
-			masked = "••••••"
-		} else {
-			masked = "(empty)"
+			masked = styles.StyleSubtitle.Render("\u2022\u2022\u2022\u2022\u2022\u2022")
 		}
-		b.WriteString(fmt.Sprintf("%s  %s\n", label, styles.StyleSubtitle.Render(masked)))
+		b.WriteString(fmt.Sprintf("%s  %s\n", label, masked))
 	}
 
 	// Database
@@ -598,10 +598,11 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 		b.WriteString(fmt.Sprintf("%s  %s\n", label, m.dbInput.View()))
 	} else {
 		val := m.dbInput.Value()
+		display := styles.StyleCode.Render(val)
 		if val == "" {
-			val = "(empty)"
+			display = styles.StyleSubtitle.Render("(empty)")
 		}
-		b.WriteString(fmt.Sprintf("%s  %s\n", label, styles.StyleCode.Render(val)))
+		b.WriteString(fmt.Sprintf("%s  %s\n", label, display))
 	}
 
 	// AuthDB (mongo only)
@@ -611,10 +612,11 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 			b.WriteString(fmt.Sprintf("%s  %s\n", label, m.authDBInput.View()))
 		} else {
 			val := m.authDBInput.Value()
+			display := styles.StyleCode.Render(val)
 			if val == "" {
-				val = "(none)"
+				display = styles.StyleSubtitle.Render("(none)")
 			}
-			b.WriteString(fmt.Sprintf("%s  %s\n", label, styles.StyleCode.Render(val)))
+			b.WriteString(fmt.Sprintf("%s  %s\n", label, display))
 		}
 	}
 
@@ -622,7 +624,6 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 		b.WriteString("\n  " + styles.StyleError.Render("✗ "+m.credErr))
 	}
 
-	b.WriteString("\n")
 	b.WriteString("\n")
 	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "continue")))
 
@@ -635,27 +636,30 @@ func (m *AddSyncEnvModel) viewReviewStep() string {
 
 	dbTypeLabel := styles.StyleCode.Render(m.dbType)
 	hostPort := m.hostInput.Value() + ":" + m.portInput.Value()
-	maskedPass := styles.StyleSubtitle.Render("•••••• (stored in plaintext YAML)")
+	maskedPass := styles.StyleSubtitle.Render("\u2022\u2022\u2022\u2022\u2022\u2022 (stored in plaintext YAML)")
 	if m.passInput.Value() == "" {
 		maskedPass = styles.StyleSubtitle.Render("(empty)")
 	}
 
-	b.WriteString(styles.StylePanel.Render(
-		lipgloss.JoinVertical(lipgloss.Left,
-			styles.StyleHeader.Render(m.nameInput.Value()),
-			"",
-			styles.StyleInputLabel.Render("Name")+"  "+styles.StyleCode.Render(m.nameInput.Value()),
-			styles.StyleInputLabel.Render("DB Type")+"  "+dbTypeLabel,
-			styles.StyleInputLabel.Render("Host")+"  "+styles.StyleCode.Render(hostPort),
-			styles.StyleInputLabel.Render("User")+"  "+styles.StyleCode.Render(m.userInput.Value()),
-			styles.StyleInputLabel.Render("Password")+"  "+maskedPass,
-			styles.StyleInputLabel.Render("Database")+"  "+styles.StyleCode.Render(m.dbInput.Value()),
-			m.authDBIfMongo(),
-		),
-	))
+	panelContent := lipgloss.JoinVertical(lipgloss.Left,
+		styles.StyleHeader.Render(m.nameInput.Value()),
+		"",
+		styles.StyleInputLabel.Render("DB Type")+"  "+dbTypeLabel,
+		styles.StyleInputLabel.Render("Host")+"  "+styles.StyleCode.Render(hostPort),
+		styles.StyleInputLabel.Render("User")+"  "+styles.StyleCode.Render(m.userInput.Value()),
+		styles.StyleInputLabel.Render("Password")+"  "+maskedPass,
+		styles.StyleInputLabel.Render("Database")+"  "+styles.StyleCode.Render(m.dbInput.Value()),
+		m.authDBIfMongo(),
+	)
+	panelW := lipgloss.Width(panelContent) + 4
+	if panelW < 60 {
+		panelW = 60
+	}
+	b.WriteString(styles.StylePanel.Width(panelW).Render(panelContent))
 
 	b.WriteString("\n\n")
-	b.WriteString("  " + styles.StyleButton.Render(" Save Sync Environment ") + "\n")
+	button := styles.StyleButton.Render(" Save Sync Environment ")
+	b.WriteString(lipgloss.PlaceHorizontal(panelW, lipgloss.Center, button) + "\n")
 
 	b.WriteString("\n")
 	b.WriteString(styles.BackHelp(styles.HelpItem("↵", "save")))

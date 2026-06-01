@@ -258,6 +258,25 @@ func Dot(state string) string {
 		Render(fmt.Sprintf("● %s", state))
 }
 
+// ── Layout Helpers ─────────────────────────────────────────────────────────────
+
+// Separator returns a horizontal separator line at the given width.
+func Separator(width int) string {
+	return lipgloss.NewStyle().
+		Foreground(ColorMuted).
+		Render(strings.Repeat("─", width))
+}
+
+// EmptyState renders a centered empty-state message inside a panel.
+func EmptyState(msg string) string {
+	return StylePanel.Width(60).Render(StyleSubtitle.Render(msg))
+}
+
+// PadLeft returns n spaces for consistent indentation.
+func PadLeft(n int) string {
+	return strings.Repeat(" ", n)
+}
+
 // ForwardDot returns a colored state indicator for port-forward states.
 func ForwardDot(state portforward.ForwardState) string {
 	var c lipgloss.Color

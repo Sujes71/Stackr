@@ -244,9 +244,9 @@ func (m *NewProfileModel) View() string {
 		if m.canRemoveEnv() {
 			b.WriteString("\n")
 			if m.confirmRemove {
-				b.WriteString(styles.StyleError.Render("  Press Ctrl+D again to confirm removal"))
+				b.WriteString(styles.StyleError.Render("  Press ctrl+d again to confirm removal"))
 			} else {
-				b.WriteString(styles.StyleSubtitle.Render("  Press Ctrl+D twice to remove the last environment"))
+				b.WriteString(styles.StyleSubtitle.Render("  Press ctrl+d twice to remove the last environment"))
 			}
 		}
 	}
@@ -256,7 +256,11 @@ func (m *NewProfileModel) View() string {
 		b.WriteString(styles.StyleError.Render("  ✗ " + m.err))
 	}
 
-	b.WriteString("\n\n")
+	if m.err != "" {
+		b.WriteString("\n")
+	} else {
+		b.WriteString("\n\n")
+	}
 	if m.step == npStepEnvs {
 		if m.canRemoveEnv() {
 			b.WriteString(styles.HelpBar(
@@ -264,7 +268,7 @@ func (m *NewProfileModel) View() string {
 					styles.HelpItem("ctrl+d ctrl+d", "remove"),
 				}},
 			))
-			b.WriteString("\n")
+			b.WriteString("\n\n")
 		}
 		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "add/finish")))
 	} else {

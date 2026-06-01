@@ -7,27 +7,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stackr/stackr/internal/config"
+	"github.com/stackr/stackr/internal/tui/styles"
 	"github.com/stackr/stackr/internal/tui/views"
-)
-
-// ── Local styles (used in header/footer rendering) ──────────────────────────
-
-var (
-	StyleTitle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#7E9CD8")).
-			Bold(true).
-			Padding(0, 1)
-
-	StyleSubtitle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#54546D"))
-
-	StyleError = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#E46876")).
-			Bold(true)
-
-	StyleHelp = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#54546D")).
-			Italic(true)
 )
 
 // Screen identifies which view is currently rendered.
@@ -208,14 +189,14 @@ func (a *App) View() string {
 	header := a.renderHeader()
 	body := a.renderBody()
 	footer := a.renderFooter()
-
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	sep := styles.Separator(a.width)
+	return lipgloss.JoinVertical(lipgloss.Left, header, sep, body, footer)
 }
 
 func (a *App) renderHeader() string {
-	logo := StyleTitle.Render(" ⬡ Stackr ")
-	version := StyleSubtitle.Render("v0.1.0")
-	breadcrumb := StyleSubtitle.Render(a.breadcrumb())
+	logo := styles.StyleTitle.Render(" ⬡ Stackr ")
+	version := styles.StyleSubtitle.Render("v0.1.0")
+	breadcrumb := styles.StyleSubtitle.Render(a.breadcrumb())
 	right := lipgloss.JoinHorizontal(lipgloss.Center, breadcrumb, "  ", version)
 
 	w := a.width
@@ -269,8 +250,12 @@ func (a *App) renderBody() string {
 }
 
 func (a *App) renderFooter() string {
+	sep := styles.Separator(a.width)
+	var content string
 	if a.err != "" {
-		return StyleError.Render("  ✗ " + a.err)
+		content = styles.StyleError.Render("  ✗ " + a.err)
+	} else {
+		content = styles.StyleHelp.Render("ctrl+c quit")
 	}
-	return StyleHelp.Render("ctrl+c quit")
+	return lipgloss.JoinVertical(lipgloss.Left, sep, content)
 }
