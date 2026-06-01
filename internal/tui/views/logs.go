@@ -222,9 +222,9 @@ func (m *LogsModel) View() string {
 	b.WriteString(m.viewport.View())
 	b.WriteString("\n")
 
-	followLabel := "follow: ON"
+	followLabel := "tail lock: ON"
 	if !m.follow {
-		followLabel = styles.StyleSubtitle.Render("follow: OFF")
+		followLabel = styles.StyleSubtitle.Render("tail lock: OFF")
 	}
 	b.WriteString("\n")
 	b.WriteString(styles.HelpBar(
@@ -234,7 +234,7 @@ func (m *LogsModel) View() string {
 			styles.HelpItem("g/G", "top/bottom"),
 		}},
 		styles.HelpGroup{Label: "View", Items: []styles.HelpItemResult{
-			styles.HelpItem("f", strings.ReplaceAll(followLabel, "follow:", "follow tail:")),
+			styles.HelpItem("f", followLabel),
 		}},
 	))
 	b.WriteString("\n")

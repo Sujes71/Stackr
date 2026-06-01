@@ -515,7 +515,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// ── Input mode: add environment ──────────────────────────
 		if m.inputtingEnv {
 			switch {
-			case key.Matches(msg, profileKeys.back):
+			case msg.String() == "esc":
 				m.inputtingEnv = false
 				m.envInput.SetValue("")
 				m.envInput.Blur()
