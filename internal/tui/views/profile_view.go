@@ -35,8 +35,8 @@ type ProfileViewModel struct {
 func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
 	ti := textinput.New()
 	ti.Placeholder = "env name"
-	ti.CharLimit = 40
-	ti.Width = 24
+	ti.CharLimit = 5
+	ti.Width = 12
 
 	m := &ProfileViewModel{
 		cfg:     cfg,

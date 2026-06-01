@@ -91,11 +91,7 @@ func (m *HomeModel) View() string {
 
 	if len(m.profiles) == 0 {
 		empty := styles.StylePanel.Render(
-			lipgloss.JoinVertical(lipgloss.Center,
-				styles.StyleSubtitle.Render("No profiles yet."),
-				"",
-				styles.HelpItem("n", "new profile").Render(),
-			),
+			styles.StyleSubtitle.Render("No profiles yet. Press n to create one."),
 		)
 		b.WriteString(lipgloss.PlaceHorizontal(60, lipgloss.Center, empty))
 		b.WriteString("\n")
@@ -139,20 +135,25 @@ func (m *HomeModel) renderProfileRow(idx int, p config.Profile) string {
 	}
 	envList := strings.Join(envNames, " ")
 
-	name := styles.StyleHeader.Render(p.Name)
-	desc := ""
+	title := styles.StyleHeader.Render(p.Name)
 	if p.Description != "" {
-		desc = styles.StyleSubtitle.Render("  " + p.Description)
+		title += styles.StyleSubtitle.Render("  " + p.Description)
 	}
 	meta := styles.StyleSubtitle.Render(fmt.Sprintf("  %d service(s)  ", svcCount)) + envList
 
-	row := lipgloss.JoinVertical(lipgloss.Left,
-		lipgloss.JoinHorizontal(lipgloss.Center, name, desc),
-		meta,
-	)
-
-	if active {
-		return styles.StylePanelFocused.Width(64).Render(row)
+	// Measure visible width so the panel is wide enough
+	contentW := lipgloss.Width(title)
+	if w := lipgloss.Width(meta); w > contentW {
+		contentW = w
 	}
-	return styles.StylePanel.Width(64).Render(row)
+	panelW := contentW + 4 // 2 border + 2 padding
+	if panelW < 64 {
+		panelW = 64
+	}
+
+	row := lipgloss.JoinVertical(lipgloss.Left, title, meta)
+	if active {
+		return styles.StylePanelFocused.Width(panelW).Render(row)
+	}
+	return styles.StylePanel.Width(panelW).Render(row)
 }

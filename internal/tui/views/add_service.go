@@ -90,23 +90,23 @@ type AddServiceModel struct {
 func NewAddService(cfg *config.Config, p *config.Profile, envName string) *AddServiceModel {
 	si := textinput.New()
 	si.Placeholder = "postgres, redis, my-image..."
-	si.CharLimit = 60
+	si.CharLimit = 30
 
 	ni := textinput.New()
 	ni.Placeholder = "postgres"
-	ni.CharLimit = 40
+	ni.CharLimit = 20
 
 	ii := textinput.New()
 	ii.Placeholder = "mongo:4.2, postgres:16, my-registry/image..."
-	ii.CharLimit = 120
+	ii.CharLimit = 40
 
 	ph := textinput.New(); ph.Placeholder = "5432"; ph.CharLimit = 10; ph.Width = 8
 	pc := textinput.New(); pc.Placeholder = "5432"; pc.CharLimit = 10; pc.Width = 8
 
-	ek := textinput.New(); ek.Placeholder = "POSTGRES_USER"; ek.CharLimit = 60; ek.Width = 24
-	ev := textinput.New(); ev.Placeholder = "postgres";     ev.CharLimit = 100; ev.Width = 28
+	ek := textinput.New(); ek.Placeholder = "POSTGRES_USER"; ek.CharLimit = 30; ek.Width = 24
+	ev := textinput.New(); ev.Placeholder = "postgres";     ev.CharLimit = 60; ev.Width = 28
 
-	vs := textinput.New(); vs.Placeholder = "./data or volume name"; vs.CharLimit = 80; vs.Width = 30
+	vs := textinput.New(); vs.Placeholder = "./data or volume name"; vs.CharLimit = 40; vs.Width = 30
 	return &AddServiceModel{
 		cfg:              cfg,
 		profile:          p,

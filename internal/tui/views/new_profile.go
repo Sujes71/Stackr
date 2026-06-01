@@ -36,15 +36,15 @@ func NewNewProfile(cfg *config.Config) *NewProfileModel {
 	name := textinput.New()
 	name.Placeholder = "my-project"
 	name.Focus()
-	name.CharLimit = 40
+	name.CharLimit = 20
 
 	desc := textinput.New()
 	desc.Placeholder = "Optional description"
-	desc.CharLimit = 80
+	desc.CharLimit = 40
 
 	envInput := textinput.New()
 	envInput.Placeholder = "dev, staging, qa..."
-	envInput.CharLimit = 30
+	envInput.CharLimit = 5
 
 	return &NewProfileModel{
 		cfg:      cfg,
@@ -108,9 +108,16 @@ func (m *NewProfileModel) advance() (tea.Model, tea.Cmd) {
 	m.err = ""
 	switch m.step {
 	case npStepName:
-		if strings.TrimSpace(m.name.Value()) == "" {
+		name := strings.TrimSpace(m.name.Value())
+		if name == "" {
 			m.err = "profile name cannot be empty"
 			return m, nil
+		}
+		for _, p := range m.cfg.Profiles {
+			if p.Name == name {
+				m.err = "a profile with that name already exists"
+				return m, nil
+			}
 		}
 		m.step = npStepDesc
 		m.name.Blur()
@@ -128,6 +135,11 @@ func (m *NewProfileModel) advance() (tea.Model, tea.Cmd) {
 		if val != "" {
 			// Text in input → add environment and stay
 			if !contains(m.envs, val) {
+				if len(m.envs) >= 5 {
+					m.err = "maximum 5 environments allowed"
+					m.envInput.Reset()
+					return m, nil
+				}
 				m.envs = append(m.envs, val)
 			}
 			m.envInput.Reset()
@@ -213,12 +225,14 @@ func (m *NewProfileModel) View() string {
 		if len(m.envs) > 1 {
 			b.WriteString(styles.StyleInputLabel.Render("Extra environments"))
 			b.WriteString("\n")
+			var badges []string
 			for _, env := range m.envs {
 				if env == "local" {
 					continue
 				}
-				b.WriteString("    " + styles.EnvBadge(env) + "\n")
+				badges = append(badges, styles.EnvBadge(env))
 			}
+			b.WriteString("    " + strings.Join(badges, " ") + "\n")
 			b.WriteString("\n")
 		}
 
@@ -245,15 +259,15 @@ func (m *NewProfileModel) View() string {
 	b.WriteString("\n\n")
 	if m.step == npStepEnvs {
 		b.WriteString(styles.HelpBar(
-			styles.HelpGroup{Label: "Action", Items: []styles.HelpItemResult{
-				styles.HelpItem("↵", "continue"),
-			}},
 			styles.HelpGroup{Label: "Manage", Items: []styles.HelpItemResult{
 				styles.HelpItem("d d", "remove"),
 			}},
 		))
 		b.WriteString("\n")
-		b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render()))
+		b.WriteString(styles.StyleHelp.Render(
+			styles.HelpItem("esc", "back").Render() + "  " +
+				styles.HelpItem("↵", "next").Render(),
+		))
 	} else {
 		b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↵", "next").Render()))
 	}
