@@ -516,7 +516,7 @@ func (m *ProfileViewModel) View() string {
 	var envItems, svcItems, stackItems []styles.HelpItemResult
 	envItems = append(envItems, styles.HelpItem("e", "add env"))
 	if len(m.profile.Environments) > 0 {
-		envItems = append(envItems, styles.HelpItem("D d", "delete env"))
+		envItems = append(envItems, styles.HelpItem("D D", "delete env"))
 	}
 	envItems = append(envItems, styles.HelpItem("a", "add service"))
 
