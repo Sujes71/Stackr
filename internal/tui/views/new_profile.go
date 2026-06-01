@@ -61,7 +61,7 @@ var npKeys = struct {
 }{
 	next:      key.NewBinding(key.WithKeys("enter", "tab")),
 	back:      key.NewBinding(key.WithKeys("esc")),
-	removeEnv: key.NewBinding(key.WithKeys("d")),
+	removeEnv: key.NewBinding(key.WithKeys("ctrl+d")),
 }
 
 func (m *NewProfileModel) Init() tea.Cmd {
@@ -244,9 +244,9 @@ func (m *NewProfileModel) View() string {
 		if m.canRemoveEnv() {
 			b.WriteString("\n")
 			if m.confirmRemove {
-				b.WriteString(styles.StyleError.Render("  Press d again to confirm removal"))
+				b.WriteString(styles.StyleError.Render("  Press Ctrl+D again to confirm removal"))
 			} else {
-				b.WriteString(styles.StyleSubtitle.Render("  Press d twice to remove the last environment"))
+				b.WriteString(styles.StyleSubtitle.Render("  Press Ctrl+D twice to remove the last environment"))
 			}
 		}
 	}
@@ -261,7 +261,7 @@ func (m *NewProfileModel) View() string {
 		if m.canRemoveEnv() {
 			b.WriteString(styles.HelpBar(
 				styles.HelpGroup{Label: "Manage", Items: []styles.HelpItemResult{
-					styles.HelpItem("d d", "remove"),
+					styles.HelpItem("ctrl+d ctrl+d", "remove"),
 				}},
 			))
 			b.WriteString("\n")

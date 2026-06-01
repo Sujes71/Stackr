@@ -519,6 +519,8 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.inputtingEnv = false
 				m.envInput.SetValue("")
 				m.envInput.Blur()
+				m.keyPending = ""
+				m.resetArmed = false
 				return m, nil
 
 			case key.Matches(msg, profileKeys.enter):
@@ -526,6 +528,8 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.inputtingEnv = false
 				m.envInput.SetValue("")
 				m.envInput.Blur()
+				m.keyPending = ""
+				m.resetArmed = false
 
 				if name == "" || name == "." || name == ".." {
 					m.lastAction = "✗ Invalid environment name"
@@ -616,6 +620,8 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, profileKeys.addEnv):
 			// In portforward mode, 'e' edits its local port; 'n' remains add env.
+			m.keyPending = ""
+			m.resetArmed = false
 			m.inputtingEnv = true
 			m.envInput.Focus()
 			m.envInput.SetValue("")
@@ -1189,6 +1195,14 @@ func (m *ProfileViewModel) serviceWindow(total int, heights []int) itemWindow {
 	}
 }
 
+func forwardCardHeight(h *portforward.PortForwardHandle) int {
+	height := 4
+	if h.Error != "" && h.State == portforward.ForwardFailed {
+		height++
+	}
+	return height
+}
+
 func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 	if len(env.Services) == 0 {
 		return styles.StyleSubtitle.Render("  No services yet.\n")
@@ -1410,7 +1424,11 @@ func (m *ProfileViewModel) renderPortForwards() string {
 		return styles.StyleSubtitle.Render("  No port-forwards configured. Press 'k' to discover K8s services.")
 	}
 
-	win := m.computeItemWindow(len(forwards), 4) // each card is ~4 lines
+	heights := make([]int, len(forwards))
+	for i, h := range forwards {
+		heights[i] = forwardCardHeight(h)
+	}
+	win := m.serviceWindow(len(forwards), heights)
 
 	var rows []string
 	for i := win.start; i < win.end; i++ {

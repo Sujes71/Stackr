@@ -22,7 +22,9 @@ type LogsModel struct {
 	lines      []string
 	mu         sync.Mutex
 	follow     bool
+	stream     chan string
 	done       chan struct{}
+	doneOnce   sync.Once
 	ready      bool
 	statusText string
 }
@@ -49,31 +51,39 @@ func (m *LogsModel) ProfileName() string { return m.profile.Name }
 
 func (m *LogsModel) Init() tea.Cmd {
 	if m.svcName != "" {
-		m.statusText = "Streaming logs from " + m.svcName + "..."
+		m.statusText = "Live stream: " + m.svcName
 	} else {
-		m.statusText = "Streaming logs from " + m.envName + "..."
+		m.statusText = "Live stream: " + m.envName
 	}
-	return m.startLogStream()
+	m.stream = make(chan string, 100)
+	go m.startLogStream()
+	return m.waitForLogLine()
 }
 
-func (m *LogsModel) startLogStream() tea.Cmd {
-	return func() tea.Msg {
-		ch := make(chan string, 100)
-		if m.svcName != "" {
-			go docker.Logs(m.profile.Name, m.envName, m.follow, ch, m.done, m.svcName)
-		} else {
-			go docker.Logs(m.profile.Name, m.envName, m.follow, ch, m.done)
-		}
-		for line := range ch {
-			m.mu.Lock()
-			m.lines = append(m.lines, line)
-			if len(m.lines) > 500 {
-				m.lines = m.lines[len(m.lines)-250:]
-			}
-			m.mu.Unlock()
-		}
-		return logsDoneMsg{}
+func (m *LogsModel) startLogStream() {
+	if m.svcName != "" {
+		docker.Logs(m.profile.Name, m.envName, true, m.stream, m.done, m.svcName)
+		return
 	}
+	docker.Logs(m.profile.Name, m.envName, true, m.stream, m.done)
+}
+
+func (m *LogsModel) waitForLogLine() tea.Cmd {
+	return func() tea.Msg {
+		line, ok := <-m.stream
+		if !ok {
+			return logsDoneMsg{}
+		}
+		return logLineMsg(line)
+	}
+}
+
+func (m *LogsModel) closeDone() {
+	m.doneOnce.Do(func() {
+		if m.done != nil {
+			close(m.done)
+		}
+	})
 }
 
 var logsKeys = struct {
@@ -107,12 +117,20 @@ func (m *LogsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusText = "Log stream ended"
 		return m, nil
 
+	case logLineMsg:
+		m.mu.Lock()
+		m.lines = append(m.lines, string(msg))
+		if len(m.lines) > 500 {
+			m.lines = m.lines[len(m.lines)-250:]
+		}
+		m.mu.Unlock()
+		m.renderViewport()
+		return m, m.waitForLogLine()
+
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, logsKeys.back):
-			if m.done != nil {
-				close(m.done)
-			}
+			m.closeDone()
 			return m, func() tea.Msg {
 				return NavigateTo{
 					Screen:      NavProfileView,
@@ -123,15 +141,19 @@ func (m *LogsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, logsKeys.up):
+			m.follow = false
 			m.viewport.LineUp(1)
 
 		case key.Matches(msg, logsKeys.down):
+			m.follow = false
 			m.viewport.LineDown(1)
 
 		case key.Matches(msg, logsKeys.pgUp):
+			m.follow = false
 			m.viewport.HalfViewUp()
 
 		case key.Matches(msg, logsKeys.pgDown):
+			m.follow = false
 			m.viewport.HalfViewDown()
 
 		case key.Matches(msg, logsKeys.toggleFollow):
@@ -141,9 +163,11 @@ func (m *LogsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, logsKeys.top):
+			m.follow = false
 			m.viewport.GotoTop()
 
 		case key.Matches(msg, logsKeys.bottom):
+			m.follow = false
 			m.viewport.GotoBottom()
 		}
 	}
@@ -210,7 +234,7 @@ func (m *LogsModel) View() string {
 			styles.HelpItem("g/G", "top/bottom"),
 		}},
 		styles.HelpGroup{Label: "View", Items: []styles.HelpItemResult{
-			styles.HelpItem("f", followLabel),
+			styles.HelpItem("f", strings.ReplaceAll(followLabel, "follow:", "follow tail:")),
 		}},
 	))
 	b.WriteString("\n")

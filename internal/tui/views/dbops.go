@@ -130,10 +130,23 @@ func (m *DBOpsModel) currentEnv() *config.Environment {
 
 func (m *DBOpsModel) currentService() *config.Service {
 	env := m.currentEnv()
-	if env == nil || m.serviceIdx >= len(env.Services) {
+	if env == nil {
 		return nil
 	}
-	return &env.Services[m.serviceIdx]
+	if m.serviceIdx >= 0 && m.serviceIdx < len(env.Services) {
+		svc := &env.Services[m.serviceIdx]
+		if svc.Name == m.serviceName || svc.ComposeName() == m.serviceName {
+			return svc
+		}
+	}
+	for i := range env.Services {
+		svc := &env.Services[i]
+		if svc.Name == m.serviceName || svc.ComposeName() == m.serviceName {
+			m.serviceIdx = i
+			return svc
+		}
+	}
+	return nil
 }
 
 func (m *DBOpsModel) dumpDir(se *config.SyncEnv) string {
@@ -164,6 +177,13 @@ func (m *DBOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		switch {
+		case key.Matches(msg, dbOpsBack):
+			return m, func() tea.Msg {
+				return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name, EnvName: m.envName, ServiceName: m.serviceName}
+			}
+		}
+
 		svc := m.currentService()
 		if svc == nil {
 			return m, nil
@@ -171,10 +191,6 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		syncEnvs := svc.SyncEnvs
 
 		switch {
-		case key.Matches(msg, dbOpsBack):
-			return m, func() tea.Msg {
-				return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name, EnvName: m.envName, ServiceName: m.serviceName}
-			}
 
 		case key.Matches(msg, dbOpsUp) && m.listCursor > 0 && !m.deleteArmed:
 			m.listCursor--
@@ -250,7 +266,13 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 
 	svc := m.currentService()
 	if svc == nil {
-		b.WriteString(styles.StyleSubtitle.Render("  Service not found.\n"))
+		b.WriteString(styles.StyleError.Render("  Service not found."))
+		b.WriteString("\n")
+		b.WriteString(styles.StyleSubtitle.Render("  This DB Ops entry is stale or the service was removed."))
+		b.WriteString("\n")
+		b.WriteString(styles.StyleSubtitle.Render("  Press esc to go back to the profile and choose another service."))
+		b.WriteString("\n\n")
+		b.WriteString(styles.BackHelp())
 		return b.String()
 	}
 	syncEnvs := svc.SyncEnvs
@@ -339,6 +361,10 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.lastActionLabel = act.label
 					return m, act.execute()
 				}
+				if act.disabledReason != "" {
+					m.lastResult = styles.StyleSubtitle.Render("Unavailable: " + act.disabledReason)
+					return m, ClearActionAfter(3 * time.Second)
+				}
 			}
 		}
 
@@ -371,7 +397,12 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *DBOpsModel) viewActions() string {
-	syncEnv := m.currentService().FindSyncEnv(m.selectedEnv)
+	svc := m.currentService()
+	if svc == nil {
+		m.screen = dbScreenSyncEnvList
+		return m.viewSyncEnvList()
+	}
+	syncEnv := svc.FindSyncEnv(m.selectedEnv)
 	if syncEnv == nil {
 		m.screen = dbScreenSyncEnvList
 		return m.View()
@@ -425,6 +456,9 @@ func (m *DBOpsModel) viewActions() string {
 				}
 			} else {
 				lines = append(lines, styles.StyleListItemDisabled.Render(line))
+				if act.disabledReason != "" {
+					lines = append(lines, styles.StyleSubtitle.Render("    unavailable: "+act.disabledReason))
+				}
 			}
 		}
 		content := styles.StyleSubtitle.Render(g.label) + "\n\n" + strings.Join(lines, "\n")

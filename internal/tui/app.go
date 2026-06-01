@@ -177,10 +177,11 @@ func (a *App) captureProfileNavState(nav views.NavigateTo) {
 	if a.screen != ScreenProfileView {
 		return
 	}
-	if nav.ProfileName == "" || nav.ProfileName != a.profileView.ProfileName() {
+	profileName := a.profileView.ProfileName()
+	if profileName == "" {
 		return
 	}
-	a.profileNavState[nav.ProfileName] = a.profileView.SnapshotNavState()
+	a.profileNavState[profileName] = a.profileView.SnapshotNavState()
 }
 
 func (a *App) updateActive(msg tea.Msg) (tea.Model, tea.Cmd) {

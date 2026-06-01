@@ -124,6 +124,25 @@ func addSvcItemWindow(total, cursor, height, overhead int) itemWindow {
 	}
 }
 
+func addSvcTailWindow(total, height, overhead int) itemWindow {
+	w := itemWindow{start: 0, end: total}
+	if total == 0 || height <= 0 {
+		return w
+	}
+	avail := height - overhead
+	if avail <= 0 {
+		return itemWindow{start: total - 1, end: total, hasAbove: total > 1}
+	}
+	if total <= avail {
+		return w
+	}
+	start := total - avail
+	if start < 0 {
+		start = 0
+	}
+	return itemWindow{start: start, end: total, hasAbove: start > 0}
+}
+
 func NewAddService(cfg *config.Config, p *config.Profile, envName string) *AddServiceModel {
 	si := textinput.New()
 	si.Placeholder = "postgres, redis, my-image..."
@@ -265,13 +284,13 @@ func (m *AddServiceModel) Init() tea.Cmd { return textinput.Blink }
 
 var addSvcBack = key.NewBinding(key.WithKeys("esc"))
 var addSvcNext = key.NewBinding(key.WithKeys("enter"))
-var addSvcUp = key.NewBinding(key.WithKeys("up", "k"))
-var addSvcDown = key.NewBinding(key.WithKeys("down", "j"))
+var addSvcUp = key.NewBinding(key.WithKeys("up"))
+var addSvcDown = key.NewBinding(key.WithKeys("down"))
 var addSvcUpField = key.NewBinding(key.WithKeys("up"))
 var addSvcDownField = key.NewBinding(key.WithKeys("down"))
-var addSvcToggle = key.NewBinding(key.WithKeys("t"))
-var addSvcDelete = key.NewBinding(key.WithKeys("d"))
-var addSvcReset = key.NewBinding(key.WithKeys("r"))
+var addSvcToggle = key.NewBinding(key.WithKeys("ctrl+t"))
+var addSvcDelete = key.NewBinding(key.WithKeys("ctrl+d"))
+var addSvcReset = key.NewBinding(key.WithKeys("ctrl+r"))
 
 // SetSize propagates terminal dimensions before the first WindowSizeMsg.
 // h is the full terminal height; we subtract 2 for App header + footer.
@@ -1254,23 +1273,32 @@ func (m *AddServiceModel) viewPorts() string {
 	b.WriteString("  Port mappings  (host:container)\n\n")
 	b.WriteString("  " + styles.StyleInputLabel.Render("Host port") + "  " + m.portHost.View() + "\n")
 	b.WriteString("  " + styles.StyleInputLabel.Render("Container port") + "  " + m.portContainer.View() + "\n\n")
-	for _, p := range m.ports {
+	win := addSvcTailWindow(len(m.ports), m.height, 13)
+	if win.hasAbove {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
+		b.WriteString("\n")
+	}
+	for _, p := range m.ports[win.start:win.end] {
 		b.WriteString("    " + styles.StyleCode.Render(p.String()) + "\n")
 	}
+	if len(m.ports) == 0 {
+		b.WriteString(styles.StyleSubtitle.Render("  Press ↵ on empty inputs to continue."))
+		b.WriteString("\n")
+	}
 	if m.portsDeleteArmed {
-		b.WriteString(styles.StyleError.Render("  Press d again to confirm removal"))
+		b.WriteString(styles.StyleError.Render("  Press Ctrl+D again to confirm removal"))
 		b.WriteString("\n")
 	}
 	if m.resetArmed {
-		b.WriteString(styles.StyleError.Render("  Press r again to reset to defaults"))
+		b.WriteString(styles.StyleError.Render("  Press Ctrl+R again to reset to defaults"))
 		b.WriteString("\n")
 	}
 	var actItems []styles.HelpItemResult
 	if len(m.ports) > 1 {
-		actItems = append(actItems, styles.HelpItem("d d", "remove last"))
+		actItems = append(actItems, styles.HelpItem("ctrl+d ctrl+d", "remove last"))
 	}
 	if m.portsCanReset() {
-		actItems = append(actItems, styles.HelpItem("r r", "reset"))
+		actItems = append(actItems, styles.HelpItem("ctrl+r ctrl+r", "reset"))
 	}
 	b.WriteString("\n")
 	b.WriteString(styles.HelpBar(
@@ -1338,23 +1366,32 @@ func (m *AddServiceModel) viewEnvVars() string {
 	b.WriteString("  Environment variables\n\n")
 	b.WriteString("  " + styles.StyleInputLabel.Render("Key") + "  " + m.envKey.View() + "\n")
 	b.WriteString("  " + styles.StyleInputLabel.Render("Value") + "  " + m.envVal.View() + "\n\n")
-	for _, e := range m.envVars {
+	win := addSvcTailWindow(len(m.envVars), m.height, 13)
+	if win.hasAbove {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
+		b.WriteString("\n")
+	}
+	for _, e := range m.envVars[win.start:win.end] {
 		b.WriteString("    " + styles.StyleCode.Render(e.Key) + " = " + e.Value + "\n")
 	}
+	if len(m.envVars) == 0 {
+		b.WriteString(styles.StyleSubtitle.Render("  Press ↵ on an empty key to continue."))
+		b.WriteString("\n")
+	}
 	if m.envVarsDeleteArmed {
-		b.WriteString(styles.StyleError.Render("  Press d again to confirm removal"))
+		b.WriteString(styles.StyleError.Render("  Press Ctrl+D again to confirm removal"))
 		b.WriteString("\n")
 	}
 	if m.resetArmed {
-		b.WriteString(styles.StyleError.Render("  Press r again to reset to defaults"))
+		b.WriteString(styles.StyleError.Render("  Press Ctrl+R again to reset to defaults"))
 		b.WriteString("\n")
 	}
 	var actItems []styles.HelpItemResult
 	if m.envVarsRemovable() {
-		actItems = append(actItems, styles.HelpItem("d d", "remove last"))
+		actItems = append(actItems, styles.HelpItem("ctrl+d ctrl+d", "remove last"))
 	}
 	if m.envVarsCanReset() {
-		actItems = append(actItems, styles.HelpItem("r r", "reset"))
+		actItems = append(actItems, styles.HelpItem("ctrl+r ctrl+r", "reset"))
 	}
 	b.WriteString("\n")
 	b.WriteString(styles.HelpBar(
@@ -1374,34 +1411,43 @@ func (m *AddServiceModel) viewVolumes() string {
 	b.WriteString("  Volumes\n\n")
 	b.WriteString("  " + styles.StyleInputLabel.Render("Source") + "  " + m.volSource.View() + "  ")
 	b.WriteString(styles.StyleCode.Render(namedLabel) + "\n\n")
-	for _, v := range m.volumes {
+	win := addSvcTailWindow(len(m.volumes), m.height, 13)
+	if win.hasAbove {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
+		b.WriteString("\n")
+	}
+	for _, v := range m.volumes[win.start:win.end] {
 		source := v.Source
 		if v.Named && source == "" {
 			source = fmt.Sprintf("%s_%s_%s_data", m.profile.Name, m.envName, m.svc.Name)
 		}
 		b.WriteString(fmt.Sprintf("    %s → %s\n", source, v.Target))
 	}
+	if len(m.volumes) == 0 {
+		b.WriteString(styles.StyleSubtitle.Render("  Press ↵ on an empty source to continue."))
+		b.WriteString("\n")
+	}
 	if m.volumesDeleteArmed {
-		b.WriteString(styles.StyleError.Render("  Press d again to confirm removal"))
+		b.WriteString(styles.StyleError.Render("  Press Ctrl+D again to confirm removal"))
 		b.WriteString("\n")
 	}
 	if m.resetArmed {
-		b.WriteString(styles.StyleError.Render("  Press r again to reset to defaults"))
+		b.WriteString(styles.StyleError.Render("  Press Ctrl+R again to reset to defaults"))
 		b.WriteString("\n")
 	}
 	var actItems []styles.HelpItemResult
 	if len(m.volumes) > 1 {
-		actItems = append(actItems, styles.HelpItem("d d", "remove last"))
+		actItems = append(actItems, styles.HelpItem("ctrl+d ctrl+d", "remove last"))
 	}
 	if m.volumesCanReset() {
-		actItems = append(actItems, styles.HelpItem("r r", "reset"))
+		actItems = append(actItems, styles.HelpItem("ctrl+r ctrl+r", "reset"))
 	}
 	b.WriteString("\n")
 	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.BackHelp(styles.HelpItem("t", "toggle type"), styles.HelpItem("↵", "add/continue")))
+	b.WriteString(styles.BackHelp(styles.HelpItem("ctrl+t", "toggle type"), styles.HelpItem("↵", "add/continue")))
 	return b.String()
 }
 
