@@ -27,12 +27,12 @@ const (
 // Credentials focus order. Each field has a fixed index so we can cycle
 // and also skip AuthDB when the DB type is not mongo.
 const (
-	credFocusHost = iota // 0
-	credFocusPort        // 1
-	credFocusUser        // 2
-	credFocusPass        // 3
-	credFocusDB          // 4
-	credFocusAuthDB      // 5 — mongo only
+	credFocusHost   = iota // 0
+	credFocusPort          // 1
+	credFocusUser          // 2
+	credFocusPass          // 3
+	credFocusDB            // 4
+	credFocusAuthDB        // 5 — mongo only
 )
 
 // ── Messages ──────────────────────────────────────────────────────────────────
@@ -538,7 +538,7 @@ func (m *AddSyncEnvModel) viewNameStep() string {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↵", "continue")))
 	return b.String()
 }
 
@@ -624,7 +624,7 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 
 	b.WriteString("\n")
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "continue")))
 
 	return b.String()
 }
@@ -658,7 +658,7 @@ func (m *AddSyncEnvModel) viewReviewStep() string {
 	b.WriteString("  " + styles.StyleButton.Render(" Save Sync Environment ") + "\n")
 
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↵", "save")))
 	return b.String()
 }
 

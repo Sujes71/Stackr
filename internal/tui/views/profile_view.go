@@ -23,6 +23,7 @@ type ProfileViewModel struct {
 	profile        *config.Profile
 	activeEnv      int
 	cursor         int
+	envState       map[string]ProfileEnvState
 	statuses       []docker.ServiceStatus
 	statusErr      string
 	loading        bool
@@ -41,21 +42,32 @@ type ProfileViewModel struct {
 	forwardHandles map[string][]*portforward.PortForwardHandle
 
 	// ── Discovery State ──
-	inDiscovery        bool
-	discoveryStep      int
-	discoveryCursor    int
-	discoveryCtxs      []string
-	discoveryNSs       []string
-	discoverySvcs      []config.PortForward
-	discoverySelCtx    string
-	discoverySelNS     string
-	discoveredPF       *config.PortForward
-	discoveryEnvName   string
+	inDiscovery      bool
+	discoveryStep    int
+	discoveryCursor  int
+	discoveryCtxs    []string
+	discoveryNSs     []string
+	discoverySvcs    []config.PortForward
+	discoverySelCtx  string
+	discoverySelNS   string
+	discoveredPF     *config.PortForward
+	discoveryEnvName string
 
 	// ── Port Editing ──
-	editingPort    bool
-	portInput      textinput.Model
-	editFwdIdx     int
+	editingPort bool
+	portInput   textinput.Model
+	editFwdIdx  int
+}
+
+type ProfileEnvState struct {
+	Cursor      int
+	ServiceName string
+	ForwardName string
+}
+
+type ProfileNavState struct {
+	ActiveEnvName string
+	Environments  map[string]ProfileEnvState
 }
 
 func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
@@ -72,6 +84,7 @@ func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
 	m := &ProfileViewModel{
 		cfg:            cfg,
 		profile:        p,
+		envState:       make(map[string]ProfileEnvState),
 		envInput:       ti,
 		forwardHandles: make(map[string][]*portforward.PortForwardHandle),
 		portInput:      portInput,
@@ -83,6 +96,7 @@ func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
 			break
 		}
 	}
+	m.rememberCurrentEnvSelection()
 	return m
 }
 
@@ -137,26 +151,27 @@ func (m *ProfileViewModel) loadStatus() tea.Cmd {
 var profileKeys = struct {
 	back, up, down, enter, start, stop, logs, addSvc, svcDelete, dbOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort key.Binding
 }{
-	back:      key.NewBinding(key.WithKeys("esc", "backspace")),
-	up:        key.NewBinding(key.WithKeys("up")),
-	down:      key.NewBinding(key.WithKeys("down", "j")),
-	enter:     key.NewBinding(key.WithKeys("enter")),
-	start:     key.NewBinding(key.WithKeys("s")),
-	stop:      key.NewBinding(key.WithKeys("x")),
-	logs:      key.NewBinding(key.WithKeys("l")),
-	addSvc:    key.NewBinding(key.WithKeys("a")),
-	svcDelete: key.NewBinding(key.WithKeys("d")),
-	dbOps:     key.NewBinding(key.WithKeys("o")),
+	back:           key.NewBinding(key.WithKeys("esc", "backspace")),
+	up:             key.NewBinding(key.WithKeys("up")),
+	down:           key.NewBinding(key.WithKeys("down", "j")),
+	enter:          key.NewBinding(key.WithKeys("enter")),
+	start:          key.NewBinding(key.WithKeys("s")),
+	stop:           key.NewBinding(key.WithKeys("x")),
+	logs:           key.NewBinding(key.WithKeys("l")),
+	addSvc:         key.NewBinding(key.WithKeys("a")),
+	svcDelete:      key.NewBinding(key.WithKeys("d")),
+	dbOps:          key.NewBinding(key.WithKeys("o")),
 	switchEnvLeft:  key.NewBinding(key.WithKeys("left")),
 	switchEnvRight: key.NewBinding(key.WithKeys("right")),
-	addEnv:    key.NewBinding(key.WithKeys("e")),
-	envDelete: key.NewBinding(key.WithKeys("D")),
-	resetVol:  key.NewBinding(key.WithKeys("r")),
-	k8sDiscover: key.NewBinding(key.WithKeys("k")),
-	editPort:    key.NewBinding(key.WithKeys("e")),
+	addEnv:         key.NewBinding(key.WithKeys("n")),
+	envDelete:      key.NewBinding(key.WithKeys("D")),
+	resetVol:       key.NewBinding(key.WithKeys("r")),
+	k8sDiscover:    key.NewBinding(key.WithKeys("k")),
+	editPort:       key.NewBinding(key.WithKeys("e")),
 }
 
 func (m *ProfileViewModel) Init() tea.Cmd {
+	m.ensureValidSelection()
 	var cmds []tea.Cmd
 	cmds = append(cmds, m.loadStatus())
 	if m.isPortForwardEnv() {
@@ -166,15 +181,199 @@ func (m *ProfileViewModel) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+func (m *ProfileViewModel) RestoreSelection(envName, serviceName string) {
+	if strings.TrimSpace(envName) != "" {
+		for i, env := range m.profile.Environments {
+			if env.Name == envName {
+				m.activeEnv = i
+				break
+			}
+		}
+	}
+	m.restoreCurrentEnvSelection()
+	if strings.TrimSpace(serviceName) != "" && !m.isPortForwardEnv() {
+		for i, svc := range m.currentEnvServices() {
+			if svc.Name == serviceName || svc.ComposeName() == serviceName {
+				m.cursor = i
+				break
+			}
+		}
+	}
+	m.ensureValidSelection()
+	m.rememberCurrentEnvSelection()
+}
+
+func (m *ProfileViewModel) SnapshotNavState() ProfileNavState {
+	state := ProfileNavState{
+		Environments: make(map[string]ProfileEnvState, len(m.envState)),
+	}
+	m.rememberCurrentEnvSelection()
+	if env := m.currentEnvUnsafe(); env != nil {
+		state.ActiveEnvName = env.Name
+	}
+	for envName, envState := range m.envState {
+		state.Environments[envName] = envState
+	}
+	return state
+}
+
+func (m *ProfileViewModel) RestoreNavState(state ProfileNavState) {
+	if len(state.Environments) > 0 {
+		m.envState = make(map[string]ProfileEnvState, len(state.Environments))
+		for envName, envState := range state.Environments {
+			m.envState[envName] = envState
+		}
+	}
+	if strings.TrimSpace(state.ActiveEnvName) != "" {
+		for i, env := range m.profile.Environments {
+			if env.Name == state.ActiveEnvName {
+				m.activeEnv = i
+				break
+			}
+		}
+	}
+	m.restoreCurrentEnvSelection()
+	m.ensureValidSelection()
+	m.rememberCurrentEnvSelection()
+}
+
+func (m *ProfileViewModel) ensureValidSelection() {
+	if len(m.profile.Environments) == 0 {
+		m.activeEnv = 0
+		m.cursor = 0
+		return
+	}
+	if m.activeEnv < 0 {
+		m.activeEnv = 0
+	}
+	if m.activeEnv >= len(m.profile.Environments) {
+		m.activeEnv = len(m.profile.Environments) - 1
+	}
+	m.clampCursor()
+}
+
+func (m *ProfileViewModel) clampCursor() {
+	total := len(m.currentEnvServicesUnsafe())
+	if m.isPortForwardEnvUnsafe() {
+		total = len(m.currentForwardsUnsafe())
+	}
+	if total <= 0 {
+		m.cursor = 0
+		return
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	if m.cursor >= total {
+		m.cursor = total - 1
+	}
+}
+
+func (m *ProfileViewModel) rememberCurrentEnvSelection() {
+	env := m.currentEnvUnsafe()
+	if env == nil {
+		return
+	}
+	m.clampCursor()
+	state := ProfileEnvState{Cursor: m.cursor}
+	if env.Name == "local" {
+		services := env.Services
+		if len(services) > 0 && m.cursor >= 0 && m.cursor < len(services) {
+			state.ServiceName = services[m.cursor].Name
+		}
+	} else {
+		forwards := m.forwardHandles[env.Name]
+		if len(forwards) > 0 && m.cursor >= 0 && m.cursor < len(forwards) {
+			state.ForwardName = forwards[m.cursor].Config.Name
+		}
+	}
+	m.envState[env.Name] = state
+}
+
+func (m *ProfileViewModel) restoreCurrentEnvSelection() {
+	env := m.currentEnvUnsafe()
+	if env == nil {
+		m.cursor = 0
+		return
+	}
+	state, ok := m.envState[env.Name]
+	if !ok {
+		m.cursor = 0
+		return
+	}
+	m.cursor = state.Cursor
+	if env.Name == "local" && strings.TrimSpace(state.ServiceName) != "" {
+		for i, svc := range env.Services {
+			if svc.Name == state.ServiceName || svc.ComposeName() == state.ServiceName {
+				m.cursor = i
+				break
+			}
+		}
+	}
+	if env.Name != "local" && strings.TrimSpace(state.ForwardName) != "" {
+		for i, h := range m.forwardHandles[env.Name] {
+			if h.Config.Name == state.ForwardName {
+				m.cursor = i
+				break
+			}
+		}
+	}
+	m.clampCursor()
+}
+
+func (m *ProfileViewModel) currentEnvUnsafe() *config.Environment {
+	if len(m.profile.Environments) == 0 || m.activeEnv < 0 || m.activeEnv >= len(m.profile.Environments) {
+		return nil
+	}
+	return &m.profile.Environments[m.activeEnv]
+}
+
+func (m *ProfileViewModel) currentEnvServicesUnsafe() []config.Service {
+	env := m.currentEnvUnsafe()
+	if env == nil {
+		return nil
+	}
+	return env.Services
+}
+
+func (m *ProfileViewModel) isPortForwardEnvUnsafe() bool {
+	env := m.currentEnvUnsafe()
+	if env == nil {
+		return false
+	}
+	return env.Name != "local"
+}
+
+func (m *ProfileViewModel) currentForwardsUnsafe() []*portforward.PortForwardHandle {
+	env := m.currentEnvUnsafe()
+	if env == nil {
+		return nil
+	}
+	return m.forwardHandles[env.Name]
+}
+
+func (m *ProfileViewModel) persistActiveEnv() {
+	env := m.currentEnv()
+	if env == nil || m.profile.ActiveEnv == env.Name {
+		return
+	}
+	m.profile.ActiveEnv = env.Name
+	_ = m.cfg.UpdateProfile(*m.profile)
+}
+
 func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	defer m.rememberCurrentEnvSelection()
+
 	switch msg := msg.(type) {
 	case statusLoadedMsg:
 		m.loading = false
 		m.statuses = msg.statuses
 		m.statusErr = msg.err
+		m.ensureValidSelection()
 
 	case actionDoneMsg:
 		m.loading = false
+		m.ensureValidSelection()
 		if msg.err != nil {
 			m.lastAction = "✗ " + msg.err.Error()
 			return m, m.loadStatus()
@@ -187,6 +386,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastAction = ""
 
 	case portforward.ForwardMonitorTick:
+		m.ensureValidSelection()
 		if m.isPortForwardEnv() {
 			envName := m.profile.Environments[m.activeEnv].Name
 			for _, h := range m.forwardHandles[envName] {
@@ -200,6 +400,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case discoveryContextsMsg:
 		m.discoveryCtxs = msg.contexts
+		m.discoveryNSs = nil
+		m.discoverySvcs = nil
+		m.discoverySelCtx = ""
+		m.discoverySelNS = ""
 		if len(msg.contexts) == 0 {
 			m.inDiscovery = false
 			m.discoveryStep = 0
@@ -209,9 +413,11 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.inDiscovery = true
 		m.discoveryStep = 0
 		m.discoveryCursor = 0
+		m.ensureValidSelection()
 
 	case discoveryNamespacesMsg:
 		m.discoveryNSs = msg.namespaces
+		m.discoverySvcs = nil
 		m.discoveryCursor = 0
 
 	case discoveryServicesMsg:
@@ -227,6 +433,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = max(0, msg.Height-2) // App chrome (header + footer)
+		m.ensureValidSelection()
 
 	case tea.KeyMsg:
 		// Any key press dismisses the last action message
@@ -260,6 +467,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.profile = updated
 						m.buildForwardHandles()
 						m.cursor = 0
+						m.rememberCurrentEnvSelection()
 						m.lastAction = "✓ All forwards deleted"
 						return m, ClearActionAfter(3 * time.Second)
 					}
@@ -281,6 +489,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.lastAction = "✓ All services deleted"
 						}
 						m.cursor = 0
+						m.rememberCurrentEnvSelection()
 					}
 					return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
 
@@ -348,6 +557,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.lastAction = "✗ compose gen: " + err.Error()
 					return m, nil
 				}
+				m.envState[name] = ProfileEnvState{}
 				m.lastAction = "✓ Added environment " + name
 				return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
 
@@ -371,14 +581,19 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// ── Normal mode ──────────────────────────────────────────
 		switch {
 		case key.Matches(msg, profileKeys.back):
+			m.persistActiveEnv()
 			return m, func() tea.Msg { return NavigateTo{Screen: NavHome} }
 
 		case key.Matches(msg, profileKeys.switchEnvLeft):
 			if m.activeEnv > 0 {
+				m.rememberCurrentEnvSelection()
 				m.activeEnv--
 				m.statuses = nil
+				m.persistActiveEnv()
+				m.restoreCurrentEnvSelection()
 				if m.isPortForwardEnv() {
 					m.buildForwardHandles()
+					m.restoreCurrentEnvSelection()
 					return m, tea.Batch(m.loadStatus(), portforward.ForwardMonitorCmd())
 				}
 				return m, m.loadStatus()
@@ -386,22 +601,21 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, profileKeys.switchEnvRight):
 			if m.activeEnv < len(m.profile.Environments)-1 {
+				m.rememberCurrentEnvSelection()
 				m.activeEnv++
 				m.statuses = nil
+				m.persistActiveEnv()
+				m.restoreCurrentEnvSelection()
 				if m.isPortForwardEnv() {
 					m.buildForwardHandles()
+					m.restoreCurrentEnvSelection()
 					return m, tea.Batch(m.loadStatus(), portforward.ForwardMonitorCmd())
 				}
 				return m, m.loadStatus()
 			}
 
 		case key.Matches(msg, profileKeys.addEnv):
-			// In portforward mode, 'e' on a forward edits its local port
-			if m.isPortForwardEnv() && !m.inDiscovery {
-				if len(m.currentForwards()) > 0 && m.cursor < len(m.currentForwards()) {
-					return m.handlePortEditStart()
-				}
-			}
+			// In portforward mode, 'e' edits its local port; 'n' remains add env.
 			m.inputtingEnv = true
 			m.envInput.Focus()
 			m.envInput.SetValue("")
@@ -425,6 +639,11 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case key.Matches(msg, profileKeys.editPort):
+			if m.isPortForwardEnv() && len(m.currentForwards()) > 0 && m.cursor < len(m.currentForwards()) {
+				return m.handlePortEditStart()
+			}
+
 		case key.Matches(msg, profileKeys.k8sDiscover):
 			if m.isPortForwardEnv() && !m.inDiscovery {
 				if !portforward.CheckKubectl() {
@@ -437,7 +656,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.inDiscovery = true
 					m.discoveryStep = 1
 					m.discoveryCursor = 0
+					m.discoveryNSs = nil
+					m.discoverySvcs = nil
 					m.discoverySelCtx = knownCtx
+					m.discoverySelNS = ""
 					return m, func() tea.Msg {
 						nss, err := portforward.DiscoverNamespaces(knownCtx)
 						if err != nil {
@@ -559,6 +781,9 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, profileKeys.addSvc):
+			if m.isPortForwardEnv() {
+				break
+			}
 			env := m.currentEnv()
 			envName := "local"
 			if env != nil {
@@ -606,6 +831,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.cursor >= len(remaining) && m.cursor > 0 {
 					m.cursor--
 				}
+				m.rememberCurrentEnvSelection()
 			}
 			return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
 
@@ -628,8 +854,9 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			// Stop running forwards for this env
-			m.stopEnvForwards(envName)
+			m.stopEnvForwardsNow(envName)
 			delete(m.forwardHandles, envName)
+			delete(m.envState, envName)
 
 			m.lastAction = "Deleting environment " + envName + "..."
 			envIdx := m.activeEnv
@@ -647,11 +874,9 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			// Adjust activeEnv if needed
-			if m.activeEnv >= len(m.profile.Environments) && m.activeEnv > 0 {
-				m.activeEnv = len(m.profile.Environments) - 1
-			}
-			// Reset cursor
-			m.cursor = 0
+			m.ensureValidSelection()
+			m.restoreCurrentEnvSelection()
+			m.persistActiveEnv()
 			m.lastAction = "✓ Deleted environment " + envName
 			return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
 
@@ -671,6 +896,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
+	m.ensureValidSelection()
 	m.deleteArmed = false
 	m.deleteEnvArmed = false
 	m.resetArmed = false
@@ -687,6 +913,7 @@ func (m *ProfileViewModel) selectedDBType() string {
 }
 
 func (m *ProfileViewModel) currentEnv() *config.Environment {
+	m.ensureValidSelection()
 	if len(m.profile.Environments) == 0 {
 		return nil
 	}
@@ -694,6 +921,7 @@ func (m *ProfileViewModel) currentEnv() *config.Environment {
 }
 
 func (m *ProfileViewModel) currentEnvServices() []config.Service {
+	m.ensureValidSelection()
 	env := m.currentEnv()
 	if env == nil {
 		return nil
@@ -702,13 +930,12 @@ func (m *ProfileViewModel) currentEnvServices() []config.Service {
 }
 
 func (m *ProfileViewModel) isPortForwardEnv() bool {
-	if len(m.profile.Environments) == 0 {
-		return false
-	}
-	return m.profile.Environments[m.activeEnv].Name != "local"
+	m.ensureValidSelection()
+	return m.isPortForwardEnvUnsafe()
 }
 
 func (m *ProfileViewModel) currentForwards() []*portforward.PortForwardHandle {
+	m.ensureValidSelection()
 	if len(m.profile.Environments) == 0 {
 		return nil
 	}
@@ -728,6 +955,7 @@ func (m *ProfileViewModel) knownForwardCtx() string {
 }
 
 func (m *ProfileViewModel) buildForwardHandles() {
+	m.ensureValidSelection()
 	if len(m.profile.Environments) == 0 {
 		return
 	}
@@ -753,6 +981,7 @@ func (m *ProfileViewModel) buildForwardHandles() {
 		}
 	}
 	m.forwardHandles[envName] = handles
+	m.clampCursor()
 }
 
 func (m *ProfileViewModel) startEnvForwards(envName string) []tea.Cmd {
@@ -787,9 +1016,15 @@ func (m *ProfileViewModel) stopEnvForwards(envName string) []tea.Cmd {
 	return cmds
 }
 
+func (m *ProfileViewModel) stopEnvForwardsNow(envName string) {
+	for _, h := range m.forwardHandles[envName] {
+		_ = h.Stop()
+	}
+}
+
 func (m *ProfileViewModel) StopAllForwards() {
 	for envName := range m.forwardHandles {
-		_ = m.stopEnvForwards(envName)
+		m.stopEnvForwardsNow(envName)
 	}
 }
 
@@ -865,7 +1100,7 @@ func (m *ProfileViewModel) View() string {
 		b.WriteString(styles.StyleInputLabel.Render("  New env name:"))
 		b.WriteString(" ")
 		b.WriteString(m.envInput.View())
-		b.WriteString(styles.StyleSubtitle.Render("   ↵ open   esc cancel"))
+		b.WriteString(styles.StyleSubtitle.Render("   ↵ add   esc cancel"))
 		b.WriteString("\n")
 	}
 
@@ -881,9 +1116,9 @@ func (m *ProfileViewModel) View() string {
 	}
 	b.WriteString("\n")
 	if m.inDiscovery {
-		b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "cancel").Render()))
+		b.WriteString(styles.InlineHelp(styles.HelpItem("esc", "cancel")))
 	} else {
-		b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("← →", "env").Render()))
+		b.WriteString(styles.BackHelp(styles.HelpItem("← →", "envs")))
 	}
 
 	return b.String()
@@ -1127,6 +1362,31 @@ func shortCtxName(ctx string) string {
 	return parts[len(parts)-1]
 }
 
+func truncateLabel(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	if max <= 3 {
+		return string(r[:max])
+	}
+	return string(r[:max-3]) + "..."
+}
+
+func renderDiscoveryOption(label string, focused bool) string {
+	const panelWidth = 60
+	const labelWidth = 54
+
+	content := "  " + truncateLabel(label, labelWidth)
+	if focused {
+		return "  " + styles.StylePanelFocused.Width(panelWidth).Render(content)
+	}
+	return "  " + styles.StylePanel.Width(panelWidth).Render(content)
+}
+
 // decorateScroll wraps rendered items with scroll indicators.
 // "↑ N more" takes space above items, so we skip it for a single hidden item.
 // "↓ N more" is at the bottom and doesn't push anything — always show it.
@@ -1191,11 +1451,9 @@ func (m *ProfileViewModel) renderPortForwards() string {
 }
 
 // discoveryItemWindow calculates the visible window for discovery list items.
-// The discovery view replaces the port-forwards section in the main View().
-// Overhead from env tabs, ctx, help bar, hints is the same as the profile view
-// overhead (16 with ctx, 13 without). Within discovery, each step has a fixed
-// overhead of 3 lines (header + blank + help bar). Each list item rendered with
-// a panel border is 3 lines (╭─╮ + content + ╰─╯).
+// The discovery body has a fixed 3-line overhead (header + blank + inline help),
+// each panel item is 3 lines, and scroll indicators consume 1 line each when the
+// window is clipped above or below.
 func (m *ProfileViewModel) discoveryItemWindow(total int) itemWindow {
 	w := itemWindow{start: 0, end: total}
 	if total == 0 || m.height <= 0 {
@@ -1205,7 +1463,7 @@ func (m *ProfileViewModel) discoveryItemWindow(total int) itemWindow {
 	cursor := min(m.discoveryCursor, total-1) // clamp for safety
 
 	oh := m.estimateItemOverhead()
-	stepOh := 3 // header + blank + help
+	stepOh := 3 // header + blank + inline help
 	itemH := 3  // panel border top + content + panel border bottom
 	avail := m.height - oh - stepOh
 	if avail <= 0 {
@@ -1221,100 +1479,103 @@ func (m *ProfileViewModel) discoveryItemWindow(total int) itemWindow {
 		return w
 	}
 
-	// Center around cursor
-	half := fit / 2
-	start := cursor - half
-	if start < 0 {
-		start = 0
-	}
-	end := start + fit
-	if end > total {
-		end = total
-		start = total - fit
+	for fit > 0 {
+		// Center around cursor.
+		half := fit / 2
+		start := cursor - half
+		if start < 0 {
+			start = 0
+		}
+		end := start + fit
+		if end > total {
+			end = total
+			start = total - fit
+		}
+
+		extra := 0
+		if start > 0 {
+			extra++
+		}
+		if end < total {
+			extra++
+		}
+
+		if fit*itemH+extra <= avail || fit == 1 {
+			return itemWindow{
+				start:    start,
+				end:      end,
+				hasAbove: start > 0,
+				hasBelow: total-end > 0,
+			}
+		}
+
+		fit--
 	}
 
-	return itemWindow{
-		start:    start,
-		end:      end,
-		hasAbove: start > 0,
-		hasBelow: total-end > 0,
-	}
+	return itemWindow{start: cursor, end: min(cursor+1, total), hasAbove: cursor > 0, hasBelow: total-cursor > 1}
 }
 
 func (m *ProfileViewModel) renderDiscovery() string {
 	var b strings.Builder
-	b.WriteString("\n")
 
 	switch m.discoveryStep {
-		case 0:
-			dTotal := len(m.discoveryCtxs)
-			win := m.discoveryItemWindow(dTotal)
-			b.WriteString(styles.StyleHeader.Render("  Select K8s context:"))
-			b.WriteString("\n\n")
-			if above := win.start; above > 0 {
-				b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", above)))
-				b.WriteString("\n")
-			}
-			for i := win.start; i < win.end; i++ {
-				ctx := m.discoveryCtxs[i]
-				if i == m.discoveryCursor {
-					b.WriteString("  " + styles.StylePanelFocused.Width(60).Render("  " + ctx) + "\n")
-				} else {
-					b.WriteString("  " + styles.StylePanel.Width(60).Render("  " + ctx) + "\n")
-				}
-			}
-			if below := dTotal - win.end; below > 0 {
-				b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", below)))
-				b.WriteString("\n")
-			}
-			b.WriteString("\n" + styles.StyleHelp.Render("  ↑↓ navigate    ↵ select"))
+	case 0:
+		dTotal := len(m.discoveryCtxs)
+		win := m.discoveryItemWindow(dTotal)
+		b.WriteString(styles.StyleHeader.Render("  Select K8s context:"))
+		b.WriteString("\n\n")
+		var rows []string
+		if above := win.start; above > 0 {
+			rows = append(rows, styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", above)))
+		}
+		for i := win.start; i < win.end; i++ {
+			ctx := m.discoveryCtxs[i]
+			rows = append(rows, renderDiscoveryOption(ctx, i == m.discoveryCursor))
+		}
+		if below := dTotal - win.end; below > 0 {
+			rows = append(rows, styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", below)))
+		}
+		b.WriteString(strings.Join(rows, "\n"))
+		b.WriteString("\n" + styles.InlineHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "select")))
 
-		case 1:
-			dTotal := len(m.discoveryNSs)
-			win := m.discoveryItemWindow(dTotal)
-			b.WriteString(styles.StyleHeader.Render("  Select namespace for '" + m.discoverySelCtx + "':"))
-			b.WriteString("\n\n")
-			if above := win.start; above > 0 {
-				b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", above)))
-				b.WriteString("\n")
-			}
-			for i := win.start; i < win.end; i++ {
-				ns := m.discoveryNSs[i]
-				if i == m.discoveryCursor {
-					b.WriteString("  " + styles.StylePanelFocused.Width(60).Render("  " + ns) + "\n")
-				} else {
-					b.WriteString("  " + styles.StylePanel.Width(60).Render("  " + ns) + "\n")
-				}
-			}
-			if below := dTotal - win.end; below > 0 {
-				b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", below)))
-				b.WriteString("\n")
-			}
-			b.WriteString("\n" + styles.StyleHelp.Render("  ↑↓ navigate    ↵ select"))
+	case 1:
+		dTotal := len(m.discoveryNSs)
+		win := m.discoveryItemWindow(dTotal)
+		b.WriteString(styles.StyleHeader.Render("  Select namespace for '" + m.discoverySelCtx + "':"))
+		b.WriteString("\n\n")
+		var rows []string
+		if above := win.start; above > 0 {
+			rows = append(rows, styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", above)))
+		}
+		for i := win.start; i < win.end; i++ {
+			ns := m.discoveryNSs[i]
+			rows = append(rows, renderDiscoveryOption(ns, i == m.discoveryCursor))
+		}
+		if below := dTotal - win.end; below > 0 {
+			rows = append(rows, styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", below)))
+		}
+		b.WriteString(strings.Join(rows, "\n"))
+		b.WriteString("\n" + styles.InlineHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "select")))
 
 	case 2:
 		dTotal := len(m.discoverySvcs)
 		win := m.discoveryItemWindow(dTotal)
 		b.WriteString(styles.StyleHeader.Render("  Select service in '" + m.discoverySelCtx + "/" + m.discoverySelNS + "':"))
 		b.WriteString("\n\n")
+		var rows []string
 		if above := win.start; above > 0 {
-			b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", above)))
-			b.WriteString("\n")
+			rows = append(rows, styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", above)))
 		}
 		for i := win.start; i < win.end; i++ {
 			svc := m.discoverySvcs[i]
 			label := fmt.Sprintf("%s  %d/TCP", svc.Name, svc.RemotePort)
-			if i == m.discoveryCursor {
-				b.WriteString("  " + styles.StylePanelFocused.Width(60).Render("  " + label) + "\n")
-			} else {
-				b.WriteString("  " + styles.StylePanel.Width(60).Render("  " + label) + "\n")
-			}
+			rows = append(rows, renderDiscoveryOption(label, i == m.discoveryCursor))
 		}
 		if below := dTotal - win.end; below > 0 {
-			b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", below)))
-			b.WriteString("\n")
+			rows = append(rows, styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", below)))
 		}
-		b.WriteString("\n" + styles.StyleHelp.Render("  ↑↓ navigate    ↵ select"))
+		b.WriteString(strings.Join(rows, "\n"))
+		b.WriteString("\n" + styles.InlineHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "select")))
 
 	case 3:
 		b.WriteString(styles.StyleHeader.Render("  Confirm port-forward:"))
@@ -1322,7 +1583,7 @@ func (m *ProfileViewModel) renderDiscovery() string {
 		b.WriteString("    Service:  " + styles.StyleCode.Render(m.discoveredPF.Name) + "\n")
 		b.WriteString("    Remote:   " + styles.StyleCode.Render(fmt.Sprintf("%d", m.discoveredPF.RemotePort)) + "\n")
 		b.WriteString("    Local:    " + m.portInput.View() + "\n")
-		b.WriteString("\n" + styles.StyleHelp.Render("  esc cancel    ↵ confirm"))
+		b.WriteString("\n" + styles.InlineHelp(styles.HelpItem("esc", "cancel"), styles.HelpItem("↵", "confirm")))
 	}
 
 	return b.String()
@@ -1331,7 +1592,7 @@ func (m *ProfileViewModel) renderDiscovery() string {
 func (m *ProfileViewModel) renderPortEditor() string {
 	return "  " + styles.StyleInputLabel.Render("Local port:") +
 		"  " + m.portInput.View() +
-		"  " + styles.StyleHelp.Render("↵ save   esc cancel")
+		"  " + styles.InlineHelp(styles.HelpItem("↵", "save"), styles.HelpItem("esc", "cancel"))
 }
 
 func (m *ProfileViewModel) renderDockerHelpBar() string {
@@ -1345,14 +1606,14 @@ func (m *ProfileViewModel) renderDockerHelpBar() string {
 	}
 
 	var envItems, svcItems, stackItems []styles.HelpItemResult
-	envItems = append(envItems, styles.HelpItem("e", "add env"))
-	if len(m.profile.Environments) > 0 {
+	envItems = append(envItems, styles.HelpItem("n", "new env"))
+	if len(m.profile.Environments) > 0 && m.currentEnv() != nil && m.currentEnv().Name != "local" {
 		envItems = append(envItems, styles.HelpItem("D D", "delete env"))
 	}
 	envItems = append(envItems, styles.HelpItem("a", "add service"))
 
 	if len(svcs) > 0 {
-		svcItems = append(svcItems, styles.HelpItem("↵", "start/stop"))
+		svcItems = append(svcItems, styles.HelpItem("↵", "toggle"))
 		svcItems = append(svcItems, styles.HelpItem("l", "logs"))
 		if m.selectedDBType() != "" {
 			svcItems = append(svcItems, styles.HelpItem("o", "db ops"))
@@ -1377,15 +1638,15 @@ func (m *ProfileViewModel) renderDockerHelpBar() string {
 
 func (m *ProfileViewModel) renderPFHelpBar() string {
 	var envItems, pfItems, stackItems []styles.HelpItemResult
-	envItems = append(envItems, styles.HelpItem("e", "add env"))
-	if len(m.profile.Environments) > 0 {
+	envItems = append(envItems, styles.HelpItem("n", "new env"))
+	if len(m.profile.Environments) > 0 && m.currentEnv() != nil && m.currentEnv().Name != "local" {
 		envItems = append(envItems, styles.HelpItem("D D", "delete env"))
 	}
 
 	pfItems = append(pfItems, styles.HelpItem("k", "k8s discover"))
 	forwards := m.currentForwards()
 	if len(forwards) > 0 {
-		pfItems = append(pfItems, styles.HelpItem("↵", "start/stop"))
+		pfItems = append(pfItems, styles.HelpItem("↵", "toggle"))
 		pfItems = append(pfItems, styles.HelpItem("d d", "delete"))
 		pfItems = append(pfItems, styles.HelpItem("e", "edit port"))
 
@@ -1512,6 +1773,9 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 		case 0:
 			if m.discoveryCursor < len(m.discoveryCtxs) {
 				m.discoverySelCtx = m.discoveryCtxs[m.discoveryCursor]
+				m.discoverySelNS = ""
+				m.discoveryNSs = nil
+				m.discoverySvcs = nil
 				m.discoveryStep = 1
 				m.discoveryCursor = 0
 				return m, func() tea.Msg {
@@ -1529,6 +1793,7 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 		case 1:
 			if m.discoveryCursor < len(m.discoveryNSs) {
 				m.discoverySelNS = m.discoveryNSs[m.discoveryCursor]
+				m.discoverySvcs = nil
 				m.discoveryStep = 2
 				m.discoveryCursor = 0
 				return m, func() tea.Msg {
@@ -1594,6 +1859,7 @@ func (m *ProfileViewModel) handleForwardToggle() (tea.Model, tea.Cmd) {
 // ── Forward Delete ─────────────────────────────────────────────────────────
 
 func (m *ProfileViewModel) handleForwardDelete() (tea.Model, tea.Cmd) {
+	m.clampCursor()
 	forwards := m.currentForwards()
 	if m.cursor >= len(forwards) {
 		return m, nil
@@ -1618,18 +1884,15 @@ func (m *ProfileViewModel) handleForwardDelete() (tea.Model, tea.Cmd) {
 	}
 	m.profile = updated
 	m.buildForwardHandles()
-	// Adjust cursor
-	remaining := m.currentForwards()
-	if m.cursor >= len(remaining) && m.cursor > 0 {
-		m.cursor--
-	}
+	m.clampCursor()
 	m.lastAction = "✓ Deleted " + fwdName
-	return m, tea.Batch(m.loadStatus(), ClearActionAfter(3 * time.Second))
+	return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
 }
 
 // ── Port Editing ──────────────────────────────────────────────────────────
 
 func (m *ProfileViewModel) handlePortEditStart() (tea.Model, tea.Cmd) {
+	m.clampCursor()
 	forwards := m.currentForwards()
 	if m.cursor >= len(forwards) {
 		return m, nil

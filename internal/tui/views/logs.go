@@ -117,6 +117,8 @@ func (m *LogsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return NavigateTo{
 					Screen:      NavProfileView,
 					ProfileName: m.profile.Name,
+					EnvName:     m.envName,
+					ServiceName: m.svcName,
 				}
 			}
 
@@ -203,6 +205,8 @@ func (m *LogsModel) View() string {
 	b.WriteString("\n")
 	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Scroll", Items: []styles.HelpItemResult{
+			styles.HelpItem("↑ ↓", "line"),
+			styles.HelpItem("pgup/dn", "page"),
 			styles.HelpItem("g/G", "top/bottom"),
 		}},
 		styles.HelpGroup{Label: "View", Items: []styles.HelpItemResult{
@@ -210,7 +214,7 @@ func (m *LogsModel) View() string {
 		}},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render()))
+	b.WriteString(styles.BackHelp())
 
 	return b.String()
 }

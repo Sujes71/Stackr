@@ -29,29 +29,29 @@ const (
 )
 
 type AddServiceModel struct {
-	cfg         *config.Config
-	profile     *config.Profile
-	envName     string
-	step        addSvcStep
+	cfg     *config.Config
+	profile *config.Profile
+	envName string
+	step    addSvcStep
 
 	// source selection
 	sourceCursor int
-	sourcePath    string // "catalog" | "search" | "manual"
+	sourcePath   string // "catalog" | "search" | "manual"
 
 	// catalog
 	catalogCursor int
 
 	// hub search
-	searchInput      textinput.Model
-	searchResults    []hub.SearchResult
-	searchCursor     int
-	searching        bool
-	searchErr        string
-	lastSearchQuery  string // track last executed query; Enter re-searches if query changed
+	searchInput     textinput.Model
+	searchResults   []hub.SearchResult
+	searchCursor    int
+	searching       bool
+	searchErr       string
+	lastSearchQuery string // track last executed query; Enter re-searches if query changed
 
 	// tag selection
-	tags       []hub.Tag
-	tagCursor  int
+	tags        []hub.Tag
+	tagCursor   int
 	loadingTags bool
 
 	// service being built
@@ -61,10 +61,10 @@ type AddServiceModel struct {
 	nameFocus  int // 0=image input, 1=service name input (manual mode only)
 
 	// ports editor
-	portHost          textinput.Model
-	portContainer     textinput.Model
-	ports             []config.PortMapping
-	portsDeleteArmed  bool
+	portHost         textinput.Model
+	portContainer    textinput.Model
+	ports            []config.PortMapping
+	portsDeleteArmed bool
 
 	// env vars editor
 	envKey             textinput.Model
@@ -73,9 +73,9 @@ type AddServiceModel struct {
 	envVars            []config.EnvVar
 	envVarsDeleteArmed bool
 	resetArmed         bool
-	protectedEnvKeys   map[string]bool // env var keys from catalog defaults
-	defaultPorts      []config.PortMapping   // snapshot for reset
-	defaultEnvVars    []config.EnvVar        // snapshot for reset
+	protectedEnvKeys   map[string]bool      // env var keys from catalog defaults
+	defaultPorts       []config.PortMapping // snapshot for reset
+	defaultEnvVars     []config.EnvVar      // snapshot for reset
 
 	// volumes editor
 	volSource          textinput.Model
@@ -137,13 +137,28 @@ func NewAddService(cfg *config.Config, p *config.Profile, envName string) *AddSe
 	ii.Placeholder = "mongo:4.2, postgres:16, my-registry/image..."
 	ii.CharLimit = 40
 
-	ph := textinput.New(); ph.Placeholder = "5432"; ph.CharLimit = 10; ph.Width = 8
-	pc := textinput.New(); pc.Placeholder = "5432"; pc.CharLimit = 10; pc.Width = 8
+	ph := textinput.New()
+	ph.Placeholder = "5432"
+	ph.CharLimit = 10
+	ph.Width = 8
+	pc := textinput.New()
+	pc.Placeholder = "5432"
+	pc.CharLimit = 10
+	pc.Width = 8
 
-	ek := textinput.New(); ek.Placeholder = "POSTGRES_USER"; ek.CharLimit = 30; ek.Width = 24
-	ev := textinput.New(); ev.Placeholder = "postgres";     ev.CharLimit = 60; ev.Width = 28
+	ek := textinput.New()
+	ek.Placeholder = "POSTGRES_USER"
+	ek.CharLimit = 30
+	ek.Width = 24
+	ev := textinput.New()
+	ev.Placeholder = "postgres"
+	ev.CharLimit = 60
+	ev.Width = 28
 
-	vs := textinput.New(); vs.Placeholder = "./data or volume name"; vs.CharLimit = 40; vs.Width = 30
+	vs := textinput.New()
+	vs.Placeholder = "./data or volume name"
+	vs.CharLimit = 40
+	vs.Width = 30
 	return &AddServiceModel{
 		cfg:              cfg,
 		profile:          p,
@@ -286,14 +301,14 @@ func (m *AddServiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case svcSavedMsg:
 		return m, func() tea.Msg {
-			return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name}
+			return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name, EnvName: m.envName, ServiceName: m.svc.Name}
 		}
 
 	case tea.KeyMsg:
 		if key.Matches(msg, addSvcBack) {
 			if m.step == svcStepSource {
 				return m, func() tea.Msg {
-					return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name}
+					return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name, EnvName: m.envName}
 				}
 			}
 
@@ -520,7 +535,7 @@ func (m *AddServiceModel) prefillFromCatalog(image string) {
 		// and each service has isolated data (no shared ./data collisions)
 		if entry.DefaultVolumeTarget != "" {
 			m.volumes = append(m.volumes, config.VolumeMapping{
-				Source: "",          // compose generator will create profile_env_service_data
+				Source: "", // compose generator will create profile_env_service_data
 				Target: entry.DefaultVolumeTarget,
 				Named:  true,
 			})
@@ -1081,7 +1096,7 @@ func (m *AddServiceModel) viewSource() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "choose source")))
 	return b.String()
 }
 
@@ -1117,7 +1132,7 @@ func (m *AddServiceModel) viewCatalog() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "choose image")))
 	return b.String()
 }
 
@@ -1130,7 +1145,7 @@ func (m *AddServiceModel) viewSearch() string {
 	}
 	b.WriteString("\n\n")
 	if m.searchErr != "" {
-		b.WriteString(styles.StyleError.Render("  " + m.searchErr) + "\n")
+		b.WriteString(styles.StyleError.Render("  "+m.searchErr) + "\n")
 	}
 	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 
@@ -1164,7 +1179,7 @@ func (m *AddServiceModel) viewSearch() string {
 		b.WriteString("  Type a name and press ↵ to search\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "search/select")))
 	return b.String()
 }
 
@@ -1203,7 +1218,7 @@ func (m *AddServiceModel) viewTags() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "choose tag")))
 	return b.String()
 }
 
@@ -1215,21 +1230,21 @@ func (m *AddServiceModel) viewName() string {
 			b.WriteString("  Image\n\n")
 			b.WriteString("  " + m.imageInput.View() + "\n")
 			b.WriteString("  Docker image to pull (e.g. postgres:16, mongo:4.2)\n")
-			b.WriteString("\n  " + styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+			b.WriteString("\n  " + styles.BackHelp(styles.HelpItem("↵", "use image")))
 		} else {
 			// Step 2: confirm/enter service name
 			b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
 			b.WriteString(styles.StyleInputLabel.Render("Service name") + "\n")
 			b.WriteString("  " + m.nameInput.View() + "\n")
 			b.WriteString("  Used as the compose service key and container name suffix\n")
-			b.WriteString("\n  " + styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+			b.WriteString("\n  " + styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "continue")))
 		}
 	} else {
 		b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
 		b.WriteString(styles.StyleInputLabel.Render("Service name") + "\n")
 		b.WriteString("  " + m.nameInput.View() + "\n")
 		b.WriteString("  Used as the compose service key and container name suffix\n")
-		b.WriteString("\n" + styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+		b.WriteString("\n" + styles.BackHelp(styles.HelpItem("↵", "continue")))
 	}
 	return b.String()
 }
@@ -1262,7 +1277,7 @@ func (m *AddServiceModel) viewPorts() string {
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "add/continue")))
 	return b.String()
 }
 
@@ -1346,7 +1361,7 @@ func (m *AddServiceModel) viewEnvVars() string {
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "add/continue")))
 	return b.String()
 }
 
@@ -1386,7 +1401,7 @@ func (m *AddServiceModel) viewVolumes() string {
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("t", "type").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.BackHelp(styles.HelpItem("t", "toggle type"), styles.HelpItem("↵", "add/continue")))
 	return b.String()
 }
 
@@ -1419,7 +1434,7 @@ func (m *AddServiceModel) viewReview() string {
 	))
 	b.WriteString("\n\n")
 	b.WriteString(styles.StyleButton.Render(" Save service "))
-	b.WriteString("   " + styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString("   " + styles.BackHelp(styles.HelpItem("↵", "save")))
 	return b.String()
 }
 

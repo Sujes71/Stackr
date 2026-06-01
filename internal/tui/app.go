@@ -44,10 +44,11 @@ const (
 
 // App is the root Bubble Tea model.
 type App struct {
-	cfg     *config.Config
-	screen  Screen
-	width   int
-	height  int
+	cfg             *config.Config
+	screen          Screen
+	width           int
+	height          int
+	profileNavState map[string]views.ProfileNavState
 
 	// child views
 	home        *views.HomeModel
@@ -63,9 +64,10 @@ type App struct {
 func New(cfg *config.Config) *App {
 	home := views.NewHome(cfg)
 	return &App{
-		cfg:    cfg,
-		screen: ScreenHome,
-		home:   home,
+		cfg:             cfg,
+		screen:          ScreenHome,
+		home:            home,
+		profileNavState: make(map[string]views.ProfileNavState),
 	}
 }
 
@@ -117,6 +119,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 	a.err = ""
+	a.captureProfileNavState(nav)
 	switch nav.Screen {
 
 	case views.NavHome:
@@ -134,6 +137,10 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
 			a.screen = ScreenProfileView
 			a.profileView = views.NewProfileView(a.cfg, p)
+			if state, ok := a.profileNavState[nav.ProfileName]; ok {
+				a.profileView.RestoreNavState(state)
+			}
+			a.profileView.RestoreSelection(nav.EnvName, nav.ServiceName)
 			a.profileView.SetSize(a.width, a.height)
 			return a, a.profileView.Init()
 		}
@@ -161,6 +168,19 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 		}
 	}
 	return a, nil
+}
+
+func (a *App) captureProfileNavState(nav views.NavigateTo) {
+	if a.profileView == nil {
+		return
+	}
+	if a.screen != ScreenProfileView {
+		return
+	}
+	if nav.ProfileName == "" || nav.ProfileName != a.profileView.ProfileName() {
+		return
+	}
+	a.profileNavState[nav.ProfileName] = a.profileView.SnapshotNavState()
 }
 
 func (a *App) updateActive(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -268,5 +288,5 @@ func (a *App) renderFooter() string {
 	if a.err != "" {
 		return StyleError.Render("  ✗ " + a.err)
 	}
-	return StyleHelp.Render("ctrl+c quit  •  ? help")
+	return StyleHelp.Render("ctrl+c quit")
 }

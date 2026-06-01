@@ -22,13 +22,13 @@ const (
 )
 
 type NewProfileModel struct {
-	cfg   *config.Config
-	step  newProfileStep
-	name  textinput.Model
-	desc  textinput.Model
-	envs  []string // environment names being built
-	envInput textinput.Model
-	err   string
+	cfg           *config.Config
+	step          newProfileStep
+	name          textinput.Model
+	desc          textinput.Model
+	envs          []string // environment names being built
+	envInput      textinput.Model
+	err           string
 	confirmRemove bool // double-tap d protection
 }
 
@@ -241,7 +241,7 @@ func (m *NewProfileModel) View() string {
 		b.WriteString("  " + m.envInput.View())
 		b.WriteString("\n")
 		b.WriteString(styles.StyleSubtitle.Render("  Type a name and press ↵ to add it  |  ↵ empty to continue"))
-		if len(m.envs) > 1 {
+		if m.canRemoveEnv() {
 			b.WriteString("\n")
 			if m.confirmRemove {
 				b.WriteString(styles.StyleError.Render("  Press d again to confirm removal"))
@@ -258,18 +258,17 @@ func (m *NewProfileModel) View() string {
 
 	b.WriteString("\n\n")
 	if m.step == npStepEnvs {
-		b.WriteString(styles.HelpBar(
-			styles.HelpGroup{Label: "Manage", Items: []styles.HelpItemResult{
-				styles.HelpItem("d d", "remove"),
-			}},
-		))
-		b.WriteString("\n")
-		b.WriteString(styles.StyleHelp.Render(
-			styles.HelpItem("esc", "back").Render() + "  " +
-				styles.HelpItem("↵", "next").Render(),
-		))
+		if m.canRemoveEnv() {
+			b.WriteString(styles.HelpBar(
+				styles.HelpGroup{Label: "Manage", Items: []styles.HelpItemResult{
+					styles.HelpItem("d d", "remove"),
+				}},
+			))
+			b.WriteString("\n")
+		}
+		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "add/finish")))
 	} else {
-		b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "continue")))
 	}
 
 	return b.String()
@@ -282,4 +281,8 @@ func contains(ss []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func (m *NewProfileModel) canRemoveEnv() bool {
+	return m.step == npStepEnvs && m.envInput.Value() == "" && len(m.envs) > 1
 }

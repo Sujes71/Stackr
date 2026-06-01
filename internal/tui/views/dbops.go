@@ -56,11 +56,11 @@ type DBOpsModel struct {
 	deleteArmed bool
 
 	// SyncEnv actions state
-	selectedEnv       string
-	actionCursor      int
-	actions           []actionItem // cached for view rendering
-	truncatedSinceData bool   // disable truncate until next import
-	lastActionLabel   string  // label of action being executed
+	selectedEnv        string
+	actionCursor       int
+	actions            []actionItem // cached for view rendering
+	truncatedSinceData bool         // disable truncate until next import
+	lastActionLabel    string       // label of action being executed
 
 	// Running state (shared across screens)
 	running    bool
@@ -173,7 +173,7 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case key.Matches(msg, dbOpsBack):
 			return m, func() tea.Msg {
-				return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name}
+				return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name, EnvName: m.envName, ServiceName: m.serviceName}
 			}
 
 		case key.Matches(msg, dbOpsUp) && m.listCursor > 0 && !m.deleteArmed:
@@ -258,7 +258,7 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 	if len(syncEnvs) == 0 {
 		b.WriteString(styles.StyleSubtitle.Render("  No sync-from environments configured."))
 		b.WriteString("\n")
-		b.WriteString(styles.StyleSubtitle.Render("  Press e to add one."))
+		b.WriteString(styles.StyleSubtitle.Render("  Press a to add one."))
 		b.WriteString("\n")
 	} else {
 		for i, se := range syncEnvs {
@@ -302,7 +302,11 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	if len(syncEnvs) > 0 {
+		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "open actions")))
+	} else {
+		b.WriteString(styles.BackHelp())
+	}
 	return b.String()
 }
 
@@ -452,7 +456,7 @@ func (m *DBOpsModel) viewActions() string {
 		b.WriteString("  " + m.lastResult + "\n\n")
 	}
 
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "run")))
 	return b.String()
 }
 

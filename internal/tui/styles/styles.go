@@ -12,14 +12,14 @@ import (
 // ── Colors (Kanagawa-inspired) ────────────────────────────────────────────────
 
 var (
-	ColorBg       = lipgloss.Color("#1F1F28")
-	ColorFg       = lipgloss.Color("#DCD7BA")
-	ColorPrimary  = lipgloss.Color("#7E9CD8") // blue
+	ColorBg        = lipgloss.Color("#1F1F28")
+	ColorFg        = lipgloss.Color("#DCD7BA")
+	ColorPrimary   = lipgloss.Color("#7E9CD8") // blue
 	ColorSecondary = lipgloss.Color("#A6DA95") // green
-	ColorAccent   = lipgloss.Color("#FF9E64") // orange
-	ColorError    = lipgloss.Color("#E46876") // red
-	ColorMuted    = lipgloss.Color("#54546D") // gray
-	ColorCode     = lipgloss.Color("#C0A36E") // yellow
+	ColorAccent    = lipgloss.Color("#FF9E64") // orange
+	ColorError     = lipgloss.Color("#E46876") // red
+	ColorMuted     = lipgloss.Color("#54546D") // gray
+	ColorCode      = lipgloss.Color("#C0A36E") // yellow
 )
 
 // ── Common Styles ─────────────────────────────────────────────────────────────
@@ -137,6 +137,21 @@ func HelpItem(key, desc string) HelpItemResult {
 		desc:      desc,
 		keyWidth:  lipgloss.Width(styledKey),
 	}
+}
+
+// InlineHelp renders a single-line help hint using the shared help style.
+func InlineHelp(items ...HelpItemResult) string {
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		parts = append(parts, item.Render())
+	}
+	return StyleHelp.Render(strings.Join(parts, "  "))
+}
+
+// BackHelp renders the shared back hint plus any additional inline hints.
+func BackHelp(items ...HelpItemResult) string {
+	base := []HelpItemResult{HelpItem("esc", "back")}
+	return InlineHelp(append(base, items...)...)
 }
 
 // HelpGroup defines a labeled section of help items for HelpBar.

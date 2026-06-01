@@ -134,7 +134,12 @@ func (m *HomeModel) View() string {
 		styles.HelpGroup{Label: "Manage", Items: mgmtItems},
 	))
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	var hints []string
+	if len(m.profiles) > 0 {
+		hints = append(hints, styles.HelpItem("↑ ↓", "navigate").Render())
+		hints = append(hints, styles.HelpItem("↵", "open profile").Render())
+	}
+	b.WriteString(styles.StyleHelp.Render(strings.Join(hints, "  ")))
 
 	return b.String()
 }
