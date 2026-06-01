@@ -1034,7 +1034,7 @@ func (m *AddServiceModel) viewSource() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑↓", "select").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
 	return b.String()
 }
 
@@ -1057,7 +1057,7 @@ func (m *AddServiceModel) viewCatalog() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑↓", "select").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
 	return b.String()
 }
 
@@ -1091,7 +1091,7 @@ func (m *AddServiceModel) viewSearch() string {
 		b.WriteString("  Type a name and press ↵ to search\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
 	return b.String()
 }
 
@@ -1117,7 +1117,7 @@ func (m *AddServiceModel) viewTags() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑↓", "select").Render() + "  " + styles.HelpItem("↵", "next").Render()))
+	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
 	return b.String()
 }
 
