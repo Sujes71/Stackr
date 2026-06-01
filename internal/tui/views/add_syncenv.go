@@ -57,10 +57,8 @@ type AddSyncEnvModel struct {
 	step syncEnvStep
 
 	// Mode
-	editMode  bool
-	origName  string // original name in edit mode (NOT mutable)
-	origSyncEnv *config.SyncEnv // snapshot for reset
-	resetArmed  bool
+	editMode bool
+	origName string // original name in edit mode (NOT mutable)
 
 	// Step 1: name
 	nameInput textinput.Model
@@ -89,9 +87,8 @@ type AddSyncEnvModel struct {
 var (
 	wizardBack = key.NewBinding(key.WithKeys("esc"))
 	wizardNext = key.NewBinding(key.WithKeys("enter"))
-	wizardUp    = key.NewBinding(key.WithKeys("up"))
-	wizardDown  = key.NewBinding(key.WithKeys("down"))
-	wizardReset = key.NewBinding(key.WithKeys("r"))
+	wizardUp   = key.NewBinding(key.WithKeys("up"))
+	wizardDown = key.NewBinding(key.WithKeys("down"))
 )
 
 // ── Constructor ───────────────────────────────────────────────────────────────
@@ -205,23 +202,6 @@ func NewAddSyncEnv(
 		}
 	}
 
-	// Store snapshot for reset
-	snap := &config.SyncEnv{}
-	if existing != nil {
-		*snap = *existing
-	} else {
-		snap.Name = ""
-		snap.Host = ""
-		snap.Port = defaultPort
-		snap.User = ""
-		snap.Password = ""
-		snap.Database = ""
-		if dbType == "mongo" {
-			snap.AuthDB = ""
-		}
-	}
-	m.origSyncEnv = snap
-
 	return m
 }
 
@@ -303,51 +283,6 @@ func (m *AddSyncEnvModel) updateCredentialsStep(msg tea.Msg) (*AddSyncEnvModel, 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case key.Matches(msg, wizardReset):
-			// Check if user is typing in a field (has content) → let r through
-			if m.credFocus >= 0 && m.credFocus <= m.maxFocus {
-				hasContent := false
-				switch m.credFocus {
-				case credFocusHost:
-					hasContent = strings.TrimSpace(m.hostInput.Value()) != ""
-				case credFocusPort:
-					hasContent = strings.TrimSpace(m.portInput.Value()) != "" &&
-						strings.TrimSpace(m.portInput.Value()) != m.origSyncEnv.Port
-				case credFocusUser:
-					hasContent = strings.TrimSpace(m.userInput.Value()) != ""
-				case credFocusPass:
-					hasContent = m.passInput.Value() != ""
-				case credFocusDB:
-					hasContent = strings.TrimSpace(m.dbInput.Value()) != ""
-				case credFocusAuthDB:
-					hasContent = strings.TrimSpace(m.authDBInput.Value()) != ""
-				}
-				if hasContent {
-					m.resetArmed = false
-					return m.updateActiveInput(msg)
-				}
-			}
-
-			if !m.resetArmed {
-				m.resetArmed = true
-				return m, nil
-			}
-
-			// Second r: reset to original
-			m.resetArmed = false
-			m.credErr = ""
-			m.hostInput.SetValue(m.origSyncEnv.Host)
-			m.portInput.SetValue(m.origSyncEnv.Port)
-			m.userInput.SetValue(m.origSyncEnv.User)
-			m.passInput.SetValue(m.origSyncEnv.Password)
-			m.dbInput.SetValue(m.origSyncEnv.Database)
-			if m.dbType == "mongo" {
-				m.authDBInput.SetValue(m.origSyncEnv.AuthDB)
-			}
-			m.credFocus = credFocusHost
-			m.updateCredFocus()
-			return m, textinput.Blink
-
 		case key.Matches(msg, wizardBack):
 			// Back to name step
 			m.step = syncEnvStepName
@@ -378,10 +313,7 @@ func (m *AddSyncEnvModel) updateCredentialsStep(msg tea.Msg) (*AddSyncEnvModel, 
 		}
 	}
 
-	return m.updateActiveInput(msg)
-}
-
-func (m *AddSyncEnvModel) updateActiveInput(msg tea.Msg) (*AddSyncEnvModel, tea.Cmd) {
+	// Update the active text input
 	var cmd tea.Cmd
 	switch m.credFocus {
 	case credFocusHost:
@@ -688,10 +620,6 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 
 	if m.credErr != "" {
 		b.WriteString("\n  " + styles.StyleError.Render("✗ "+m.credErr))
-	}
-
-	if m.resetArmed {
-		b.WriteString("\n" + styles.StyleError.Render("  Press r again to reset fields"))
 	}
 
 	b.WriteString("\n")
