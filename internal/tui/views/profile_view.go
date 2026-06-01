@@ -1362,29 +1362,11 @@ func shortCtxName(ctx string) string {
 	return parts[len(parts)-1]
 }
 
-func truncateLabel(s string, max int) string {
-	if max <= 0 {
-		return ""
+func renderDiscoveryItem(label string, selected bool) string {
+	if selected {
+		return styles.StyleDiscoveryItemSelected.Render("> " + label)
 	}
-	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
-	if max <= 3 {
-		return string(r[:max])
-	}
-	return string(r[:max-3]) + "..."
-}
-
-func renderDiscoveryOption(label string, focused bool) string {
-	const panelWidth = 60
-	const labelWidth = 54
-
-	content := "  " + truncateLabel(label, labelWidth)
-	if focused {
-		return "  " + styles.StylePanelFocused.Width(panelWidth).Render(content)
-	}
-	return "  " + styles.StylePanel.Width(panelWidth).Render(content)
+	return styles.StyleDiscoveryItem.Render("  " + label)
 }
 
 // decorateScroll wraps rendered items with scroll indicators.
@@ -1455,8 +1437,8 @@ func (m *ProfileViewModel) renderPortForwards() string {
 }
 
 // discoveryItemWindow calculates the visible window for discovery list items.
-// The discovery body has a fixed 3-line overhead (header + blank + inline help),
-// each panel item is 3 lines, and scroll indicators consume 1 line each when the
+// The discovery body has a fixed 4-line overhead (header + blanks + inline help),
+// each item is 1 plain text line, and scroll indicators consume 1 line each when the
 // window is clipped above or below.
 func (m *ProfileViewModel) discoveryItemWindow(total int) itemWindow {
 	w := itemWindow{start: 0, end: total}
@@ -1467,8 +1449,8 @@ func (m *ProfileViewModel) discoveryItemWindow(total int) itemWindow {
 	cursor := min(m.discoveryCursor, total-1) // clamp for safety
 
 	oh := m.estimateItemOverhead()
-	stepOh := 3 // header + blank + inline help
-	itemH := 3  // panel border top + content + panel border bottom
+	stepOh := 4 // header + blanks + inline help
+	itemH := 1  // plain text line (no panel)
 	avail := m.height - oh - stepOh
 	if avail <= 0 {
 		return itemWindow{start: cursor, end: min(cursor+1, total), hasAbove: cursor > 0, hasBelow: total-cursor > 1}
@@ -1534,7 +1516,7 @@ func (m *ProfileViewModel) renderDiscovery() string {
 		}
 		for i := win.start; i < win.end; i++ {
 			ctx := m.discoveryCtxs[i]
-			rows = append(rows, renderDiscoveryOption(ctx, i == m.discoveryCursor))
+			rows = append(rows, renderDiscoveryItem(ctx, i == m.discoveryCursor))
 		}
 		if below := dTotal - win.end; below > 0 {
 			rows = append(rows, styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", below)))
@@ -1553,7 +1535,7 @@ func (m *ProfileViewModel) renderDiscovery() string {
 		}
 		for i := win.start; i < win.end; i++ {
 			ns := m.discoveryNSs[i]
-			rows = append(rows, renderDiscoveryOption(ns, i == m.discoveryCursor))
+			rows = append(rows, renderDiscoveryItem(ns, i == m.discoveryCursor))
 		}
 		if below := dTotal - win.end; below > 0 {
 			rows = append(rows, styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", below)))
@@ -1573,7 +1555,7 @@ func (m *ProfileViewModel) renderDiscovery() string {
 		for i := win.start; i < win.end; i++ {
 			svc := m.discoverySvcs[i]
 			label := fmt.Sprintf("%s  %d/TCP", svc.Name, svc.RemotePort)
-			rows = append(rows, renderDiscoveryOption(label, i == m.discoveryCursor))
+			rows = append(rows, renderDiscoveryItem(label, i == m.discoveryCursor))
 		}
 		if below := dTotal - win.end; below > 0 {
 			rows = append(rows, styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", below)))

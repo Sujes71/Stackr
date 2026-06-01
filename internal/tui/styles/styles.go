@@ -108,6 +108,12 @@ var (
 	StyleSuccess = lipgloss.NewStyle().
 			Foreground(ColorSecondary).
 			Bold(true)
+
+	StyleDiscoveryItem = lipgloss.NewStyle()
+
+	StyleDiscoveryItemSelected = lipgloss.NewStyle().
+					Foreground(ColorPrimary).
+					Bold(true)
 )
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
