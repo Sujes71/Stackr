@@ -15,6 +15,11 @@ func GenerateCompose(profile Profile, envName string) (string, error) {
 		return "", fmt.Errorf("environment %q not found in profile %q", envName, profile.Name)
 	}
 
+	// Port-forward-only environments have no services — skip compose generation
+	if len(env.Services) == 0 {
+		return "", nil
+	}
+
 	dir := filepath.Join(ProfileDir(profile.Name), envName)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err

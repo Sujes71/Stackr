@@ -40,8 +40,9 @@ type Profile struct {
 }
 
 type Environment struct {
-	Name     string    `yaml:"name"`        // local, dev, staging...
-	Services []Service `yaml:"services"`
+	Name         string        `yaml:"name"` // local, dev, staging...
+	Services     []Service     `yaml:"services"`
+	PortForwards []PortForward `yaml:"port_forwards,omitempty"`
 }
 
 type Service struct {
@@ -160,6 +161,16 @@ type SyncEnv struct {
 	Password string `yaml:"password,omitempty"`
 	Database string `yaml:"database"`
 	AuthDB   string `yaml:"auth_db,omitempty"`
+}
+
+// PortForward defines a K8s port-forward configuration.
+type PortForward struct {
+	Name         string `yaml:"name"`
+	LocalPort    int    `yaml:"local_port"`
+	RemotePort   int    `yaml:"remote_port"`
+	K8sContext   string `yaml:"k8s_context"`
+	K8sNamespace string `yaml:"k8s_namespace"`
+	K8sService   string `yaml:"k8s_service"`
 }
 
 // Validate checks that all required fields are set and valid.
@@ -326,6 +337,111 @@ func (c *Config) DeleteService(profileName, envName, svcName string) (*Profile, 
 				}
 			}
 			return nil, fmt.Errorf("service %q not found in %s/%s", svcName, profileName, envName)
+		}
+		return nil, fmt.Errorf("environment %q not found in profile %q", envName, profileName)
+	}
+	return nil, fmt.Errorf("profile %q not found", profileName)
+}
+
+// AddPortForward appends a port-forward to the given environment and saves.
+// Returns an error if a port-forward with the same name already exists.
+func (c *Config) AddPortForward(profileName, envName string, pf PortForward) (*Profile, error) {
+	for i := range c.Profiles {
+		if c.Profiles[i].Name != profileName {
+			continue
+		}
+		p := &c.Profiles[i]
+		for j := range p.Environments {
+			if p.Environments[j].Name != envName {
+				continue
+			}
+			env := &p.Environments[j]
+			// Check for duplicate name
+			for _, existing := range env.PortForwards {
+				if existing.Name == pf.Name {
+					return nil, fmt.Errorf("port-forward %q already exists in %s/%s", pf.Name, profileName, envName)
+				}
+			}
+			env.PortForwards = append(env.PortForwards, pf)
+			p.UpdatedAt = time.Now()
+			cp := *p
+			return &cp, c.Save()
+		}
+		return nil, fmt.Errorf("environment %q not found in profile %q", envName, profileName)
+	}
+	return nil, fmt.Errorf("profile %q not found", profileName)
+}
+
+// DeletePortForward removes a port-forward by name from the given environment and saves.
+func (c *Config) DeletePortForward(profileName, envName, pfName string) (*Profile, error) {
+	for i := range c.Profiles {
+		if c.Profiles[i].Name != profileName {
+			continue
+		}
+		p := &c.Profiles[i]
+		for j := range p.Environments {
+			if p.Environments[j].Name != envName {
+				continue
+			}
+			env := &p.Environments[j]
+			for k, pf := range env.PortForwards {
+				if pf.Name == pfName {
+					env.PortForwards = append(env.PortForwards[:k], env.PortForwards[k+1:]...)
+					p.UpdatedAt = time.Now()
+					cp := *p
+					return &cp, c.Save()
+				}
+			}
+			return nil, fmt.Errorf("port-forward %q not found in %s/%s", pfName, profileName, envName)
+		}
+		return nil, fmt.Errorf("environment %q not found in profile %q", envName, profileName)
+	}
+	return nil, fmt.Errorf("profile %q not found", profileName)
+}
+
+// UpdatePortForward replaces an existing port-forward in-place by name and saves.
+func (c *Config) UpdatePortForward(profileName, envName, pfName string, updated PortForward) (*Profile, error) {
+	for i := range c.Profiles {
+		if c.Profiles[i].Name != profileName {
+			continue
+		}
+		p := &c.Profiles[i]
+		for j := range p.Environments {
+			if p.Environments[j].Name != envName {
+				continue
+			}
+			env := &p.Environments[j]
+			for k, pf := range env.PortForwards {
+				if pf.Name == pfName {
+					env.PortForwards[k] = updated
+					p.UpdatedAt = time.Now()
+					cp := *p
+					return &cp, c.Save()
+				}
+			}
+			return nil, fmt.Errorf("port-forward %q not found in %s/%s", pfName, profileName, envName)
+		}
+		return nil, fmt.Errorf("environment %q not found in profile %q", envName, profileName)
+	}
+	return nil, fmt.Errorf("profile %q not found", profileName)
+}
+
+// ClearPortForwards removes ALL port-forwards from the given environment and saves.
+func (c *Config) ClearPortForwards(profileName, envName string) (*Profile, error) {
+	for i := range c.Profiles {
+		if c.Profiles[i].Name != profileName {
+			continue
+		}
+		p := &c.Profiles[i]
+		for j := range p.Environments {
+			if p.Environments[j].Name != envName {
+				continue
+			}
+			env := &p.Environments[j]
+			env.PortForwards = nil
+			p.UpdatedAt = time.Now()
+			cp := *p
+			return &cp, c.Save()
 		}
 		return nil, fmt.Errorf("environment %q not found in profile %q", envName, profileName)
 	}

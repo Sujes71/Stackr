@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/stackr/stackr/internal/portforward"
 )
 
 // ── Colors (Kanagawa-inspired) ────────────────────────────────────────────────
@@ -50,6 +51,11 @@ var (
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(ColorPrimary).
 				Padding(0, 1)
+
+	StylePanelError = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ColorError).
+			Padding(0, 1)
 
 	StyleInputLabel = lipgloss.NewStyle().
 			Foreground(ColorSecondary).
@@ -223,6 +229,26 @@ func Dot(state string) string {
 		c = ColorError // red
 	case "paused":
 		c = ColorAccent // orange
+	default:
+		c = ColorMuted // gray
+	}
+	return lipgloss.NewStyle().
+		Foreground(c).
+		Render(fmt.Sprintf("● %s", state))
+}
+
+// ForwardDot returns a colored state indicator for port-forward states.
+func ForwardDot(state portforward.ForwardState) string {
+	var c lipgloss.Color
+	switch state {
+	case portforward.ForwardRunning:
+		c = ColorSecondary // green
+	case portforward.ForwardStarting:
+		c = ColorAccent // orange
+	case portforward.ForwardFailed:
+		c = ColorError // red
+	case portforward.ForwardStopped:
+		c = ColorMuted // gray
 	default:
 		c = ColorMuted // gray
 	}

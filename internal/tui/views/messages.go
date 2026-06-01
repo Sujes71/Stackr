@@ -29,3 +29,21 @@ type ProfileSavedMsg struct {
 
 // ErrorMsg carries an error string to surface in the footer.
 type ErrorMsg string
+
+// ── Discovery Messages ──
+
+type discoveryContextsMsg struct {
+	contexts []string
+}
+
+type discoveryNamespacesMsg struct {
+	namespaces []string
+}
+
+type discoveryServicesMsg struct {
+	services []config.PortForward
+}
+
+type discoveryErrorMsg struct {
+	err string
+}

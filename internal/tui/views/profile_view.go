@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stackr/stackr/internal/config"
 	"github.com/stackr/stackr/internal/docker"
+	"github.com/stackr/stackr/internal/portforward"
 	"github.com/stackr/stackr/internal/tui/styles"
 )
 
@@ -30,6 +32,26 @@ type ProfileViewModel struct {
 	resetArmed     bool
 	inputtingEnv   bool
 	envInput       textinput.Model
+
+	// ── Port-Forward ──
+	forwardHandles map[string][]*portforward.PortForwardHandle
+
+	// ── Discovery State ──
+	inDiscovery        bool
+	discoveryStep      int
+	discoveryCursor    int
+	discoveryCtxs      []string
+	discoveryNSs       []string
+	discoverySvcs      []config.PortForward
+	discoverySelCtx    string
+	discoverySelNS     string
+	discoveredPF       *config.PortForward
+	discoveryEnvName   string
+
+	// ── Port Editing ──
+	editingPort    bool
+	portInput      textinput.Model
+	editFwdIdx     int
 }
 
 func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
@@ -38,10 +60,17 @@ func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
 	ti.CharLimit = 5
 	ti.Width = 12
 
+	portInput := textinput.New()
+	portInput.Placeholder = "8080"
+	portInput.CharLimit = 5
+	portInput.Width = 8
+
 	m := &ProfileViewModel{
-		cfg:     cfg,
-		profile: p,
-		envInput: ti,
+		cfg:            cfg,
+		profile:        p,
+		envInput:       ti,
+		forwardHandles: make(map[string][]*portforward.PortForwardHandle),
+		portInput:      portInput,
 	}
 	// set activeEnv to the profile's saved active env
 	for i, env := range p.Environments {
@@ -94,10 +123,10 @@ func (m *ProfileViewModel) loadStatus() tea.Cmd {
 }
 
 var profileKeys = struct {
-	back, up, down, enter, start, stop, logs, addSvc, svcDelete, dbOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol key.Binding
+	back, up, down, enter, start, stop, logs, addSvc, svcDelete, dbOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort key.Binding
 }{
 	back:      key.NewBinding(key.WithKeys("esc", "backspace")),
-	up:        key.NewBinding(key.WithKeys("up", "k")),
+	up:        key.NewBinding(key.WithKeys("up")),
 	down:      key.NewBinding(key.WithKeys("down", "j")),
 	enter:     key.NewBinding(key.WithKeys("enter")),
 	start:     key.NewBinding(key.WithKeys("s")),
@@ -111,10 +140,18 @@ var profileKeys = struct {
 	addEnv:    key.NewBinding(key.WithKeys("e")),
 	envDelete: key.NewBinding(key.WithKeys("D")),
 	resetVol:  key.NewBinding(key.WithKeys("r")),
+	k8sDiscover: key.NewBinding(key.WithKeys("k")),
+	editPort:    key.NewBinding(key.WithKeys("e")),
 }
 
 func (m *ProfileViewModel) Init() tea.Cmd {
-	return m.loadStatus()
+	var cmds []tea.Cmd
+	cmds = append(cmds, m.loadStatus())
+	if m.isPortForwardEnv() {
+		m.buildForwardHandles()
+		cmds = append(cmds, portforward.ForwardMonitorCmd())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -136,6 +173,44 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ClearActionMsg:
 		m.lastAction = ""
+
+	case portforward.ForwardMonitorTick:
+		if m.isPortForwardEnv() {
+			envName := m.profile.Environments[m.activeEnv].Name
+			for _, h := range m.forwardHandles[envName] {
+				if h.State == portforward.ForwardRunning {
+					h.CheckAlive()
+				}
+			}
+			return m, portforward.ForwardMonitorCmd()
+		}
+		return m, nil
+
+	case discoveryContextsMsg:
+		m.discoveryCtxs = msg.contexts
+		if len(msg.contexts) == 0 {
+			m.inDiscovery = false
+			m.discoveryStep = 0
+			m.lastAction = "✗ No K8s contexts found"
+			return m, ClearActionAfter(3 * time.Second)
+		}
+		m.inDiscovery = true
+		m.discoveryStep = 0
+		m.discoveryCursor = 0
+
+	case discoveryNamespacesMsg:
+		m.discoveryNSs = msg.namespaces
+		m.discoveryCursor = 0
+
+	case discoveryServicesMsg:
+		m.discoverySvcs = msg.services
+		m.discoveryCursor = 0
+
+	case discoveryErrorMsg:
+		m.inDiscovery = false
+		m.discoveryStep = 0
+		m.lastAction = "✗ " + msg.err
+		return m, ClearActionAfter(3 * time.Second)
 
 	case tea.KeyMsg:
 		// ── Input mode: add environment ──────────────────────────
@@ -193,6 +268,16 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// ── Discovery mode (captures ALL keys) ──
+		if m.inDiscovery {
+			return m.handleDiscoveryKey(msg)
+		}
+
+		// ── Port editing mode ──
+		if m.editingPort {
+			return m.handlePortEditKey(msg)
+		}
+
 		// ── Normal mode ──────────────────────────────────────────
 		switch {
 		case key.Matches(msg, profileKeys.back):
@@ -202,6 +287,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.activeEnv > 0 {
 				m.activeEnv--
 				m.statuses = nil
+				if m.isPortForwardEnv() {
+					m.buildForwardHandles()
+					return m, tea.Batch(m.loadStatus(), portforward.ForwardMonitorCmd())
+				}
 				return m, m.loadStatus()
 			}
 
@@ -209,10 +298,20 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.activeEnv < len(m.profile.Environments)-1 {
 				m.activeEnv++
 				m.statuses = nil
+				if m.isPortForwardEnv() {
+					m.buildForwardHandles()
+					return m, tea.Batch(m.loadStatus(), portforward.ForwardMonitorCmd())
+				}
 				return m, m.loadStatus()
 			}
 
 		case key.Matches(msg, profileKeys.addEnv):
+			// In portforward mode, 'e' on a forward edits its local port
+			if m.isPortForwardEnv() && !m.inDiscovery {
+				if len(m.currentForwards()) > 0 && m.cursor < len(m.currentForwards()) {
+					return m.handlePortEditStart()
+				}
+			}
 			m.inputtingEnv = true
 			m.envInput.Focus()
 			m.envInput.SetValue("")
@@ -224,12 +323,58 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, profileKeys.down):
-			envSvcs := m.currentEnvServices()
-			if m.cursor < len(envSvcs)-1 {
-				m.cursor++
+			if m.isPortForwardEnv() {
+				fwds := m.currentForwards()
+				if m.cursor < len(fwds)-1 {
+					m.cursor++
+				}
+			} else {
+				envSvcs := m.currentEnvServices()
+				if m.cursor < len(envSvcs)-1 {
+					m.cursor++
+				}
+			}
+
+		case key.Matches(msg, profileKeys.k8sDiscover):
+			if m.isPortForwardEnv() && !m.inDiscovery {
+				if !portforward.CheckKubectl() {
+					m.lastAction = "✗ kubectl not found in PATH"
+					return m, ClearActionAfter(3 * time.Second)
+				}
+				// If env already has forwards, skip context selection and
+				// go directly to namespace picking using the known context.
+				if knownCtx := m.knownForwardCtx(); knownCtx != "" {
+					m.inDiscovery = true
+					m.discoveryStep = 1
+					m.discoveryCursor = 0
+					m.discoverySelCtx = knownCtx
+					return m, func() tea.Msg {
+						nss, err := portforward.DiscoverNamespaces(knownCtx)
+						if err != nil {
+							return discoveryErrorMsg{err: err.Error()}
+						}
+						if len(nss) == 0 {
+							return discoveryErrorMsg{err: "no namespaces found in context " + knownCtx}
+						}
+						return discoveryNamespacesMsg{namespaces: nss}
+					}
+				}
+				return m, func() tea.Msg {
+					ctxs, err := portforward.DiscoverContexts()
+					if err != nil {
+						return discoveryErrorMsg{err: err.Error()}
+					}
+					if len(ctxs) == 0 {
+						return discoveryErrorMsg{err: "no K8s contexts found"}
+					}
+					return discoveryContextsMsg{contexts: ctxs}
+				}
 			}
 
 		case key.Matches(msg, profileKeys.enter):
+			if m.isPortForwardEnv() {
+				return m.handleForwardToggle()
+			}
 			svcs := m.currentEnvServices()
 			if len(svcs) > 0 && m.cursor < len(svcs) {
 				svc := svcs[m.cursor]
@@ -261,6 +406,13 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, profileKeys.start):
 			env := m.currentEnv()
 			if env != nil {
+				if m.isPortForwardEnv() {
+					envName := m.profile.Environments[m.activeEnv].Name
+					m.lastAction = "Starting forwards..."
+					cmds := m.startEnvForwards(envName)
+					cmds = append(cmds, ClearActionAfter(3*time.Second))
+					return m, tea.Batch(cmds...)
+				}
 				m.loading = true
 				m.lastAction = "Starting " + env.Name + "..."
 				return m, func() tea.Msg {
@@ -272,6 +424,13 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, profileKeys.stop):
 			env := m.currentEnv()
 			if env != nil {
+				if m.isPortForwardEnv() {
+					envName := m.profile.Environments[m.activeEnv].Name
+					m.lastAction = "Stopping forwards..."
+					cmds := m.stopEnvForwards(envName)
+					cmds = append(cmds, ClearActionAfter(3*time.Second))
+					return m, tea.Batch(cmds...)
+				}
 				m.loading = true
 				m.lastAction = "Stopping " + env.Name + "..."
 				return m, func() tea.Msg {
@@ -282,7 +441,36 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, profileKeys.resetVol):
 			env := m.currentEnv()
-			if env == nil || len(m.statuses) == 0 {
+			if env == nil {
+				break
+			}
+			if m.isPortForwardEnv() {
+				forwards := m.currentForwards()
+				if len(forwards) == 0 {
+					break
+				}
+				if !m.resetArmed {
+					m.resetArmed = true
+					return m, nil
+				}
+				// Second r: delete ALL forwards in this env (stop + remove)
+				m.resetArmed = false
+				envName := m.profile.Environments[m.activeEnv].Name
+				for _, h := range forwards {
+					_ = h.Stop()
+				}
+				updated, err := m.cfg.ClearPortForwards(m.profile.Name, envName)
+				if err != nil {
+					m.lastAction = "✗ " + err.Error()
+					return m, ClearActionAfter(3 * time.Second)
+				}
+				m.profile = updated
+				m.buildForwardHandles()
+				m.cursor = 0
+				m.lastAction = "✓ All forwards deleted"
+				return m, ClearActionAfter(3 * time.Second)
+			}
+			if len(m.statuses) == 0 {
 				break
 			}
 			if !m.resetArmed {
@@ -329,6 +517,9 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, profileKeys.svcDelete):
+			if m.isPortForwardEnv() {
+				return m.handleForwardDelete()
+			}
 			env := m.currentEnv()
 			svcs := m.currentEnvServices()
 			if env == nil || len(svcs) <= 1 || m.cursor >= len(svcs) {
@@ -373,8 +564,19 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Second D: delete current environment
 			m.deleteEnvArmed = false
 			envName := m.profile.Environments[m.activeEnv].Name
-			envIdx := m.activeEnv
+
+			// ⚠️ Prevent deletion of local environment
+			if envName == "local" {
+				m.lastAction = "✗ Cannot delete the local environment"
+				return m, ClearActionAfter(3 * time.Second)
+			}
+
+			// Stop running forwards for this env
+			m.stopEnvForwards(envName)
+			delete(m.forwardHandles, envName)
+
 			m.lastAction = "Deleting environment " + envName + "..."
+			envIdx := m.activeEnv
 			// Stop containers for this env (fire and forget)
 			_ = docker.Down(m.profile.Name, envName)
 			// Remove env directory
@@ -442,6 +644,98 @@ func (m *ProfileViewModel) currentEnvServices() []config.Service {
 	return env.Services
 }
 
+func (m *ProfileViewModel) isPortForwardEnv() bool {
+	if len(m.profile.Environments) == 0 {
+		return false
+	}
+	return m.profile.Environments[m.activeEnv].Name != "local"
+}
+
+func (m *ProfileViewModel) currentForwards() []*portforward.PortForwardHandle {
+	if len(m.profile.Environments) == 0 {
+		return nil
+	}
+	envName := m.profile.Environments[m.activeEnv].Name
+	return m.forwardHandles[envName]
+}
+
+// knownForwardCtx returns the K8s context of the first existing forward,
+// or empty string if there are none. This avoids re-selecting the context
+// on subsequent discovery runs.
+func (m *ProfileViewModel) knownForwardCtx() string {
+	forwards := m.currentForwards()
+	if len(forwards) > 0 {
+		return forwards[0].Config.K8sContext
+	}
+	return ""
+}
+
+func (m *ProfileViewModel) buildForwardHandles() {
+	if len(m.profile.Environments) == 0 {
+		return
+	}
+	envName := m.profile.Environments[m.activeEnv].Name
+	env := m.currentEnv()
+	if env == nil {
+		return
+	}
+
+	// Build set of existing handle keys
+	existing := make(map[string]*portforward.PortForwardHandle)
+	for _, h := range m.forwardHandles[envName] {
+		existing[h.Config.Name] = h
+	}
+
+	var handles []*portforward.PortForwardHandle
+	for _, pf := range env.PortForwards {
+		if h, ok := existing[pf.Name]; ok {
+			h.Config = pf // update config (e.g. port changed)
+			handles = append(handles, h)
+		} else {
+			handles = append(handles, portforward.NewHandle(pf))
+		}
+	}
+	m.forwardHandles[envName] = handles
+}
+
+func (m *ProfileViewModel) startEnvForwards(envName string) []tea.Cmd {
+	var cmds []tea.Cmd
+	for _, h := range m.forwardHandles[envName] {
+		if h.State != portforward.ForwardRunning && h.State != portforward.ForwardStarting {
+			cmds = append(cmds, func() tea.Msg {
+				err := h.Start()
+				if err != nil {
+					return actionDoneMsg{label: "Start " + h.Config.Name, err: err}
+				}
+				return actionDoneMsg{label: h.Config.Name + " started", err: nil}
+			})
+		}
+	}
+	return cmds
+}
+
+func (m *ProfileViewModel) stopEnvForwards(envName string) []tea.Cmd {
+	var cmds []tea.Cmd
+	for _, h := range m.forwardHandles[envName] {
+		if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
+			cmds = append(cmds, func() tea.Msg {
+				err := h.Stop()
+				if err != nil {
+					return actionDoneMsg{label: "Stop " + h.Config.Name, err: err}
+				}
+				return actionDoneMsg{label: h.Config.Name + " stopped", err: nil}
+			})
+		}
+	}
+	return cmds
+}
+
+func (m *ProfileViewModel) StopAllForwards() {
+	for envName := range m.forwardHandles {
+		_ = m.stopEnvForwards(envName)
+	}
+}
+
 func (m *ProfileViewModel) View() string {
 	var b strings.Builder
 	b.WriteString("\n")
@@ -454,6 +748,16 @@ func (m *ProfileViewModel) View() string {
 	if env == nil {
 		b.WriteString(styles.StyleSubtitle.Render("  No environments configured."))
 		b.WriteString("\n")
+	} else if m.isPortForwardEnv() {
+		if m.inDiscovery {
+			b.WriteString(m.renderDiscovery())
+		} else if m.editingPort {
+			b.WriteString(m.renderPortForwards())
+			b.WriteString("\n\n")
+			b.WriteString(m.renderPortEditor())
+		} else {
+			b.WriteString(m.renderPortForwards())
+		}
 	} else {
 		b.WriteString(m.renderServices(env))
 	}
@@ -503,45 +807,12 @@ func (m *ProfileViewModel) View() string {
 
 	b.WriteString("\n")
 
-	svcs := m.currentEnvServices()
-	hasRunning := false
-	for _, st := range m.statuses {
-		if st.State == "running" {
-			hasRunning = true
-			break
-		}
-	}
-
 	// ── Help bar ──
-	var envItems, svcItems, stackItems []styles.HelpItemResult
-	envItems = append(envItems, styles.HelpItem("e", "add env"))
-	if len(m.profile.Environments) > 0 {
-		envItems = append(envItems, styles.HelpItem("D D", "delete env"))
+	if m.isPortForwardEnv() {
+		b.WriteString(m.renderPFHelpBar())
+	} else {
+		b.WriteString(m.renderDockerHelpBar())
 	}
-	envItems = append(envItems, styles.HelpItem("a", "add service"))
-
-	if len(svcs) > 0 {
-		svcItems = append(svcItems, styles.HelpItem("↵", "start/stop"))
-		svcItems = append(svcItems, styles.HelpItem("l", "logs"))
-		if m.selectedDBType() != "" {
-			svcItems = append(svcItems, styles.HelpItem("o", "db ops"))
-		}
-		if len(svcs) > 1 {
-			svcItems = append(svcItems, styles.HelpItem("d d", "delete"))
-		}
-
-		stackItems = append(stackItems, styles.HelpItem("s", "stack all"))
-		if hasRunning {
-			stackItems = append(stackItems, styles.HelpItem("x", "stop all"))
-		}
-		stackItems = append(stackItems, styles.HelpItem("r r", "reset vols"))
-	}
-
-	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Environment", Items: envItems},
-		styles.HelpGroup{Label: "Service", Items: svcItems},
-		styles.HelpGroup{Label: "Stack", Items: stackItems},
-	))
 	b.WriteString("\n")
 	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("← →", "env").Render()))
 
@@ -613,4 +884,479 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 		}
 	}
 	return strings.Join(rows, "\n")
+}
+
+// shortCtxName extracts the cluster name from a K8s context ARN or path.
+// "arn:aws:eks:eu-west-1:177734401659:cluster/EksTicketDevV1" → "EksTicketDevV1"
+func shortCtxName(ctx string) string {
+	if idx := strings.LastIndex(ctx, "cluster/"); idx >= 0 {
+		return ctx[idx+8:]
+	}
+	parts := strings.Split(ctx, "/")
+	return parts[len(parts)-1]
+}
+
+func (m *ProfileViewModel) renderPortForwards() string {
+	forwards := m.currentForwards()
+	if len(forwards) == 0 {
+		return styles.StyleSubtitle.Render("  No port-forwards configured. Press 'k' to discover K8s services.")
+	}
+
+	var rows []string
+	for i, h := range forwards {
+		fwd := h.Config
+
+		// Line 1: state dot + name
+		stateLine := styles.ForwardDot(h.State)
+		name := styles.StyleHeader.Render(fwd.Name)
+		line1 := lipgloss.JoinHorizontal(lipgloss.Center, stateLine, "  ", name)
+
+		// Line 2: local:remote  →  namespace/service
+		addr := fmt.Sprintf("  %d:%d  →  %s/%s", fwd.LocalPort, fwd.RemotePort, fwd.K8sNamespace, fwd.K8sService)
+		addrLine := styles.StyleSubtitle.Render(addr)
+
+		// Line 3: context name
+		ctxLine := styles.StyleSubtitle.Render("  " + shortCtxName(fwd.K8sContext))
+
+		// Error line (only for failed)
+		row := lipgloss.JoinVertical(lipgloss.Left, line1, addrLine, ctxLine)
+		if h.Error != "" && h.State == portforward.ForwardFailed {
+			row = lipgloss.JoinVertical(lipgloss.Left, line1, addrLine, ctxLine, styles.StyleError.Render("     "+h.Error))
+		}
+
+		if i == m.cursor {
+			if h.State == portforward.ForwardFailed {
+				rows = append(rows, styles.StylePanelError.Width(66).Render(row))
+			} else {
+				rows = append(rows, styles.StylePanelFocused.Width(66).Render(row))
+			}
+		} else {
+			rows = append(rows, styles.StylePanel.Width(66).Render(row))
+		}
+	}
+	return strings.Join(rows, "\n")
+}
+
+func (m *ProfileViewModel) renderDiscovery() string {
+	var b strings.Builder
+	b.WriteString("\n")
+
+	switch m.discoveryStep {
+	case 0:
+		b.WriteString(styles.StyleHeader.Render("  Select K8s context:"))
+		b.WriteString("\n\n")
+		for i, ctx := range m.discoveryCtxs {
+			if i == m.discoveryCursor {
+				b.WriteString("  " + styles.StylePanelFocused.Width(60).Render("  " + ctx) + "\n")
+			} else {
+				b.WriteString("  " + styles.StylePanel.Width(60).Render("  " + ctx) + "\n")
+			}
+		}
+		b.WriteString("\n" + styles.StyleHelp.Render("  esc cancel    ↑↓ navigate    ↵ select"))
+
+	case 1:
+		b.WriteString(styles.StyleHeader.Render("  Select namespace for '" + m.discoverySelCtx + "':"))
+		b.WriteString("\n\n")
+		for i, ns := range m.discoveryNSs {
+			if i == m.discoveryCursor {
+				b.WriteString("  " + styles.StylePanelFocused.Width(60).Render("  " + ns) + "\n")
+			} else {
+				b.WriteString("  " + styles.StylePanel.Width(60).Render("  " + ns) + "\n")
+			}
+		}
+		b.WriteString("\n" + styles.StyleHelp.Render("  esc cancel    ↑↓ navigate    ↵ select"))
+
+	case 2:
+		b.WriteString(styles.StyleHeader.Render("  Select service in '" + m.discoverySelCtx + "/" + m.discoverySelNS + "':"))
+		b.WriteString("\n\n")
+		for i, svc := range m.discoverySvcs {
+			label := fmt.Sprintf("%s  %d/TCP", svc.Name, svc.RemotePort)
+			if i == m.discoveryCursor {
+				b.WriteString("  " + styles.StylePanelFocused.Width(60).Render("  " + label) + "\n")
+			} else {
+				b.WriteString("  " + styles.StylePanel.Width(60).Render("  " + label) + "\n")
+			}
+		}
+		b.WriteString("\n" + styles.StyleHelp.Render("  esc cancel    ↑↓ navigate    ↵ select"))
+
+	case 3:
+		b.WriteString(styles.StyleHeader.Render("  Confirm port-forward:"))
+		b.WriteString("\n\n")
+		b.WriteString("    Service:  " + styles.StyleCode.Render(m.discoveredPF.Name) + "\n")
+		b.WriteString("    Remote:   " + styles.StyleCode.Render(fmt.Sprintf("%d", m.discoveredPF.RemotePort)) + "\n")
+		b.WriteString("    Local:    " + m.portInput.View() + "\n")
+		b.WriteString("\n" + styles.StyleHelp.Render("  esc cancel    ↵ confirm"))
+	}
+
+	return b.String()
+}
+
+func (m *ProfileViewModel) renderPortEditor() string {
+	return "  " + styles.StyleInputLabel.Render("Local port:") +
+		"  " + m.portInput.View() +
+		"  " + styles.StyleHelp.Render("↵ save   esc cancel")
+}
+
+func (m *ProfileViewModel) renderDockerHelpBar() string {
+	svcs := m.currentEnvServices()
+	hasRunning := false
+	for _, st := range m.statuses {
+		if st.State == "running" {
+			hasRunning = true
+			break
+		}
+	}
+
+	var envItems, svcItems, stackItems []styles.HelpItemResult
+	envItems = append(envItems, styles.HelpItem("e", "add env"))
+	if len(m.profile.Environments) > 0 {
+		envItems = append(envItems, styles.HelpItem("D D", "delete env"))
+	}
+	envItems = append(envItems, styles.HelpItem("a", "add service"))
+
+	if len(svcs) > 0 {
+		svcItems = append(svcItems, styles.HelpItem("↵", "start/stop"))
+		svcItems = append(svcItems, styles.HelpItem("l", "logs"))
+		if m.selectedDBType() != "" {
+			svcItems = append(svcItems, styles.HelpItem("o", "db ops"))
+		}
+		if len(svcs) > 1 {
+			svcItems = append(svcItems, styles.HelpItem("d d", "delete"))
+		}
+		stackItems = append(stackItems, styles.HelpItem("s", "stack all"))
+		if hasRunning {
+			stackItems = append(stackItems, styles.HelpItem("x", "stop all"))
+		}
+		stackItems = append(stackItems, styles.HelpItem("r r", "reset vols"))
+	}
+
+	return styles.HelpBar(
+		styles.HelpGroup{Label: "Environment", Items: envItems},
+		styles.HelpGroup{Label: "Service", Items: svcItems},
+		styles.HelpGroup{Label: "Stack", Items: stackItems},
+	)
+}
+
+func (m *ProfileViewModel) renderPFHelpBar() string {
+	var envItems, pfItems, stackItems []styles.HelpItemResult
+	envItems = append(envItems, styles.HelpItem("e", "add env"))
+	if len(m.profile.Environments) > 0 {
+		envItems = append(envItems, styles.HelpItem("D D", "delete env"))
+	}
+
+	pfItems = append(pfItems, styles.HelpItem("k", "k8s discover"))
+	forwards := m.currentForwards()
+	if len(forwards) > 0 {
+		pfItems = append(pfItems, styles.HelpItem("↵", "start/stop"))
+		pfItems = append(pfItems, styles.HelpItem("d d", "delete"))
+		pfItems = append(pfItems, styles.HelpItem("e", "edit port"))
+
+		hasRunning := false
+		for _, h := range forwards {
+			if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
+				hasRunning = true
+				break
+			}
+		}
+		stackItems = append(stackItems, styles.HelpItem("s", "start all"))
+		if hasRunning {
+			stackItems = append(stackItems, styles.HelpItem("x", "stop all"))
+		}
+		stackItems = append(stackItems, styles.HelpItem("r r", "reset all"))
+	}
+
+	return styles.HelpBar(
+		styles.HelpGroup{Label: "Environment", Items: envItems},
+		styles.HelpGroup{Label: "PortForward", Items: pfItems},
+		styles.HelpGroup{Label: "Stack", Items: stackItems},
+	)
+}
+
+// ── Discovery Key Handler ──────────────────────────────────────────────────
+
+func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// ── Step 3: text input mode for port confirmation ──
+	// Handled separately so backspace edits the port instead of cancelling.
+	if m.discoveryStep == 3 {
+		switch {
+		case msg.String() == "esc":
+			m.portInput.Blur()
+			m.inDiscovery = false
+			m.discoveryStep = 0
+			m.discoveryCtxs = nil
+			m.discoveryNSs = nil
+			m.discoverySvcs = nil
+			m.discoveredPF = nil
+			m.discoveryCursor = 0
+			return m, nil
+
+		case key.Matches(msg, profileKeys.enter):
+			portStr := strings.TrimSpace(m.portInput.Value())
+			port, err := strconv.Atoi(portStr)
+			if err != nil || port < 1 || port > 65535 {
+				m.lastAction = "✗ Invalid port. Must be 1-65535."
+				return m, nil
+			}
+			// Check port conflict
+			for _, h := range m.currentForwards() {
+				if h.Config.LocalPort == port {
+					m.lastAction = fmt.Sprintf("✗ Port %d already in use by '%s'", port, h.Config.Name)
+					return m, nil
+				}
+			}
+
+			envName := m.profile.Environments[m.activeEnv].Name
+			m.discoveredPF.LocalPort = port
+			pf := *m.discoveredPF
+
+			updated, err := m.cfg.AddPortForward(m.profile.Name, envName, pf)
+			if err != nil {
+				m.lastAction = "✗ " + err.Error()
+			} else {
+				m.profile = updated
+				m.buildForwardHandles()
+				m.lastAction = fmt.Sprintf("✓ Added forward %s :%d → %s/%s", pf.Name, pf.LocalPort, pf.K8sNamespace, pf.K8sService)
+			}
+
+			m.portInput.Blur()
+			m.inDiscovery = false
+			m.discoveryStep = 0
+			m.discoveryCtxs = nil
+			m.discoveryNSs = nil
+			m.discoverySvcs = nil
+			m.discoveredPF = nil
+			m.discoveryCursor = 0
+			return m, ClearActionAfter(3 * time.Second)
+
+		default:
+			var cmd tea.Cmd
+			m.portInput, cmd = m.portInput.Update(msg)
+			return m, cmd
+		}
+	}
+
+	// ── Steps 0-2: navigation mode ──
+	switch {
+	case key.Matches(msg, profileKeys.back):
+		// Cancel discovery
+		m.inDiscovery = false
+		m.discoveryStep = 0
+		m.discoveryCtxs = nil
+		m.discoveryNSs = nil
+		m.discoverySvcs = nil
+		m.discoveredPF = nil
+		m.discoveryCursor = 0
+		return m, nil
+
+	case key.Matches(msg, profileKeys.up):
+		if m.discoveryCursor > 0 {
+			m.discoveryCursor--
+		}
+
+	case key.Matches(msg, profileKeys.down):
+		switch m.discoveryStep {
+		case 0:
+			if m.discoveryCursor < len(m.discoveryCtxs)-1 {
+				m.discoveryCursor++
+			}
+		case 1:
+			if m.discoveryCursor < len(m.discoveryNSs)-1 {
+				m.discoveryCursor++
+			}
+		case 2:
+			if m.discoveryCursor < len(m.discoverySvcs)-1 {
+				m.discoveryCursor++
+			}
+		}
+
+	case key.Matches(msg, profileKeys.enter):
+		switch m.discoveryStep {
+		case 0:
+			if m.discoveryCursor < len(m.discoveryCtxs) {
+				m.discoverySelCtx = m.discoveryCtxs[m.discoveryCursor]
+				m.discoveryStep = 1
+				m.discoveryCursor = 0
+				return m, func() tea.Msg {
+					nss, err := portforward.DiscoverNamespaces(m.discoverySelCtx)
+					if err != nil {
+						return discoveryErrorMsg{err: err.Error()}
+					}
+					if len(nss) == 0 {
+						return discoveryErrorMsg{err: "no namespaces found in context " + m.discoverySelCtx}
+					}
+					return discoveryNamespacesMsg{namespaces: nss}
+				}
+			}
+
+		case 1:
+			if m.discoveryCursor < len(m.discoveryNSs) {
+				m.discoverySelNS = m.discoveryNSs[m.discoveryCursor]
+				m.discoveryStep = 2
+				m.discoveryCursor = 0
+				return m, func() tea.Msg {
+					svcs, err := portforward.DiscoverServices(m.discoverySelCtx, m.discoverySelNS)
+					if err != nil {
+						return discoveryErrorMsg{err: err.Error()}
+					}
+					if len(svcs) == 0 {
+						return discoveryErrorMsg{err: "no services found in " + m.discoverySelCtx + "/" + m.discoverySelNS}
+					}
+					return discoveryServicesMsg{services: svcs}
+				}
+			}
+
+		case 2:
+			if m.discoveryCursor < len(m.discoverySvcs) {
+				svc := m.discoverySvcs[m.discoveryCursor]
+				m.discoveredPF = &svc
+				nextPort := portforward.AssignPort(8080, m.currentForwards())
+				m.discoveredPF.LocalPort = nextPort
+				m.portInput.SetValue(fmt.Sprintf("%d", nextPort))
+				m.portInput.Focus()
+				m.discoveryStep = 3
+				return m, textinput.Blink
+			}
+		}
+	}
+
+	return m, nil
+}
+
+// ── Forward Toggle ─────────────────────────────────────────────────────────
+
+func (m *ProfileViewModel) handleForwardToggle() (tea.Model, tea.Cmd) {
+	forwards := m.currentForwards()
+	if m.cursor >= len(forwards) {
+		return m, nil
+	}
+	h := forwards[m.cursor]
+
+	if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
+		// Stop
+		return m, func() tea.Msg {
+			err := h.Stop()
+			if err != nil {
+				return actionDoneMsg{label: "Stop " + h.Config.Name, err: err}
+			}
+			return actionDoneMsg{label: h.Config.Name + " stopped", err: nil}
+		}
+	}
+
+	// Start (Stopped or Failed)
+	m.lastAction = "Starting " + h.Config.Name + "..."
+	return m, func() tea.Msg {
+		err := h.Start()
+		if err != nil {
+			return actionDoneMsg{label: "Start " + h.Config.Name, err: err}
+		}
+		return actionDoneMsg{label: h.Config.Name + " running", err: nil}
+	}
+}
+
+// ── Forward Delete ─────────────────────────────────────────────────────────
+
+func (m *ProfileViewModel) handleForwardDelete() (tea.Model, tea.Cmd) {
+	forwards := m.currentForwards()
+	if m.cursor >= len(forwards) {
+		return m, nil
+	}
+	if !m.deleteArmed {
+		m.deleteArmed = true
+		return m, nil
+	}
+	m.deleteArmed = false
+	h := forwards[m.cursor]
+	fwdName := h.Config.Name
+	envName := m.profile.Environments[m.activeEnv].Name
+
+	// Stop if running
+	_ = h.Stop()
+
+	// Delete from config
+	updated, err := m.cfg.DeletePortForward(m.profile.Name, envName, fwdName)
+	if err != nil {
+		m.lastAction = "✗ " + err.Error()
+		return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
+	}
+	m.profile = updated
+	m.buildForwardHandles()
+	// Adjust cursor
+	remaining := m.currentForwards()
+	if m.cursor >= len(remaining) && m.cursor > 0 {
+		m.cursor--
+	}
+	m.lastAction = "✓ Deleted " + fwdName
+	return m, tea.Batch(m.loadStatus(), ClearActionAfter(3 * time.Second))
+}
+
+// ── Port Editing ──────────────────────────────────────────────────────────
+
+func (m *ProfileViewModel) handlePortEditStart() (tea.Model, tea.Cmd) {
+	forwards := m.currentForwards()
+	if m.cursor >= len(forwards) {
+		return m, nil
+	}
+	m.editingPort = true
+	m.editFwdIdx = m.cursor
+	h := forwards[m.cursor]
+	m.portInput.SetValue(fmt.Sprintf("%d", h.Config.LocalPort))
+	m.portInput.Focus()
+	return m, textinput.Blink
+}
+
+func (m *ProfileViewModel) handlePortEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.String() == "esc":
+		m.editingPort = false
+		m.portInput.Blur()
+		m.portInput.SetValue("")
+		return m, nil
+
+	case key.Matches(msg, profileKeys.enter):
+		portStr := strings.TrimSpace(m.portInput.Value())
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port < 1 || port > 65535 {
+			m.lastAction = "✗ Invalid port. Must be 1-65535."
+			return m, nil
+		}
+		// Check port conflict with other forwards
+		fwdName := m.currentForwards()[m.editFwdIdx].Config.Name
+		for i, h := range m.currentForwards() {
+			if i != m.editFwdIdx && h.Config.LocalPort == port {
+				m.lastAction = fmt.Sprintf("✗ Port %d is already assigned to '%s'", port, h.Config.Name)
+				return m, nil
+			}
+		}
+		// Update config
+		envName := m.profile.Environments[m.activeEnv].Name
+		h := m.currentForwards()[m.editFwdIdx]
+		updatedPF := h.Config
+		updatedPF.LocalPort = port
+		wasRunning := h.State == portforward.ForwardRunning
+		if wasRunning {
+			_ = h.Stop()
+		}
+		updated, err := m.cfg.UpdatePortForward(m.profile.Name, envName, fwdName, updatedPF)
+		if err != nil {
+			m.lastAction = "✗ " + err.Error()
+			return m, nil
+		}
+		m.profile = updated
+		m.buildForwardHandles()
+		if wasRunning {
+			// Restart with new port
+			newHandle := m.currentForwards()[m.editFwdIdx]
+			go func() { _ = newHandle.Start() }()
+		}
+		m.editingPort = false
+		m.portInput.Blur()
+		m.portInput.SetValue("")
+		m.lastAction = fmt.Sprintf("✓ Port updated to %d", port)
+		return m, ClearActionAfter(3 * time.Second)
+
+	default:
+		var cmd tea.Cmd
+		m.portInput, cmd = m.portInput.Update(msg)
+		return m, cmd
+	}
 }

@@ -87,6 +87,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
+			if a.profileView != nil {
+				a.profileView.StopAllForwards()
+			}
 			return a, tea.Quit
 		}
 
