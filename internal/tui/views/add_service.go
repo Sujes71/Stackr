@@ -1173,7 +1173,7 @@ func (m *AddServiceModel) viewPorts() string {
 	}
 	b.WriteString("\n")
 	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Action", Items: actItems},
+		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
 	b.WriteString("\n")
 	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
@@ -1257,7 +1257,7 @@ func (m *AddServiceModel) viewEnvVars() string {
 	}
 	b.WriteString("\n")
 	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Action", Items: actItems},
+		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
 	b.WriteString("\n")
 	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
@@ -1297,7 +1297,7 @@ func (m *AddServiceModel) viewVolumes() string {
 	}
 	b.WriteString("\n")
 	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Action", Items: actItems},
+		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
 	b.WriteString("\n")
 	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("t", "type").Render() + "  " + styles.HelpItem("↵", "next").Render()))
