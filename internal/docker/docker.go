@@ -21,6 +21,44 @@ func composeArgs(profileName, envName string, args ...string) []string {
 	return append(base, args...)
 }
 
+// runDocker executes a docker command and returns a friendly error on failure.
+func runDocker(args ...string) error {
+	cmd := exec.Command("docker", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return friendlyError(err, string(out))
+	}
+	return nil
+}
+
+// friendlyError wraps an exec error with the command's stderr output.
+// When the docker daemon is not running it shows a clear message instead of "exit status 1".
+func friendlyError(err error, stderr string) error {
+	stderr = strings.TrimSpace(stderr)
+
+	// Also check the error string itself for common patterns
+	errMsg := err.Error()
+
+	switch {
+	case strings.Contains(stderr, "Cannot connect to the Docker daemon"),
+		strings.Contains(stderr, "failed to connect to the docker API"),
+		strings.Contains(stderr, "dial unix"),
+		strings.Contains(stderr, "Is the docker daemon running"),
+		strings.Contains(errMsg, "dial unix"),
+		strings.Contains(errMsg, "connection refused"):
+		return fmt.Errorf("Docker daemon is not running. Start Docker Desktop or the daemon and try again.")
+
+	case strings.Contains(stderr, "no such file or directory") && strings.Contains(stderr, "docker-compose.yml"):
+		return fmt.Errorf("Compose file not found for this environment. Add services first.")
+
+	default:
+		if stderr != "" {
+			return fmt.Errorf("%s", stderr)
+		}
+		return err
+	}
+}
+
 // ServiceStatus represents the running state of a single container.
 type ServiceStatus struct {
 	Name   string
@@ -67,27 +105,27 @@ func extractJSON(s, key string) string {
 }
 
 func Up(profileName, envName string) error {
-	return exec.Command("docker", composeArgs(profileName, envName, "up", "-d")...).Run()
+	return runDocker(composeArgs(profileName, envName, "up", "-d")...)
 }
 
 func UpService(profileName, envName, serviceName string) error {
-	return exec.Command("docker", composeArgs(profileName, envName, "up", "-d", serviceName)...).Run()
+	return runDocker(composeArgs(profileName, envName, "up", "-d", serviceName)...)
 }
 
 func Down(profileName, envName string) error {
-	return exec.Command("docker", composeArgs(profileName, envName, "down")...).Run()
+	return runDocker(composeArgs(profileName, envName, "down")...)
 }
 
 func DownService(profileName, envName, serviceName string) error {
-	return exec.Command("docker", composeArgs(profileName, envName, "stop", serviceName)...).Run()
+	return runDocker(composeArgs(profileName, envName, "stop", serviceName)...)
 }
 
 func DownVolumes(profileName, envName string) error {
-	return exec.Command("docker", composeArgs(profileName, envName, "down", "-v")...).Run()
+	return runDocker(composeArgs(profileName, envName, "down", "-v")...)
 }
 
 func Restart(profileName, envName, service string) error {
-	return exec.Command("docker", composeArgs(profileName, envName, "restart", service)...).Run()
+	return runDocker(composeArgs(profileName, envName, "restart", service)...)
 }
 
 func UpAndStream(profileName, envName string, ch chan<- string) error {
@@ -104,7 +142,10 @@ func UpAndStream(profileName, envName string, ch chan<- string) error {
 	}
 	err := cmd.Wait()
 	close(ch)
-	return err
+	if err != nil {
+		return friendlyError(err, "")
+	}
+	return nil
 }
 
 func Logs(profileName, envName string, follow bool, ch chan<- string, done <-chan struct{}, svcName ...string) {

@@ -343,6 +343,31 @@ func (c *Config) DeleteService(profileName, envName, svcName string) (*Profile, 
 	return nil, fmt.Errorf("profile %q not found", profileName)
 }
 
+// ClearServices removes ALL services from the given environment and saves.
+func (c *Config) ClearServices(profileName, envName string) (*Profile, error) {
+	for i := range c.Profiles {
+		if c.Profiles[i].Name != profileName {
+			continue
+		}
+		p := &c.Profiles[i]
+		for j := range p.Environments {
+			if p.Environments[j].Name != envName {
+				continue
+			}
+			env := &p.Environments[j]
+			if len(env.Services) == 0 {
+				return nil, fmt.Errorf("no services to clear in %s/%s", profileName, envName)
+			}
+			env.Services = nil
+			p.UpdatedAt = time.Now()
+			cp := *p
+			return &cp, c.Save()
+		}
+		return nil, fmt.Errorf("environment %q not found in profile %q", envName, profileName)
+	}
+	return nil, fmt.Errorf("profile %q not found", profileName)
+}
+
 // AddPortForward appends a port-forward to the given environment and saves.
 // Returns an error if a port-forward with the same name already exists.
 func (c *Config) AddPortForward(profileName, envName string, pf PortForward) (*Profile, error) {

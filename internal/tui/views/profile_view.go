@@ -27,11 +27,14 @@ type ProfileViewModel struct {
 	statusErr      string
 	loading        bool
 	lastAction     string
+	width          int // terminal width, set via WindowSizeMsg
 	deleteArmed    bool
 	deleteEnvArmed bool
 	resetArmed     bool
 	inputtingEnv   bool
 	envInput       textinput.Model
+
+	keyPending string // for multi-key sequences: "" = none, "r" = waiting after r
 
 	// ── Port-Forward ──
 	forwardHandles map[string][]*portforward.PortForwardHandle
@@ -212,7 +215,84 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastAction = "✗ " + msg.err
 		return m, ClearActionAfter(3 * time.Second)
 
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+
 	case tea.KeyMsg:
+		// Any key press dismisses the last action message
+		m.lastAction = ""
+
+		// ── Pending key sequence ────────────────────────────────
+		if m.keyPending != "" && !m.inputtingEnv && !m.inDiscovery && !m.editingPort {
+			pending := m.keyPending
+			m.keyPending = ""
+			m.resetArmed = false
+			switch pending {
+			case "r":
+				env := m.currentEnv()
+				switch msg.String() {
+				case "r":
+					// rr → reset all (delete all services/forwards)
+					if m.isPortForwardEnv() {
+						forwards := m.currentForwards()
+						if len(forwards) == 0 {
+							break
+						}
+						envName := m.profile.Environments[m.activeEnv].Name
+						for _, h := range forwards {
+							_ = h.Stop()
+						}
+						updated, err := m.cfg.ClearPortForwards(m.profile.Name, envName)
+						if err != nil {
+							m.lastAction = "✗ " + err.Error()
+							return m, ClearActionAfter(3 * time.Second)
+						}
+						m.profile = updated
+						m.buildForwardHandles()
+						m.cursor = 0
+						m.lastAction = "✓ All forwards deleted"
+						return m, ClearActionAfter(3 * time.Second)
+					}
+					if len(m.currentEnvServices()) == 0 {
+						break
+					}
+					m.lastAction = "Deleting all services..."
+					go func() {
+						_ = docker.Down(m.profile.Name, env.Name)
+					}()
+					updated, err := m.cfg.ClearServices(m.profile.Name, env.Name)
+					if err != nil {
+						m.lastAction = "✗ " + err.Error()
+					} else {
+						m.profile = updated
+						if _, err := config.GenerateCompose(*m.profile, env.Name); err != nil {
+							m.lastAction = "✗ compose gen: " + err.Error()
+						} else {
+							m.lastAction = "✓ All services deleted"
+						}
+						m.cursor = 0
+					}
+					return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
+
+				case "v":
+					// rv → reset volumes (Docker only)
+					if m.isPortForwardEnv() || len(m.currentEnvServices()) == 0 {
+						break
+					}
+					m.loading = true
+					m.lastAction = "Resetting volumes..."
+					return m, func() tea.Msg {
+						err := docker.DownVolumes(m.profile.Name, env.Name)
+						if err != nil {
+							return actionDoneMsg{label: "Reset volumes", err: err}
+						}
+						return actionDoneMsg{label: "Volumes reset. Run start to recreate.", err: nil}
+					}
+				}
+			}
+			// Invalid sequence → let key fall through to normal handling below
+		}
+
 		// ── Input mode: add environment ──────────────────────────
 		if m.inputtingEnv {
 			switch {
@@ -444,50 +524,16 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if env == nil {
 				break
 			}
-			if m.isPortForwardEnv() {
-				forwards := m.currentForwards()
-				if len(forwards) == 0 {
-					break
-				}
-				if !m.resetArmed {
-					m.resetArmed = true
-					return m, nil
-				}
-				// Second r: delete ALL forwards in this env (stop + remove)
-				m.resetArmed = false
-				envName := m.profile.Environments[m.activeEnv].Name
-				for _, h := range forwards {
-					_ = h.Stop()
-				}
-				updated, err := m.cfg.ClearPortForwards(m.profile.Name, envName)
-				if err != nil {
-					m.lastAction = "✗ " + err.Error()
-					return m, ClearActionAfter(3 * time.Second)
-				}
-				m.profile = updated
-				m.buildForwardHandles()
-				m.cursor = 0
-				m.lastAction = "✓ All forwards deleted"
-				return m, ClearActionAfter(3 * time.Second)
-			}
-			if len(m.statuses) == 0 {
+			if m.isPortForwardEnv() && len(m.currentForwards()) == 0 {
 				break
 			}
-			if !m.resetArmed {
-				m.resetArmed = true
-				return m, nil // return early so disarm at bottom doesn't fire
+			if !m.isPortForwardEnv() && len(m.currentEnvServices()) == 0 {
+				break
 			}
-			// Second r: reset volumes
-			m.resetArmed = false
-			m.loading = true
-			m.lastAction = "Resetting volumes..."
-			return m, func() tea.Msg {
-				err := docker.DownVolumes(m.profile.Name, env.Name)
-				if err != nil {
-					return actionDoneMsg{label: "Reset volumes", err: err}
-				}
-				return actionDoneMsg{label: "Volumes reset. Run start to recreate.", err: nil}
-			}
+			// First r: arm, wait for second key (r or v)
+			m.keyPending = "r"
+			m.resetArmed = true
+			return m, nil
 
 		case key.Matches(msg, profileKeys.logs):
 			svcs := m.currentEnvServices()
@@ -618,6 +664,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.deleteArmed = false
 	m.deleteEnvArmed = false
 	m.resetArmed = false
+	m.keyPending = ""
 	return m, nil
 }
 
@@ -749,6 +796,10 @@ func (m *ProfileViewModel) View() string {
 		b.WriteString(styles.StyleSubtitle.Render("  No environments configured."))
 		b.WriteString("\n")
 	} else if m.isPortForwardEnv() {
+		if ctx := m.knownForwardCtx(); ctx != "" {
+			b.WriteString(styles.StyleSubtitle.Render("  " + shortCtxName(ctx)))
+			b.WriteString("\n\n")
+		}
 		if m.inDiscovery {
 			b.WriteString(m.renderDiscovery())
 		} else if m.editingPort {
@@ -764,10 +815,13 @@ func (m *ProfileViewModel) View() string {
 
 	if m.lastAction != "" {
 		b.WriteString("\n")
+		msg := wrapText(m.lastAction, m.width-4)
+		// Indent every line consistently
+		msg = "  " + strings.ReplaceAll(msg, "\n", "\n  ")
 		if strings.HasPrefix(m.lastAction, "✗") {
-			b.WriteString(styles.StyleError.Render("  " + m.lastAction))
+			b.WriteString(styles.StyleError.Render(msg))
 		} else {
-			b.WriteString(styles.StyleSuccess.Render("  " + m.lastAction))
+			b.WriteString(styles.StyleSuccess.Render(msg))
 		}
 		b.WriteString("\n")
 	}
@@ -792,7 +846,7 @@ func (m *ProfileViewModel) View() string {
 		if m.lastAction == "" {
 			b.WriteString("\n")
 		}
-		b.WriteString(styles.StyleError.Render("  Press r again to confirm reset volumes"))
+		b.WriteString(styles.StyleError.Render("  Press r again to delete all, or v to reset volumes"))
 		b.WriteString("\n")
 	}
 
@@ -860,22 +914,20 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 		// Line 2: indented image (always fits)
 		line2 := "   " + styles.StyleCode.Render(svc.FullImage())
 
-		// Line 3: state + ports on one line (always fits)
-		state := st.State
-		if state == "" {
-			state = "not running"
+		// Line 3+: ports (one per line for clean vertical display)
+		// State is already shown by the ● dot color — no text needed
+		var portLines []string
+		for _, p := range svc.Ports {
+			portLines = append(portLines, styles.StyleSubtitle.Render("     "+p.String()))
 		}
-		stateStr := "     " + state
-		if len(svc.Ports) > 0 {
-			ps := make([]string, len(svc.Ports))
-			for j, p := range svc.Ports {
-				ps[j] = p.String()
-			}
-			stateStr += "  " + styles.StyleSubtitle.Render(strings.Join(ps, ", "))
-		}
-		line3 := styles.StyleSubtitle.Render(stateStr)
+		portBlock := strings.Join(portLines, "\n")
 
-		row := lipgloss.JoinVertical(lipgloss.Left, line1, line2, line3)
+		var row string
+		if len(portLines) > 0 {
+			row = lipgloss.JoinVertical(lipgloss.Left, line1, line2, portBlock)
+		} else {
+			row = lipgloss.JoinVertical(lipgloss.Left, line1, line2)
+		}
 
 		if i == m.cursor {
 			rows = append(rows, styles.StylePanelFocused.Width(66).Render(row))
@@ -915,13 +967,10 @@ func (m *ProfileViewModel) renderPortForwards() string {
 		addr := fmt.Sprintf("  %d:%d  →  %s/%s", fwd.LocalPort, fwd.RemotePort, fwd.K8sNamespace, fwd.K8sService)
 		addrLine := styles.StyleSubtitle.Render(addr)
 
-		// Line 3: context name
-		ctxLine := styles.StyleSubtitle.Render("  " + shortCtxName(fwd.K8sContext))
-
 		// Error line (only for failed)
-		row := lipgloss.JoinVertical(lipgloss.Left, line1, addrLine, ctxLine)
+		row := lipgloss.JoinVertical(lipgloss.Left, line1, addrLine)
 		if h.Error != "" && h.State == portforward.ForwardFailed {
-			row = lipgloss.JoinVertical(lipgloss.Left, line1, addrLine, ctxLine, styles.StyleError.Render("     "+h.Error))
+			row = lipgloss.JoinVertical(lipgloss.Left, line1, addrLine, styles.StyleError.Render("     "+h.Error))
 		}
 
 		if i == m.cursor {
@@ -1027,7 +1076,8 @@ func (m *ProfileViewModel) renderDockerHelpBar() string {
 		if hasRunning {
 			stackItems = append(stackItems, styles.HelpItem("x", "stop all"))
 		}
-		stackItems = append(stackItems, styles.HelpItem("r r", "reset vols"))
+		stackItems = append(stackItems, styles.HelpItem("r r", "reset all"))
+		stackItems = append(stackItems, styles.HelpItem("r v", "reset vols"))
 	}
 
 	return styles.HelpBar(
@@ -1359,4 +1409,29 @@ func (m *ProfileViewModel) handlePortEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd
 		m.portInput, cmd = m.portInput.Update(msg)
 		return m, cmd
 	}
+}
+
+// wrapText word-wraps text to the given max width, preserving line breaks.
+func wrapText(s string, maxWidth int) string {
+	if maxWidth < 10 {
+		maxWidth = 76 // fallback if terminal width unknown
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(s, "\n") {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		for len(line) > maxWidth {
+			// Find last space within maxWidth
+			idx := strings.LastIndex(line[:maxWidth], " ")
+			if idx < 0 {
+				idx = maxWidth
+			}
+			b.WriteString(line[:idx])
+			b.WriteString("\n")
+			line = strings.TrimLeft(line[idx:], " ")
+		}
+		b.WriteString(line)
+	}
+	return b.String()
 }

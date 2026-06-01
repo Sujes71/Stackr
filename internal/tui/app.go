@@ -83,7 +83,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
-		return a, nil
+		// fall through to updateActive so child views also receive dimensions
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
