@@ -429,7 +429,7 @@ func (m *DBOpsModel) viewActions() string {
 
 	// Layout: Export + Truncate Functions side by side, Import below
 	if exportG := groups["Export"]; exportG != nil {
-		if truncG := groups["Truncate Functions"]; truncG != nil {
+		if truncG := groups["Functions"]; truncG != nil {
 			b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top,
 				renderGroup(exportG),
 				lipgloss.NewStyle().PaddingLeft(2).Render(renderGroup(truncG)),
@@ -471,7 +471,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 			{label: "Export data", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
 			{label: "Import schema", group: "Import", enabled: hasSchema, disabledReason: "no schema dump", execute: func() tea.Cmd { return m.importSchema(se) }},
 			{label: "Import data", group: "Import", enabled: hasData, disabledReason: "no data dump", execute: func() tea.Cmd { return m.importData(se) }},
-			{label: "Truncate tables", group: "Truncate Functions", enabled: m.truncateEnabled(hasData), disabledReason: "import data first", execute: truncate},
+			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: "import data first", execute: truncate},
 		}
 
 	case "mongo":
@@ -479,7 +479,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 		return []actionItem{
 			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
 			{label: "Import", group: "Import", enabled: hasData, disabledReason: "no dump", execute: func() tea.Cmd { return m.importData(se) }},
-			{label: "Truncate tables", group: "Truncate Functions", enabled: m.truncateEnabled(hasData), disabledReason: "import data first", execute: truncate},
+			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: "import data first", execute: truncate},
 		}
 
 	case "mysql":
@@ -487,7 +487,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 		return []actionItem{
 			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
 			{label: "Import", group: "Import", enabled: hasData, disabledReason: "no dump file", execute: func() tea.Cmd { return m.importData(se) }},
-			{label: "Truncate tables", group: "Truncate Functions", enabled: m.truncateEnabled(hasData), disabledReason: "import data first", execute: truncate},
+			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: "import data first", execute: truncate},
 		}
 
 	case "mssql":
@@ -495,7 +495,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 		return []actionItem{
 			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
 			{label: "Import", group: "Import", enabled: hasData, disabledReason: "no .bacpac file", execute: func() tea.Cmd { return m.importData(se) }},
-			{label: "Truncate tables", group: "Truncate Functions", enabled: m.truncateEnabled(hasData), disabledReason: "import data first", execute: truncate},
+			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: "import data first", execute: truncate},
 		}
 	}
 	return nil
