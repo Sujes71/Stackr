@@ -28,6 +28,7 @@ type ProfileViewModel struct {
 	loading        bool
 	lastAction     string
 	width          int // terminal width, set via WindowSizeMsg
+	height         int // terminal height, set via WindowSizeMsg
 	deleteArmed    bool
 	deleteEnvArmed bool
 	resetArmed     bool
@@ -90,6 +91,14 @@ func (m *ProfileViewModel) ProfileName() string {
 		return m.profile.Name
 	}
 	return ""
+}
+
+// SetSize propagates terminal dimensions so the viewport works before the first
+// WindowSizeMsg arrives (e.g. when the model is created mid-session).
+// h is the full terminal height; we subtract 2 for App header + footer.
+func (m *ProfileViewModel) SetSize(w, h int) {
+	m.width = w
+	m.height = max(0, h-2)
 }
 
 type statusLoadedMsg struct {
@@ -217,6 +226,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.height = max(0, msg.Height-2) // App chrome (header + footer)
 
 	case tea.KeyMsg:
 		// Any key press dismisses the last action message
@@ -862,13 +872,19 @@ func (m *ProfileViewModel) View() string {
 	b.WriteString("\n")
 
 	// ── Help bar ──
-	if m.isPortForwardEnv() {
+	if m.inDiscovery {
+		// Discovery has its own help inside renderDiscovery() — no big help bar needed
+	} else if m.isPortForwardEnv() {
 		b.WriteString(m.renderPFHelpBar())
 	} else {
 		b.WriteString(m.renderDockerHelpBar())
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("← →", "env").Render()))
+	if m.inDiscovery {
+		b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "cancel").Render()))
+	} else {
+		b.WriteString(styles.StyleHelp.Render(styles.HelpItem("esc", "back").Render() + "  " + styles.HelpItem("← →", "env").Render()))
+	}
 
 	return b.String()
 }
@@ -885,10 +901,71 @@ func (m *ProfileViewModel) renderEnvTabs() string {
 	return "  " + strings.Join(tabs, "  ")
 }
 
+// serviceCardHeight returns the actual height (in terminal lines) of a
+// Docker service card, accounting for variable port counts.
+func serviceCardHeight(ports int) int {
+	return 4 + ports // border(2) + name(1) + image(1) + ports(N)
+}
+
+// serviceWindow computes the visible window for Docker service cards,
+// using actual per-card heights instead of a fixed estimate.
+func (m *ProfileViewModel) serviceWindow(total int, heights []int) itemWindow {
+	w := itemWindow{start: 0, end: total}
+	if total == 0 || m.height <= 0 {
+		return w
+	}
+	cursor := min(m.cursor, total-1) // clamp in case cursor is from a different view
+	overhead := m.estimateItemOverhead()
+	avail := m.height - overhead
+	if avail <= 0 {
+		return itemWindow{start: cursor, end: min(cursor+1, total), hasAbove: cursor > 0, hasBelow: total-cursor > 1}
+	}
+
+	// Try to center the cursor: consume items up/down until available space fills
+	used := heights[cursor] // cursor always shown
+	start := cursor
+	end := cursor + 1
+
+	// Expand downwards first (the direction the user naturally reads)
+	for end < total {
+		next := heights[end]
+		if used+next > avail {
+			break
+		}
+		used += next
+		end++
+	}
+
+	// Expand upwards if space remains
+	for start > 0 {
+		prev := heights[start-1]
+		if used+prev > avail {
+			break
+		}
+		used += prev
+		start--
+	}
+
+	return itemWindow{
+		start:    start,
+		end:      end,
+		hasAbove: start > 0,
+		hasBelow: total-end > 0,
+	}
+}
+
 func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 	if len(env.Services) == 0 {
 		return styles.StyleSubtitle.Render("  No services yet.\n")
 	}
+
+	// Pre-compute actual card heights (border + name + image + ports)
+	heights := make([]int, len(env.Services))
+	for i, svc := range env.Services {
+		heights[i] = serviceCardHeight(len(svc.Ports))
+	}
+
+	win := m.serviceWindow(len(env.Services), heights)
 
 	// build status map
 	statusMap := map[string]docker.ServiceStatus{}
@@ -897,7 +974,8 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 	}
 
 	var rows []string
-	for i, svc := range env.Services {
+	for i := win.start; i < win.end; i++ {
+		svc := env.Services[i]
 		containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, env.Name, svc.Name)
 		st := statusMap[containerName]
 
@@ -935,7 +1013,108 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 			rows = append(rows, styles.StylePanel.Width(66).Render(row))
 		}
 	}
-	return strings.Join(rows, "\n")
+
+	result := strings.Join(rows, "\n")
+	if win.hasAbove || win.hasBelow {
+		result = m.decorateScroll(result, win, len(env.Services))
+	}
+	return result
+}
+
+// ── Viewport helpers ──────────────────────────────────────────────────────────
+
+type itemWindow struct {
+	start, end int
+	hasAbove   bool
+	hasBelow   bool
+}
+
+// computeItemWindow calculates which items in a list [0, total) should be
+// rendered given the cursor position and available terminal height.
+// Returns start (inclusive), end (exclusive), and visibility indicators.
+func (m *ProfileViewModel) computeItemWindow(total int, itemHeight int) itemWindow {
+	w := itemWindow{start: 0, end: total}
+
+	if total == 0 || m.height <= 0 {
+		return w
+	}
+
+	cursor := min(m.cursor, total-1) // clamp in case cursor is from a different view
+
+	// Estimate lines used by everything EXCEPT the items section
+	overhead := m.estimateItemOverhead()
+	avail := m.height - overhead
+	if avail <= 0 {
+		return itemWindow{start: cursor, end: min(cursor+1, total), hasAbove: cursor > 0, hasBelow: total-cursor > 1}
+	}
+
+	// How many items fully fit
+	fit := avail / itemHeight
+	if fit <= 0 {
+		fit = 1
+	}
+
+	if total <= fit {
+		return w
+	}
+
+	// Center cursor in the window
+	half := fit / 2
+	start := cursor - half
+	if start < 0 {
+		start = 0
+	}
+	end := start + fit
+	if end > total {
+		end = total
+		start = total - fit
+	}
+
+	return itemWindow{
+		start:    start,
+		end:      end,
+		hasAbove: start > 0,
+		hasBelow: total-end > 0,
+	}
+}
+
+// estimateItemOverhead returns the number of terminal lines consumed by
+// everything rendered before and after the dynamic items section in View().
+// Used by computeItemWindow to determine available space for items.
+func (m *ProfileViewModel) estimateItemOverhead() int {
+	// Before items
+	oh := 1 + 1 + 2 // \n + env tabs + \n\n
+
+	if m.isPortForwardEnv() {
+		if ctx := m.knownForwardCtx(); ctx != "" {
+			oh += 3 // context line + \n\n (2 newlines)
+		}
+	}
+
+	// After items: newline + help bar + newline + bottom hints
+	oh += 1 // blank line before help bar
+
+	if !m.inDiscovery {
+		if m.isPortForwardEnv() {
+			oh += 6 // renderPFHelpBar height (~6 lines)
+		} else {
+			oh += 6 // renderDockerHelpBar height (~6 lines)
+		}
+	}
+	oh += 1 + 1 // newline after help bar + bottom hints
+
+	// Optional status lines (lastAction, armed states, input mode)
+	if m.lastAction != "" {
+		oh += 2 // last action line + blank
+	}
+	if m.deleteArmed || m.deleteEnvArmed || m.resetArmed {
+		oh += 1 // confirmation prompt
+	}
+	if m.inputtingEnv {
+		oh += 4 // env input text
+	}
+
+	return oh
 }
 
 // shortCtxName extracts the cluster name from a K8s context ARN or path.
@@ -948,14 +1127,34 @@ func shortCtxName(ctx string) string {
 	return parts[len(parts)-1]
 }
 
+// decorateScroll wraps rendered items with scroll indicators.
+// "↑ N more" takes space above items, so we skip it for a single hidden item.
+// "↓ N more" is at the bottom and doesn't push anything — always show it.
+func (m *ProfileViewModel) decorateScroll(content string, win itemWindow, total int) string {
+	var b strings.Builder
+	if above := win.start; above > 0 {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", above)))
+		b.WriteString("\n")
+	}
+	b.WriteString(content)
+	if below := total - win.end; below > 0 {
+		b.WriteString("\n")
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", below)))
+	}
+	return b.String()
+}
+
 func (m *ProfileViewModel) renderPortForwards() string {
 	forwards := m.currentForwards()
 	if len(forwards) == 0 {
 		return styles.StyleSubtitle.Render("  No port-forwards configured. Press 'k' to discover K8s services.")
 	}
 
+	win := m.computeItemWindow(len(forwards), 4) // each card is ~4 lines
+
 	var rows []string
-	for i, h := range forwards {
+	for i := win.start; i < win.end; i++ {
+		h := forwards[i]
 		fwd := h.Config
 
 		// Line 1: state dot + name
@@ -983,7 +1182,63 @@ func (m *ProfileViewModel) renderPortForwards() string {
 			rows = append(rows, styles.StylePanel.Width(66).Render(row))
 		}
 	}
-	return strings.Join(rows, "\n")
+
+	result := strings.Join(rows, "\n")
+	if win.hasAbove || win.hasBelow {
+		result = m.decorateScroll(result, win, len(forwards))
+	}
+	return result
+}
+
+// discoveryItemWindow calculates the visible window for discovery list items.
+// The discovery view replaces the port-forwards section in the main View().
+// Overhead from env tabs, ctx, help bar, hints is the same as the profile view
+// overhead (16 with ctx, 13 without). Within discovery, each step has a fixed
+// overhead of 3 lines (header + blank + help bar). Each list item rendered with
+// a panel border is 3 lines (╭─╮ + content + ╰─╯).
+func (m *ProfileViewModel) discoveryItemWindow(total int) itemWindow {
+	w := itemWindow{start: 0, end: total}
+	if total == 0 || m.height <= 0 {
+		return w
+	}
+
+	cursor := min(m.discoveryCursor, total-1) // clamp for safety
+
+	oh := m.estimateItemOverhead()
+	stepOh := 3 // header + blank + help
+	itemH := 3  // panel border top + content + panel border bottom
+	avail := m.height - oh - stepOh
+	if avail <= 0 {
+		return itemWindow{start: cursor, end: min(cursor+1, total), hasAbove: cursor > 0, hasBelow: total-cursor > 1}
+	}
+
+	fit := avail / itemH
+	if fit <= 0 {
+		fit = 1
+	}
+
+	if total <= fit {
+		return w
+	}
+
+	// Center around cursor
+	half := fit / 2
+	start := cursor - half
+	if start < 0 {
+		start = 0
+	}
+	end := start + fit
+	if end > total {
+		end = total
+		start = total - fit
+	}
+
+	return itemWindow{
+		start:    start,
+		end:      end,
+		hasAbove: start > 0,
+		hasBelow: total-end > 0,
+	}
 }
 
 func (m *ProfileViewModel) renderDiscovery() string {
@@ -991,34 +1246,63 @@ func (m *ProfileViewModel) renderDiscovery() string {
 	b.WriteString("\n")
 
 	switch m.discoveryStep {
-	case 0:
-		b.WriteString(styles.StyleHeader.Render("  Select K8s context:"))
-		b.WriteString("\n\n")
-		for i, ctx := range m.discoveryCtxs {
-			if i == m.discoveryCursor {
-				b.WriteString("  " + styles.StylePanelFocused.Width(60).Render("  " + ctx) + "\n")
-			} else {
-				b.WriteString("  " + styles.StylePanel.Width(60).Render("  " + ctx) + "\n")
+		case 0:
+			dTotal := len(m.discoveryCtxs)
+			win := m.discoveryItemWindow(dTotal)
+			b.WriteString(styles.StyleHeader.Render("  Select K8s context:"))
+			b.WriteString("\n\n")
+			if above := win.start; above > 0 {
+				b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", above)))
+				b.WriteString("\n")
 			}
-		}
-		b.WriteString("\n" + styles.StyleHelp.Render("  esc cancel    ↑↓ navigate    ↵ select"))
+			for i := win.start; i < win.end; i++ {
+				ctx := m.discoveryCtxs[i]
+				if i == m.discoveryCursor {
+					b.WriteString("  " + styles.StylePanelFocused.Width(60).Render("  " + ctx) + "\n")
+				} else {
+					b.WriteString("  " + styles.StylePanel.Width(60).Render("  " + ctx) + "\n")
+				}
+			}
+			if below := dTotal - win.end; below > 0 {
+				b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", below)))
+				b.WriteString("\n")
+			}
+			b.WriteString("\n" + styles.StyleHelp.Render("  ↑↓ navigate    ↵ select"))
 
-	case 1:
-		b.WriteString(styles.StyleHeader.Render("  Select namespace for '" + m.discoverySelCtx + "':"))
-		b.WriteString("\n\n")
-		for i, ns := range m.discoveryNSs {
-			if i == m.discoveryCursor {
-				b.WriteString("  " + styles.StylePanelFocused.Width(60).Render("  " + ns) + "\n")
-			} else {
-				b.WriteString("  " + styles.StylePanel.Width(60).Render("  " + ns) + "\n")
+		case 1:
+			dTotal := len(m.discoveryNSs)
+			win := m.discoveryItemWindow(dTotal)
+			b.WriteString(styles.StyleHeader.Render("  Select namespace for '" + m.discoverySelCtx + "':"))
+			b.WriteString("\n\n")
+			if above := win.start; above > 0 {
+				b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", above)))
+				b.WriteString("\n")
 			}
-		}
-		b.WriteString("\n" + styles.StyleHelp.Render("  esc cancel    ↑↓ navigate    ↵ select"))
+			for i := win.start; i < win.end; i++ {
+				ns := m.discoveryNSs[i]
+				if i == m.discoveryCursor {
+					b.WriteString("  " + styles.StylePanelFocused.Width(60).Render("  " + ns) + "\n")
+				} else {
+					b.WriteString("  " + styles.StylePanel.Width(60).Render("  " + ns) + "\n")
+				}
+			}
+			if below := dTotal - win.end; below > 0 {
+				b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", below)))
+				b.WriteString("\n")
+			}
+			b.WriteString("\n" + styles.StyleHelp.Render("  ↑↓ navigate    ↵ select"))
 
 	case 2:
+		dTotal := len(m.discoverySvcs)
+		win := m.discoveryItemWindow(dTotal)
 		b.WriteString(styles.StyleHeader.Render("  Select service in '" + m.discoverySelCtx + "/" + m.discoverySelNS + "':"))
 		b.WriteString("\n\n")
-		for i, svc := range m.discoverySvcs {
+		if above := win.start; above > 0 {
+			b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", above)))
+			b.WriteString("\n")
+		}
+		for i := win.start; i < win.end; i++ {
+			svc := m.discoverySvcs[i]
 			label := fmt.Sprintf("%s  %d/TCP", svc.Name, svc.RemotePort)
 			if i == m.discoveryCursor {
 				b.WriteString("  " + styles.StylePanelFocused.Width(60).Render("  " + label) + "\n")
@@ -1026,7 +1310,11 @@ func (m *ProfileViewModel) renderDiscovery() string {
 				b.WriteString("  " + styles.StylePanel.Width(60).Render("  " + label) + "\n")
 			}
 		}
-		b.WriteString("\n" + styles.StyleHelp.Render("  esc cancel    ↑↓ navigate    ↵ select"))
+		if below := dTotal - win.end; below > 0 {
+			b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", below)))
+			b.WriteString("\n")
+		}
+		b.WriteString("\n" + styles.StyleHelp.Render("  ↑↓ navigate    ↵ select"))
 
 	case 3:
 		b.WriteString(styles.StyleHeader.Render("  Confirm port-forward:"))

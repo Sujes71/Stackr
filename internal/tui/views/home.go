@@ -16,6 +16,7 @@ type HomeModel struct {
 	cursor      int
 	profiles    []config.Profile
 	deleteArmed bool
+	height      int // terminal height, set via WindowSizeMsg
 }
 
 func NewHome(cfg *config.Config) *HomeModel {
@@ -37,8 +38,17 @@ var homeKeys = struct {
 
 func (m *HomeModel) Init() tea.Cmd { return nil }
 
+// SetSize propagates terminal dimensions before the first WindowSizeMsg.
+// h is the full terminal height; we subtract 2 for App header + footer.
+func (m *HomeModel) SetSize(w, h int) {
+	m.height = max(0, h-2)
+}
+
 func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.height = max(0, msg.Height-2) // App chrome (header + footer)
+
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, homeKeys.up):
@@ -96,8 +106,17 @@ func (m *HomeModel) View() string {
 		b.WriteString(lipgloss.PlaceHorizontal(60, lipgloss.Center, empty))
 		b.WriteString("\n")
 	} else {
-		for i, p := range m.profiles {
-			b.WriteString(m.renderProfileRow(i, p))
+		win := m.homeWindow(len(m.profiles))
+		if win.hasAbove {
+			b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
+			b.WriteString("\n")
+		}
+		for i := win.start; i < win.end; i++ {
+			b.WriteString(m.renderProfileRow(i, m.profiles[i]))
+			b.WriteString("\n")
+		}
+		if win.hasBelow {
+			b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", len(m.profiles)-win.end)))
 			b.WriteString("\n")
 		}
 	}
@@ -118,6 +137,47 @@ func (m *HomeModel) View() string {
 	b.WriteString(styles.StyleHelp.Render(styles.HelpItem("↑ ↓", "navigate").Render() + "  " + styles.HelpItem("↵", "next").Render()))
 
 	return b.String()
+}
+
+// homeWindow calculates the visible profile range given terminal height.
+func (m *HomeModel) homeWindow(total int) itemWindow {
+	w := itemWindow{start: 0, end: total}
+	if total == 0 || m.height <= 0 {
+		return w
+	}
+	// Overhead: \n + help bar (~4) + \n + hints (1) = ~7 lines
+	oh := 7
+	if m.deleteArmed {
+		oh += 1
+	}
+	avail := m.height - oh
+	if avail <= 0 {
+		return itemWindow{start: m.cursor, end: min(m.cursor+1, total), hasAbove: m.cursor > 0, hasBelow: m.cursor+1 < total}
+	}
+	itemHeight := 4 // each profile card is ~4 lines
+	fit := avail / itemHeight
+	if fit <= 0 {
+		fit = 1
+	}
+	if total <= fit {
+		return w
+	}
+	half := fit / 2
+	start := m.cursor - half
+	if start < 0 {
+		start = 0
+	}
+	end := start + fit
+	if end > total {
+		end = total
+		start = total - fit
+	}
+	return itemWindow{
+		start:    start,
+		end:      end,
+		hasAbove: start > 0,
+		hasBelow: end < total,
+	}
 }
 
 func (m *HomeModel) renderProfileRow(idx int, p config.Profile) string {

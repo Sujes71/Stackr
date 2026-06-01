@@ -122,6 +122,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 	case views.NavHome:
 		a.screen = ScreenHome
 		a.home = views.NewHome(a.cfg)
+		a.home.SetSize(a.width, a.height)
 		return a, a.home.Init()
 
 	case views.NavNewProfile:
@@ -133,6 +134,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
 			a.screen = ScreenProfileView
 			a.profileView = views.NewProfileView(a.cfg, p)
+			a.profileView.SetSize(a.width, a.height)
 			return a, a.profileView.Init()
 		}
 
@@ -140,6 +142,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
 			a.screen = ScreenAddService
 			a.addService = views.NewAddService(a.cfg, p, nav.EnvName)
+			a.addService.SetSize(a.width, a.height)
 			return a, a.addService.Init()
 		}
 

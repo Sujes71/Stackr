@@ -84,7 +84,44 @@ type AddServiceModel struct {
 	volumesDeleteArmed bool
 	defaultVolumes     []config.VolumeMapping // snapshot for reset on re-entry
 
-	err string
+	err    string
+	height int // terminal height, set via WindowSizeMsg
+}
+
+// addSvcItemWindow calculates the visible range for single-line item lists
+// (catalog, search results, tag list) given the terminal height and overhead.
+func addSvcItemWindow(total, cursor, height, overhead int) itemWindow {
+	w := itemWindow{start: 0, end: total}
+	if total == 0 || height <= 0 {
+		return w
+	}
+	avail := height - overhead
+	if avail <= 0 {
+		return itemWindow{
+			start:    cursor,
+			end:      min(cursor+1, total),
+			hasAbove: cursor > 0,
+			hasBelow: cursor+1 < total,
+		}
+	}
+	if total <= avail {
+		return w
+	}
+	half := avail / 2
+	start := cursor - half
+	if start < 0 {
+		start = 0
+	}
+	end := start + avail
+	if end > total {
+		end = total
+		start = total - avail
+	}
+	return itemWindow{
+		start: start, end: end,
+		hasAbove: start > 0,
+		hasBelow: end < total,
+	}
 }
 
 func NewAddService(cfg *config.Config, p *config.Profile, envName string) *AddServiceModel {
@@ -221,8 +258,18 @@ var addSvcToggle = key.NewBinding(key.WithKeys("t"))
 var addSvcDelete = key.NewBinding(key.WithKeys("d"))
 var addSvcReset = key.NewBinding(key.WithKeys("r"))
 
+// SetSize propagates terminal dimensions before the first WindowSizeMsg.
+// h is the full terminal height; we subtract 2 for App header + footer.
+func (m *AddServiceModel) SetSize(w, h int) {
+	m.height = max(0, h-2)
+}
+
 func (m *AddServiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.height = max(0, msg.Height-2) // App chrome (header + footer)
+		return m, nil
+
 	case hubSearchResultMsg:
 		m.searching = false
 		m.searchErr = msg.err
@@ -1042,7 +1089,16 @@ func (m *AddServiceModel) viewCatalog() string {
 	var b strings.Builder
 	b.WriteString("  Select a service from the catalog:\n\n")
 	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
-	for i, entry := range hub.Catalog {
+
+	// overhead: View() = 4, catalog = 4 (header 2 + after 2) = 8
+	win := addSvcItemWindow(len(hub.Catalog), m.catalogCursor, m.height, 8)
+
+	if win.hasAbove {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
+		b.WriteString("\n")
+	}
+	for i := win.start; i < win.end; i++ {
+		entry := hub.Catalog[i]
 		prefix := "    "
 		if i == m.catalogCursor {
 			prefix = "  > "
@@ -1054,6 +1110,10 @@ func (m *AddServiceModel) viewCatalog() string {
 		} else {
 			b.WriteString(label)
 		}
+		b.WriteString("\n")
+	}
+	if win.hasBelow {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", len(hub.Catalog)-win.end)))
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
@@ -1073,7 +1133,16 @@ func (m *AddServiceModel) viewSearch() string {
 		b.WriteString(styles.StyleError.Render("  " + m.searchErr) + "\n")
 	}
 	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
-	for i, r := range m.searchResults {
+
+	// overhead: View() = 4, search = ~7 (header 2 + input 2 + err 1 + after 2)
+	win := addSvcItemWindow(len(m.searchResults), m.searchCursor, m.height, 11)
+
+	if win.hasAbove {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
+		b.WriteString("\n")
+	}
+	for i := win.start; i < win.end; i++ {
+		r := m.searchResults[i]
 		official := ""
 		if r.IsOfficial {
 			official = " ✓"
@@ -1085,6 +1154,10 @@ func (m *AddServiceModel) viewSearch() string {
 		} else {
 			b.WriteString("    " + label)
 		}
+		b.WriteString("\n")
+	}
+	if win.hasBelow {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", len(m.searchResults)-win.end)))
 		b.WriteString("\n")
 	}
 	if len(m.searchResults) == 0 && !m.searching {
@@ -1103,7 +1176,16 @@ func (m *AddServiceModel) viewTags() string {
 		return b.String()
 	}
 	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
-	for i, tag := range m.tags {
+
+	// overhead: View() = 4, tags = 4 (header 2 + after 2) = 8
+	win := addSvcItemWindow(len(m.tags), m.tagCursor, m.height, 8)
+
+	if win.hasAbove {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
+		b.WriteString("\n")
+	}
+	for i := win.start; i < win.end; i++ {
+		tag := m.tags[i]
 		size := ""
 		if tag.FullSize > 0 {
 			size = fmt.Sprintf("  %.0f MB", float64(tag.FullSize)/1_000_000)
@@ -1114,6 +1196,10 @@ func (m *AddServiceModel) viewTags() string {
 		} else {
 			b.WriteString("    " + label)
 		}
+		b.WriteString("\n")
+	}
+	if win.hasBelow {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", len(m.tags)-win.end)))
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
