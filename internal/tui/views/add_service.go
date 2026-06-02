@@ -973,6 +973,14 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *AddServiceModel) saveService() tea.Cmd {
 	return func() tea.Msg {
+		for _, env := range m.profile.Environments {
+			if env.Name == m.envName {
+				if err := checkPortConflicts(m.svc, env.Services); err != nil {
+					return ErrorMsg(err.Error())
+				}
+				break
+			}
+		}
 		// Find environment and append service
 		for i, env := range m.profile.Environments {
 			if env.Name == m.envName {
@@ -992,6 +1000,37 @@ func (m *AddServiceModel) saveService() tea.Cmd {
 		}
 		return svcSavedMsg{}
 	}
+}
+
+func checkPortConflicts(newService config.Service, existingServices []config.Service) error {
+	hostPorts := make(map[string]string) // hostPort -> owning service name
+
+	for _, svc := range existingServices {
+		if svc.Name == newService.Name {
+			continue
+		}
+		for _, p := range svc.Ports {
+			if p.Host != "" {
+				hostPorts[p.Host] = svc.Name
+			}
+		}
+	}
+
+	seen := make(map[string]bool)
+	for _, p := range newService.Ports {
+		if p.Host == "" {
+			continue
+		}
+		if owner, exists := hostPorts[p.Host]; exists {
+			return fmt.Errorf("Port %s is already used by '%s'. Choose a different host port.", p.Host, owner)
+		}
+		if seen[p.Host] {
+			return fmt.Errorf("Port %s is mapped multiple times in the new service.", p.Host)
+		}
+		seen[p.Host] = true
+	}
+
+	return nil
 }
 
 func (m *AddServiceModel) updateActiveInput(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1445,8 +1484,26 @@ func (m *AddServiceModel) viewReview() string {
 				}
 				return strings.Join(ps, "  ")
 			}()),
-			m.reviewSection("Env vars", fmt.Sprintf("%d configured", len(svc.EnvVars))),
-			m.reviewSection("Volumes", fmt.Sprintf("%d configured", len(svc.Volumes))),
+			m.reviewSection("Env vars", func() string {
+				if len(svc.EnvVars) == 0 {
+					return "(none)"
+				}
+				evs := make([]string, len(svc.EnvVars))
+				for i, ev := range svc.EnvVars {
+					evs[i] = ev.Key + "=" + ev.Value
+				}
+				return strings.Join(evs, "  ")
+			}()),
+			m.reviewSection("Volumes", func() string {
+				if len(svc.Volumes) == 0 {
+					return "(none)"
+				}
+				vs := make([]string, len(svc.Volumes))
+				for i, v := range svc.Volumes {
+					vs[i] = v.Source + "→" + v.Target
+				}
+				return strings.Join(vs, "  ")
+			}()),
 			m.reviewSection("Environment", m.envName),
 		),
 	))

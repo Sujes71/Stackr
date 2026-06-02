@@ -195,7 +195,9 @@ func NewAddSyncEnv(
 		m.hostInput.SetValue(existing.Host)
 		m.portInput.SetValue(existing.Port)
 		m.userInput.SetValue(existing.User)
-		m.passInput.SetValue(existing.Password)
+		if decrypted, err := existing.GetPassword(); err == nil {
+			m.passInput.SetValue(decrypted)
+		}
 		m.dbInput.SetValue(existing.Database)
 		if dbType == "mongo" {
 			m.authDBInput.SetValue(existing.AuthDB)
@@ -365,8 +367,10 @@ func (m *AddSyncEnvModel) save() tea.Cmd {
 			Host:     strings.TrimSpace(m.hostInput.Value()),
 			Port:     strings.TrimSpace(m.portInput.Value()),
 			User:     strings.TrimSpace(m.userInput.Value()),
-			Password: m.passInput.Value(),
 			Database: strings.TrimSpace(m.dbInput.Value()),
+		}
+		if err := syncEnv.SetPassword(m.passInput.Value()); err != nil {
+			return ErrorMsg(fmt.Sprintf("encrypt password: %v", err))
 		}
 		if m.dbType == "mongo" {
 			syncEnv.AuthDB = strings.TrimSpace(m.authDBInput.Value())
@@ -636,7 +640,7 @@ func (m *AddSyncEnvModel) viewReviewStep() string {
 
 	dbTypeLabel := styles.StyleCode.Render(m.dbType)
 	hostPort := m.hostInput.Value() + ":" + m.portInput.Value()
-	maskedPass := styles.StyleSubtitle.Render("\u2022\u2022\u2022\u2022\u2022\u2022 (stored in plaintext YAML)")
+	maskedPass := styles.StyleSubtitle.Render("\u2022\u2022\u2022\u2022\u2022\u2022 (encrypted at rest \u2014 password is not stored in plaintext)")
 	if m.passInput.Value() == "" {
 		maskedPass = styles.StyleSubtitle.Render("(empty)")
 	}

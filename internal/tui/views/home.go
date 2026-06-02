@@ -2,41 +2,71 @@ package views
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stackr/stackr/internal/config"
 	"github.com/stackr/stackr/internal/tui/styles"
+	"gopkg.in/yaml.v3"
 )
 
 type HomeModel struct {
-	cfg         *config.Config
-	cursor      int
-	profiles    []config.Profile
-	deleteArmed bool
-	height      int // terminal height, set via WindowSizeMsg
+	cfg          *config.Config
+	cursor       int
+	profiles     []config.Profile
+	deleteArmed  bool
+	deleting     string         // non-empty → typed confirmation for deletion of this profile
+	confirmInput textinput.Model
+	height       int // terminal height, set via WindowSizeMsg
+
+	// ── Export / Import ──
+	showExport  bool
+	exportYAML  string
+	showImport  bool
+	importInput textinput.Model
+	importPath  string
+	importErr   string
 }
 
 func NewHome(cfg *config.Config) *HomeModel {
+	ti := textinput.New()
+	ti.Prompt = ""
+
+	importTi := textinput.New()
+	importTi.Prompt = ""
+	importTi.Placeholder = "~/path/to/profile.yaml"
+	importTi.CharLimit = 100
+	importTi.Width = 40
+
 	return &HomeModel{
-		cfg:      cfg,
-		profiles: cfg.Profiles,
+		cfg:          cfg,
+		profiles:     cfg.Profiles,
+		confirmInput: ti,
+		importInput:  importTi,
 	}
 }
 
 var homeKeys = struct {
-	up, down, enter, new, delete key.Binding
+	up, down, enter, new, delete, export, import_ key.Binding
 }{
-	up:     key.NewBinding(key.WithKeys("up", "k")),
-	down:   key.NewBinding(key.WithKeys("down", "j")),
-	enter:  key.NewBinding(key.WithKeys("enter")),
-	new:    key.NewBinding(key.WithKeys("n")),
-	delete: key.NewBinding(key.WithKeys("d")),
+	up:      key.NewBinding(key.WithKeys("up", "k")),
+	down:    key.NewBinding(key.WithKeys("down", "j")),
+	enter:   key.NewBinding(key.WithKeys("enter")),
+	new:     key.NewBinding(key.WithKeys("n")),
+	delete:  key.NewBinding(key.WithKeys("d")),
+	export:  key.NewBinding(key.WithKeys("x")),
+	import_: key.NewBinding(key.WithKeys("i")),
 }
 
 func (m *HomeModel) Init() tea.Cmd { return nil }
+
+func (m *HomeModel) Cursor() int     { return m.cursor }
+func (m *HomeModel) SetCursor(c int) { m.cursor = c }
 
 // SetSize propagates terminal dimensions before the first WindowSizeMsg.
 // h is the full terminal height; we subtract 2 for App header + footer.
@@ -50,6 +80,91 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = max(0, msg.Height-2) // App chrome (header + footer)
 
 	case tea.KeyMsg:
+		// ── Export overlay: any key dismisses ──
+		if m.showExport {
+			m.showExport = false
+			m.exportYAML = ""
+			return m, nil
+		}
+
+		// ── Import input mode ──
+		if m.showImport {
+			switch {
+			case msg.String() == "esc":
+				m.showImport = false
+				m.importInput.Reset()
+				m.importInput.Blur()
+				m.importErr = ""
+				return m, nil
+			case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
+				path := strings.TrimSpace(m.importInput.Value())
+				if path == "" {
+					m.showImport = false
+					m.importInput.Reset()
+					m.importInput.Blur()
+					return m, nil
+				}
+				// Expand ~
+				if strings.HasPrefix(path, "~/") {
+					home, _ := os.UserHomeDir()
+					path = filepath.Join(home, path[2:])
+				}
+				data, err := os.ReadFile(path)
+				if err != nil {
+					m.importErr = err.Error()
+					return m, nil
+				}
+				var p config.Profile
+				if err := yaml.Unmarshal(data, &p); err != nil {
+					m.importErr = "Invalid profile YAML: " + err.Error()
+					return m, nil
+				}
+				if err := m.cfg.AddProfile(p); err != nil {
+					m.importErr = err.Error()
+					return m, nil
+				}
+				m.profiles = m.cfg.Profiles
+				m.showImport = false
+				m.importInput.Reset()
+				m.importInput.Blur()
+				m.importErr = ""
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.importInput, cmd = m.importInput.Update(msg)
+				return m, cmd
+			}
+		}
+		// If typed confirmation is active, handle in its own mode.
+		if m.deleting != "" {
+			switch {
+			case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
+				m.deleting = ""
+				m.confirmInput.Reset()
+				m.confirmInput.Blur()
+				return m, nil
+			case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
+				if m.confirmInput.Value() == m.deleting {
+					name := m.deleting
+					m.deleting = ""
+					m.confirmInput.Reset()
+					m.confirmInput.Blur()
+					_ = m.cfg.DeleteProfile(name)
+					m.profiles = m.cfg.Profiles
+					if m.cursor >= len(m.profiles) && m.cursor > 0 {
+						m.cursor--
+					}
+				} else {
+					m.confirmInput.Reset()
+				}
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.confirmInput, cmd = m.confirmInput.Update(msg)
+				return m, cmd
+			}
+		}
+
 		switch {
 		case key.Matches(msg, homeKeys.up):
 			if m.cursor > 0 {
@@ -82,13 +197,34 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.deleteArmed = false
 			name := m.profiles[m.cursor].Name
-			_ = m.cfg.DeleteProfile(name)
-			m.profiles = m.cfg.Profiles
-			if m.cursor >= len(m.profiles) && m.cursor > 0 {
-				m.cursor--
+			m.deleting = name
+			m.confirmInput.Reset()
+			m.confirmInput.Focus()
+			return m, textinput.Blink
+
+		case key.Matches(msg, homeKeys.export):
+			if len(m.profiles) == 0 || m.cursor >= len(m.profiles) {
+				break
 			}
+			p := m.profiles[m.cursor]
+			data, err := yaml.Marshal(p)
+			if err != nil {
+				m.exportYAML = "Error: " + err.Error()
+			} else {
+				m.exportYAML = string(data)
+			}
+			m.showExport = true
+			return m, nil
+
+		case key.Matches(msg, homeKeys.import_):
+			m.showImport = true
+			m.importInput.Reset()
+			m.importInput.Focus()
+			m.importErr = ""
+			return m, textinput.Blink
 		default:
 			m.deleteArmed = false
+			m.deleting = ""
 		}
 	}
 	return m, nil
@@ -98,6 +234,59 @@ func (m *HomeModel) View() string {
 	var b strings.Builder
 
 	b.WriteString("\n")
+
+	// ── Export overlay ──
+	if m.showExport {
+		b.WriteString(styles.StylePanelFocused.Render(
+			styles.StyleHeader.Render(m.profiles[m.cursor].Name) + "\n\n" +
+				styles.StyleSubtitle.Render(m.exportYAML),
+		))
+		b.WriteString("\n\n")
+		b.WriteString(styles.InlineHelp(
+			styles.HelpItem("esc", "dismiss"),
+		))
+		b.WriteString("\n")
+		return b.String()
+	}
+
+	// ── Import overlay ──
+	if m.showImport {
+		b.WriteString(styles.StyleInputLabel.Render("  Import profile from path:"))
+		b.WriteString("\n\n")
+		b.WriteString("  " + m.importInput.View())
+		b.WriteString("\n\n")
+		if m.importErr != "" {
+			b.WriteString(styles.StyleError.Render("  " + m.importErr))
+			b.WriteString("\n\n")
+		}
+		b.WriteString(styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↵", "import"),
+		))
+		b.WriteString("\n")
+		return b.String()
+	}
+
+	// Typed confirmation for profile deletion
+	if m.deleting != "" {
+		b.WriteString(styles.StylePanelError.Render(
+			styles.StyleError.Render("  ⚠ This will permanently delete the profile and ALL its data"),
+		))
+		b.WriteString("\n\n")
+		nameStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+		b.WriteString(styles.StyleSubtitle.Render(
+			fmt.Sprintf("  Type %s to confirm deletion:", nameStyle.Render(fmt.Sprintf("%q", m.deleting))),
+		))
+		b.WriteString("\n\n")
+		b.WriteString("  " + m.confirmInput.View())
+		b.WriteString("\n\n")
+		b.WriteString(styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↵", "confirm"),
+		))
+		b.WriteString("\n")
+		return b.String()
+	}
 
 	if len(m.profiles) == 0 {
 		empty := styles.StylePanel.Render(
@@ -129,6 +318,8 @@ func (m *HomeModel) View() string {
 	mgmtItems = append(mgmtItems, styles.HelpItem("n", "new profile"))
 	if len(m.profiles) > 0 {
 		mgmtItems = append(mgmtItems, styles.HelpItem("d d", "delete"))
+		mgmtItems = append(mgmtItems, styles.HelpItem("x", "export"))
+		mgmtItems = append(mgmtItems, styles.HelpItem("i", "import"))
 	}
 	b.WriteString("\n")
 	b.WriteString(styles.HelpBar(

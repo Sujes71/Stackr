@@ -46,3 +46,25 @@ type discoveryServicesMsg struct {
 type discoveryErrorMsg struct {
 	err string
 }
+
+type discoveryAuthErrorMsg struct {
+	err string
+	ctx string
+}
+
+// ── Stats Messages ──
+
+type statsTickMsg struct {
+	container string
+}
+
+type statsResultMsg struct {
+	data string
+	err  string
+}
+
+// ── Spinner Messages ──
+
+type spinnerTickMsg struct {
+	frame int
+}

@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -17,6 +18,12 @@ import (
 	"github.com/stackr/stackr/internal/portforward"
 	"github.com/stackr/stackr/internal/tui/styles"
 )
+
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+func spinnerCmd() tea.Cmd {
+	return func() tea.Msg { return spinnerTickMsg{} }
+}
 
 type ProfileViewModel struct {
 	cfg            *config.Config
@@ -54,9 +61,19 @@ type ProfileViewModel struct {
 	discoveryEnvName string
 
 	// ── Port Editing ──
-	editingPort bool
-	portInput   textinput.Model
-	editFwdIdx  int
+	editingPort      bool
+	portInput        textinput.Model
+	editFwdIdx       int
+	viewingService   int // -1 = not viewing
+	showingShortcuts bool
+
+	// ── Docker Stats ──
+	showStats      bool
+	statsContainer string
+	statsData      string
+
+	// ── Spinner ──
+	spinnerFrame int
 }
 
 type ProfileEnvState struct {
@@ -88,6 +105,7 @@ func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
 		envInput:       ti,
 		forwardHandles: make(map[string][]*portforward.PortForwardHandle),
 		portInput:      portInput,
+		viewingService: -1,
 	}
 	// set activeEnv to the profile's saved active env
 	for i, env := range p.Environments {
@@ -149,7 +167,7 @@ func (m *ProfileViewModel) loadStatus() tea.Cmd {
 }
 
 var profileKeys = struct {
-	back, up, down, enter, start, stop, addSvc, svcDelete, dbOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort key.Binding
+	back, up, down, enter, start, stop, addSvc, svcDelete, dbOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort, viewConfig, stats, pull, shell key.Binding
 }{
 	back:           key.NewBinding(key.WithKeys("esc", "backspace")),
 	up:             key.NewBinding(key.WithKeys("up")),
@@ -167,6 +185,10 @@ var profileKeys = struct {
 	resetVol:       key.NewBinding(key.WithKeys("r")),
 	k8sDiscover:    key.NewBinding(key.WithKeys("k")),
 	editPort:       key.NewBinding(key.WithKeys("e")),
+	viewConfig:     key.NewBinding(key.WithKeys("v")),
+	stats:          key.NewBinding(key.WithKeys("t")),
+	pull:           key.NewBinding(key.WithKeys("p")),
+	shell:          key.NewBinding(key.WithKeys("h")),
 }
 
 func (m *ProfileViewModel) Init() tea.Cmd {
@@ -384,6 +406,46 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ClearActionMsg:
 		m.lastAction = ""
 
+	case statsTickMsg:
+		if !m.showStats || m.statsContainer == "" {
+			return m, nil
+		}
+		return m, func() tea.Msg {
+			out, err := exec.Command("docker", "stats", "--no-stream",
+				"--format", "{{.CPUPerc}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}",
+				msg.container).Output()
+			if err != nil {
+				return statsResultMsg{err: err.Error()}
+			}
+			return statsResultMsg{data: strings.TrimSpace(string(out))}
+		}
+
+	case statsResultMsg:
+		if msg.err != "" {
+			m.statsData = msg.err
+		} else {
+			m.statsData = msg.data
+		}
+		if m.showStats {
+			return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+				return statsTickMsg{container: m.statsContainer}
+			})
+		}
+		return m, nil
+
+	case spinnerTickMsg:
+		if m.spinnerFrame < 9 {
+			m.spinnerFrame++
+		} else {
+			m.spinnerFrame = 0
+		}
+		if m.inProgress() {
+			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+				return spinnerTickMsg{}
+			})
+		}
+		return m, nil
+
 	case portforward.ForwardMonitorTick:
 		m.ensureValidSelection()
 		if m.isPortForwardEnv() {
@@ -438,6 +500,22 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Any key press dismisses the last action message
 		m.lastAction = ""
 
+		// Dismiss overlays on any key
+		if m.viewingService >= 0 {
+			m.viewingService = -1
+			return m, nil
+		}
+		if m.showingShortcuts {
+			m.showingShortcuts = false
+			return m, nil
+		}
+		if m.showStats {
+			m.showStats = false
+			m.statsContainer = ""
+			m.statsData = ""
+			return m, nil
+		}
+
 		// ── Pending key sequence ────────────────────────────────
 		if m.keyPending != "" && !m.inputtingEnv && !m.inDiscovery && !m.editingPort {
 			pending := m.keyPending
@@ -473,39 +551,42 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if len(m.currentEnvServices()) == 0 {
 						break
 					}
-					m.lastAction = "Deleting all services..."
-					go func() {
-						_ = docker.Down(m.profile.Name, env.Name)
-					}()
-					updated, err := m.cfg.ClearServices(m.profile.Name, env.Name)
-					if err != nil {
-						m.lastAction = "✗ " + err.Error()
+				m.lastAction = "Deleting all services..."
+				go func() {
+					_ = docker.Down(m.profile.Name, env.Name)
+				}()
+				updated, err := m.cfg.ClearServices(m.profile.Name, env.Name)
+				if err != nil {
+					m.lastAction = "✗ " + err.Error()
+				} else {
+					m.profile = updated
+					if _, err := config.GenerateCompose(*m.profile, env.Name); err != nil {
+						m.lastAction = "✗ compose gen: " + err.Error()
 					} else {
-						m.profile = updated
-						if _, err := config.GenerateCompose(*m.profile, env.Name); err != nil {
-							m.lastAction = "✗ compose gen: " + err.Error()
-						} else {
-							m.lastAction = "✓ All services deleted"
-						}
-						m.cursor = 0
-						m.rememberCurrentEnvSelection()
+						m.lastAction = "✓ All services deleted"
 					}
-					return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
+					m.cursor = 0
+					m.rememberCurrentEnvSelection()
+				}
+				return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second), spinnerCmd())
 
 				case "v":
 					// rv → reset volumes (Docker only)
 					if m.isPortForwardEnv() || len(m.currentEnvServices()) == 0 {
 						break
 					}
-					m.loading = true
-					m.lastAction = "Resetting volumes..."
-					return m, func() tea.Msg {
+				m.loading = true
+				m.lastAction = "Resetting volumes..."
+				return m, tea.Batch(
+					func() tea.Msg {
 						err := docker.DownVolumes(m.profile.Name, env.Name)
 						if err != nil {
 							return actionDoneMsg{label: "Reset volumes", err: err}
 						}
 						return actionDoneMsg{label: "Volumes reset. Run start to recreate.", err: nil}
-					}
+					},
+					spinnerCmd(),
+				)
 				}
 			}
 			// Invalid sequence → let key fall through to normal handling below
@@ -655,12 +736,11 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.lastAction = "✗ kubectl not found in PATH"
 					return m, ClearActionAfter(3 * time.Second)
 				}
-				// If env already has forwards, skip context selection and
-				// go directly to namespace picking using the known context.
+				m.inDiscovery = true
+				m.discoveryStep = 0
+				m.discoveryCursor = 0
 				if knownCtx := m.knownForwardCtx(); knownCtx != "" {
-					m.inDiscovery = true
 					m.discoveryStep = 1
-					m.discoveryCursor = 0
 					m.discoveryNSs = nil
 					m.discoverySvcs = nil
 					m.discoverySelCtx = knownCtx
@@ -705,55 +785,67 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						break
 					}
 				}
-				m.loading = true
-				if isRunning {
-					m.lastAction = "Stopping " + svc.Name + "..."
-					return m, func() tea.Msg {
+			m.loading = true
+			if isRunning {
+				m.lastAction = "Stopping " + svc.Name + "..."
+				return m, tea.Batch(
+					func() tea.Msg {
 						err := docker.DownService(m.profile.Name, envName, compName)
 						return actionDoneMsg{label: svc.Name + " stopped", err: err}
-					}
-				}
-				m.lastAction = "Starting " + svc.Name + "..."
-				return m, func() tea.Msg {
+					},
+					spinnerCmd(),
+				)
+			}
+			m.lastAction = "Starting " + svc.Name + "..."
+			return m, tea.Batch(
+				func() tea.Msg {
 					err := docker.UpService(m.profile.Name, envName, compName)
 					return actionDoneMsg{label: svc.Name + " started", err: err}
-				}
+				},
+				spinnerCmd(),
+			)
 			}
 
 		case key.Matches(msg, profileKeys.start):
 			env := m.currentEnv()
 			if env != nil {
-				if m.isPortForwardEnv() {
-					envName := m.profile.Environments[m.activeEnv].Name
-					m.lastAction = "Starting forwards..."
-					cmds := m.startEnvForwards(envName)
-					cmds = append(cmds, ClearActionAfter(3*time.Second))
-					return m, tea.Batch(cmds...)
-				}
-				m.loading = true
-				m.lastAction = "Starting " + env.Name + "..."
-				return m, func() tea.Msg {
+			if m.isPortForwardEnv() {
+				envName := m.profile.Environments[m.activeEnv].Name
+				m.lastAction = "Starting forwards..."
+				cmds := m.startEnvForwards(envName)
+				cmds = append(cmds, ClearActionAfter(3*time.Second), spinnerCmd())
+				return m, tea.Batch(cmds...)
+			}
+			m.loading = true
+			m.lastAction = "Starting " + env.Name + "..."
+			return m, tea.Batch(
+				func() tea.Msg {
 					err := docker.Up(m.profile.Name, env.Name)
 					return actionDoneMsg{label: "Stack started", err: err}
-				}
+				},
+				spinnerCmd(),
+			)
 			}
 
 		case key.Matches(msg, profileKeys.stop):
 			env := m.currentEnv()
 			if env != nil {
-				if m.isPortForwardEnv() {
-					envName := m.profile.Environments[m.activeEnv].Name
-					m.lastAction = "Stopping forwards..."
-					cmds := m.stopEnvForwards(envName)
-					cmds = append(cmds, ClearActionAfter(3*time.Second))
-					return m, tea.Batch(cmds...)
-				}
-				m.loading = true
-				m.lastAction = "Stopping " + env.Name + "..."
-				return m, func() tea.Msg {
+			if m.isPortForwardEnv() {
+				envName := m.profile.Environments[m.activeEnv].Name
+				m.lastAction = "Stopping forwards..."
+				cmds := m.stopEnvForwards(envName)
+				cmds = append(cmds, ClearActionAfter(3*time.Second), spinnerCmd())
+				return m, tea.Batch(cmds...)
+			}
+			m.loading = true
+			m.lastAction = "Stopping " + env.Name + "..."
+			return m, tea.Batch(
+				func() tea.Msg {
 					err := docker.Down(m.profile.Name, env.Name)
 					return actionDoneMsg{label: "Stack stopped", err: err}
-				}
+				},
+				spinnerCmd(),
+			)
 			}
 
 		case key.Matches(msg, profileKeys.resetVol):
@@ -825,7 +917,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.rememberCurrentEnvSelection()
 			}
-			return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
+			return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second), spinnerCmd())
 
 		case key.Matches(msg, profileKeys.envDelete):
 			if len(m.profile.Environments) == 0 {
@@ -886,6 +978,100 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+
+		case key.Matches(msg, profileKeys.viewConfig):
+			if !m.isPortForwardEnv() {
+				svcs := m.currentEnvServices()
+				if len(svcs) > 0 && m.cursor < len(svcs) {
+					m.viewingService = m.cursor
+					return m, nil
+				}
+			}
+
+		case key.Matches(msg, profileKeys.stats):
+			if m.isPortForwardEnv() {
+				break
+			}
+			svcs := m.currentEnvServices()
+			if m.cursor >= len(svcs) {
+				break
+			}
+			svc := svcs[m.cursor]
+			envName := m.profile.Environments[m.activeEnv].Name
+			compName := svc.ComposeName()
+			containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, envName, compName)
+
+			isRunning := false
+			for _, st := range m.statuses {
+				if st.Name == containerName && st.State == "running" {
+					isRunning = true
+					break
+				}
+			}
+			if !isRunning {
+				m.lastAction = "✗ unavailable: service not running"
+				return m, ClearActionAfter(3 * time.Second)
+			}
+			m.showStats = true
+			m.statsContainer = containerName
+			m.statsData = "Loading..."
+			return m, tea.Tick(1*time.Millisecond, func(t time.Time) tea.Msg {
+				return statsTickMsg{container: containerName}
+			})
+
+		case key.Matches(msg, profileKeys.pull):
+			if m.isPortForwardEnv() {
+				break
+			}
+			svcs := m.currentEnvServices()
+			if m.cursor >= len(svcs) {
+				break
+			}
+			svc := svcs[m.cursor]
+			env := m.currentEnv()
+			m.lastAction = "Pulling " + svc.Name + "..."
+			m.loading = true
+			return m, tea.Batch(spinnerCmd(), func() tea.Msg {
+				err := docker.ComposePull(m.profile.Name, env.Name, svc.Name)
+				return actionDoneMsg{label: svc.Name + " pull completed", err: err}
+			})
+
+		case key.Matches(msg, profileKeys.shell):
+			if m.isPortForwardEnv() {
+				break
+			}
+			svcs := m.currentEnvServices()
+			if m.cursor >= len(svcs) {
+				break
+			}
+			svc := svcs[m.cursor]
+			env := m.currentEnv()
+			compName := svc.ComposeName()
+			containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, env.Name, compName)
+
+			isRunning := false
+			for _, st := range m.statuses {
+				if st.Name == containerName && st.State == "running" {
+					isRunning = true
+					break
+				}
+			}
+			if !isRunning {
+				m.lastAction = "✗ unavailable: service not running"
+				return m, ClearActionAfter(3 * time.Second)
+			}
+			cmd, err := docker.ExecShell(containerName)
+			if err != nil {
+				m.lastAction = "✗ " + err.Error()
+				return m, ClearActionAfter(3 * time.Second)
+			}
+			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+				return actionDoneMsg{label: "shell closed", err: err}
+			})
+
+		case msg.String() == "?":
+			m.showingShortcuts = true
+			return m, nil
 		}
 	}
 	m.ensureValidSelection()
@@ -902,6 +1088,21 @@ func (m *ProfileViewModel) selectedDBType() string {
 		return ""
 	}
 	return svcs[m.cursor].DBType()
+}
+
+func (m *ProfileViewModel) isSelectedServiceRunning() bool {
+	env := m.currentEnv()
+	if env == nil || m.cursor >= len(env.Services) {
+		return false
+	}
+	svc := env.Services[m.cursor]
+	containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, env.Name, svc.Name)
+	for _, st := range m.statuses {
+		if st.Name == containerName && st.State == "running" {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *ProfileViewModel) currentEnv() *config.Environment {
@@ -1021,6 +1222,10 @@ func (m *ProfileViewModel) StopAllForwards() {
 }
 
 func (m *ProfileViewModel) View() string {
+	if m.showingShortcuts {
+		return m.renderShortcuts()
+	}
+
 	var b strings.Builder
 	b.WriteString("\n")
 
@@ -1037,8 +1242,8 @@ func (m *ProfileViewModel) View() string {
 			b.WriteString(styles.StyleSubtitle.Render("  context: " + shortCtxName(ctx)))
 			b.WriteString("\n\n")
 		}
-		if m.inDiscovery {
-			b.WriteString(m.renderDiscovery())
+	if m.inDiscovery {
+		b.WriteString(m.renderDiscovery())
 		} else if m.editingPort {
 			b.WriteString(m.renderPortForwards())
 			b.WriteString("\n\n")
@@ -1047,13 +1252,19 @@ func (m *ProfileViewModel) View() string {
 			b.WriteString(m.renderPortForwards())
 		}
 	} else {
-		b.WriteString(m.renderServices(env))
+		if m.showStats {
+			b.WriteString(m.renderStats())
+		} else if m.viewingService >= 0 && m.viewingService < len(env.Services) {
+			b.WriteString(m.renderConfigPanel(env.Services[m.viewingService]))
+		} else {
+			b.WriteString(m.renderServices(env))
+		}
 	}
 
 	if m.lastAction != "" {
 		b.WriteString("\n")
-		msg := wrapText(m.lastAction, m.width-4)
-		// Indent every line consistently
+		spinner := m.spinnerFrameStr()
+		msg := wrapText(spinner+m.lastAction, m.width-4)
 		msg = "  " + strings.ReplaceAll(msg, "\n", "\n  ")
 		if strings.HasPrefix(m.lastAction, "✗") {
 			b.WriteString(styles.StyleError.Render(msg))
@@ -1090,7 +1301,9 @@ func (m *ProfileViewModel) View() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("\n\n")
+	if !m.inDiscovery {
+		b.WriteString("\n\n")
+	}
 
 	// ── Help bar ──
 	if m.inDiscovery {
@@ -1100,8 +1313,11 @@ func (m *ProfileViewModel) View() string {
 	} else {
 		b.WriteString(m.renderDockerHelpBar())
 	}
-	b.WriteString("\n\n")
+	if !m.inDiscovery {
+		b.WriteString("\n\n")
+	}
 	if m.inDiscovery {
+		b.WriteString("\n\n")
 		b.WriteString(styles.InlineHelp(styles.HelpItem("esc", "cancel")))
 	} else {
 		b.WriteString(styles.BackHelp(styles.HelpItem("← →", "envs")))
@@ -1517,9 +1733,14 @@ func (m *ProfileViewModel) renderDiscovery() string {
 	switch m.discoveryStep {
 	case 0:
 		dTotal := len(m.discoveryCtxs)
-		win := m.discoveryItemWindow(dTotal)
 		b.WriteString(styles.StyleHeader.Render("  Select K8s context:"))
 		b.WriteString("\n\n")
+		if dTotal == 0 {
+			b.WriteString(styles.StyleSubtitle.Render("  Loading contexts..."))
+			b.WriteString("\n")
+			break
+		}
+		win := m.discoveryItemWindow(dTotal)
 		var rows []string
 		if above := win.start; above > 0 {
 			rows = append(rows, styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", above)))
@@ -1534,13 +1755,62 @@ func (m *ProfileViewModel) renderDiscovery() string {
 		b.WriteString(strings.Join(rows, "\n"))
 		b.WriteString("\n\n" + styles.InlineHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "select")))
 
+	case 1:
+		dTotal := len(m.discoveryNSs)
+		b.WriteString(styles.StyleHeader.Render("  Select namespace for '" + m.discoverySelCtx + "':"))
+		b.WriteString("\n\n")
+		if dTotal == 0 {
+			b.WriteString(styles.StyleSubtitle.Render("  Loading namespaces..."))
+			b.WriteString("\n")
+			break
+		}
+		win := m.discoveryItemWindow(dTotal)
+		var rows []string
+		if above := win.start; above > 0 {
+			rows = append(rows, styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", above)))
+		}
+		for i := win.start; i < win.end; i++ {
+			ns := m.discoveryNSs[i]
+			rows = append(rows, renderDiscoveryItem(ns, i == m.discoveryCursor))
+		}
+		if below := dTotal - win.end; below > 0 {
+			rows = append(rows, styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", below)))
+		}
+		b.WriteString(strings.Join(rows, "\n"))
+		b.WriteString("\n\n" + styles.InlineHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "select")))
+
+	case 2:
+		dTotal := len(m.discoverySvcs)
+		b.WriteString(styles.StyleHeader.Render("  Select service in '" + m.discoverySelCtx + "/" + m.discoverySelNS + "':"))
+		b.WriteString("\n\n")
+		if dTotal == 0 {
+			b.WriteString(styles.StyleSubtitle.Render("  Loading services..."))
+			b.WriteString("\n")
+			break
+		}
+		win := m.discoveryItemWindow(dTotal)
+		var rows []string
+		if above := win.start; above > 0 {
+			rows = append(rows, styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", above)))
+		}
+		for i := win.start; i < win.end; i++ {
+			svc := m.discoverySvcs[i]
+			label := fmt.Sprintf("%s  %d/TCP", svc.Name, svc.RemotePort)
+			rows = append(rows, renderDiscoveryItem(label, i == m.discoveryCursor))
+		}
+		if below := dTotal - win.end; below > 0 {
+			rows = append(rows, styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", below)))
+		}
+		b.WriteString(strings.Join(rows, "\n"))
+		b.WriteString("\n\n" + styles.InlineHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "select")))
+
 	case 3:
 		b.WriteString(styles.StyleHeader.Render("  Confirm port-forward:"))
 		b.WriteString("\n\n")
 		b.WriteString("  Service:  " + styles.StyleCode.Render(m.discoveredPF.Name) + "\n")
 		b.WriteString("  Remote:   " + styles.StyleCode.Render(fmt.Sprintf("%d", m.discoveredPF.RemotePort)) + "\n")
 		b.WriteString("  Local:    " + m.portInput.View() + "\n")
-		b.WriteString("\n\n" + styles.InlineHelp(styles.HelpItem("esc", "cancel"), styles.HelpItem("↵", "confirm")))
+		b.WriteString("\n\n" + styles.InlineHelp(styles.HelpItem("↵", "confirm")))
 	}
 
 	return b.String()
@@ -1576,6 +1846,12 @@ func (m *ProfileViewModel) renderDockerHelpBar() string {
 		}
 		if len(svcs) > 1 {
 			svcItems = append(svcItems, styles.HelpItem("d d", "delete"))
+		}
+		svcItems = append(svcItems, styles.HelpItem("v", "view"))
+		svcItems = append(svcItems, styles.HelpItem("p", "pull"))
+		if hasRunning && m.isSelectedServiceRunning() {
+			svcItems = append(svcItems, styles.HelpItem("h", "shell"))
+			svcItems = append(svcItems, styles.HelpItem("t", "stats"))
 		}
 		stackItems = append(stackItems, styles.HelpItem("s", "stack all"))
 		if hasRunning {
@@ -1625,6 +1901,117 @@ func (m *ProfileViewModel) renderPFHelpBar() string {
 		styles.HelpGroup{Label: "PortForward", Items: pfItems},
 		styles.HelpGroup{Label: "Stack", Items: stackItems},
 	)
+}
+
+// ── Config Panel ──────────────────────────────────────────────────────────
+
+func (m *ProfileViewModel) renderConfigPanel(svc config.Service) string {
+	cardW := m.width - 4
+	if cardW < 40 {
+		cardW = 40
+	}
+	if cardW > 80 {
+		cardW = 80
+	}
+
+	var lines []string
+	lines = append(lines, styles.StyleHeader.Render(svc.Name))
+	lines = append(lines, "  "+styles.StyleCode.Render(svc.FullImage()))
+	lines = append(lines, "")
+
+	lines = append(lines, styles.StyleInputLabel.Render("Ports"))
+	if len(svc.Ports) > 0 {
+		for _, p := range svc.Ports {
+			lines = append(lines, styles.StyleSubtitle.Render("  "+p.String()))
+		}
+	} else {
+		lines = append(lines, styles.StyleSubtitle.Render("  (none)"))
+	}
+	lines = append(lines, "")
+
+	lines = append(lines, styles.StyleInputLabel.Render("Env Vars"))
+	if len(svc.EnvVars) > 0 {
+		for _, ev := range svc.EnvVars {
+			lines = append(lines, styles.StyleSubtitle.Render("  "+ev.Key+"="+ev.Value))
+		}
+	} else {
+		lines = append(lines, styles.StyleSubtitle.Render("  (none)"))
+	}
+	lines = append(lines, "")
+
+	lines = append(lines, styles.StyleInputLabel.Render("Volumes"))
+	if len(svc.Volumes) > 0 {
+		for _, v := range svc.Volumes {
+			lines = append(lines, styles.StyleSubtitle.Render("  "+v.Source+" → "+v.Target))
+		}
+	} else {
+		lines = append(lines, styles.StyleSubtitle.Render("  (none)"))
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return styles.StylePanelFocused.Width(cardW).Render(content) + "\n\n  press any key to return"
+}
+
+// ── Shortcuts Reference ───────────────────────────────────────────────────
+
+func (m *ProfileViewModel) renderShortcuts() string {
+	cardW := m.width - 4
+	if cardW < 40 {
+		cardW = 40
+	}
+	if cardW > 80 {
+		cardW = 80
+	}
+
+	type pair struct{ k, v string }
+	col := func(title string, items []pair) string {
+		var lines []string
+		lines = append(lines, styles.StyleInputLabel.Render(title))
+		for _, it := range items {
+			lines = append(lines, styles.StyleSubtitle.Render(fmt.Sprintf("  %-5s %s", it.k, it.v)))
+		}
+		return lipgloss.JoinVertical(lipgloss.Left, lines...)
+	}
+
+	nav := col("Navigation", []pair{
+		{"← →", "switch env"},
+		{"↑ ↓", "navigate"},
+		{"enter", "open / toggle"},
+		{"esc", "back"},
+	})
+
+	svc := col("Services", []pair{
+		{"s", "start"},
+		{"x", "stop"},
+		{"a", "add service"},
+		{"d d", "delete svc"},
+		{"o", "db ops"},
+		{"v", "view config"},
+		{"t", "stats"},
+	})
+
+	envCol := col("Env / Stack", []pair{
+		{"s", "start all"},
+		{"x", "stop all"},
+		{"r r", "reset all"},
+		{"r v", "reset volumes"},
+		{"n", "add env"},
+		{"D D", "delete env"},
+	})
+
+	pf := col("Port-Forward", []pair{
+		{"e", "edit port"},
+		{"k", "discover"},
+		{"↵", "toggle"},
+		{"d d", "delete"},
+	})
+
+	pad := "   "
+	row1 := lipgloss.JoinHorizontal(lipgloss.Top, nav, pad, svc)
+	row2 := lipgloss.JoinHorizontal(lipgloss.Top, envCol, pad, pf)
+	content := lipgloss.JoinVertical(lipgloss.Left, row1, "", row2)
+
+	return styles.StylePanelFocused.Width(cardW).Render(content) + "\n\n  press any key to return"
 }
 
 // ── Discovery Key Handler ──────────────────────────────────────────────────
@@ -1693,7 +2080,11 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 	// ── Steps 0-2: navigation mode ──
 	switch {
 	case key.Matches(msg, profileKeys.back):
-		// Cancel discovery
+		if m.discoveryStep > 0 {
+			m.discoveryStep--
+			m.discoveryCursor = 0
+			return m, nil
+		}
 		m.inDiscovery = false
 		m.discoveryStep = 0
 		m.discoveryCtxs = nil
@@ -1803,13 +2194,16 @@ func (m *ProfileViewModel) handleForwardToggle() (tea.Model, tea.Cmd) {
 
 	// Start (Stopped or Failed)
 	m.lastAction = "Starting " + h.Config.Name + "..."
-	return m, func() tea.Msg {
-		err := h.Start()
-		if err != nil {
-			return actionDoneMsg{label: "Start " + h.Config.Name, err: err}
-		}
-		return actionDoneMsg{label: h.Config.Name + " running", err: nil}
-	}
+	return m, tea.Batch(
+		func() tea.Msg {
+			err := h.Start()
+			if err != nil {
+				return actionDoneMsg{label: "Start " + h.Config.Name, err: err}
+			}
+			return actionDoneMsg{label: h.Config.Name + " running", err: nil}
+		},
+		spinnerCmd(),
+	)
 }
 
 // ── Forward Delete ─────────────────────────────────────────────────────────
@@ -1941,4 +2335,55 @@ func wrapText(s string, maxWidth int) string {
 		b.WriteString(line)
 	}
 	return b.String()
+}
+
+// ── Spinner ────────────────────────────────────────────────────────────────
+
+func (m *ProfileViewModel) inProgress() bool {
+	return m.loading || strings.HasPrefix(m.lastAction, "Starting") ||
+		strings.HasPrefix(m.lastAction, "Stopping") ||
+		strings.HasPrefix(m.lastAction, "Resetting") ||
+		strings.HasPrefix(m.lastAction, "Deleting")
+}
+
+func (m *ProfileViewModel) spinnerFrameStr() string {
+	if !m.inProgress() {
+		return ""
+	}
+	idx := m.spinnerFrame % len(spinnerFrames)
+	return spinnerFrames[idx] + " "
+}
+
+// ── Stats Panel ────────────────────────────────────────────────────────────
+
+func (m *ProfileViewModel) renderStats() string {
+	cardW := m.width - 4
+	if cardW < 40 {
+		cardW = 40
+	}
+	if cardW > 80 {
+		cardW = 80
+	}
+
+	var lines []string
+	lines = append(lines, styles.StyleHeader.Render("Docker Stats"))
+	lines = append(lines, styles.StyleSubtitle.Render(m.statsContainer))
+	lines = append(lines, "")
+
+	if strings.HasPrefix(m.statsData, "Loading") || strings.HasPrefix(m.statsData, "unavailable") {
+		lines = append(lines, styles.StyleSubtitle.Render(m.statsData))
+	} else {
+		parts := strings.SplitN(m.statsData, "|", 4)
+		if len(parts) == 4 {
+			lines = append(lines, styles.StyleInputLabel.Render("  CPU:      ")+styles.StyleSubtitle.Render(parts[0]))
+			lines = append(lines, styles.StyleInputLabel.Render("  Memory:   ")+styles.StyleSubtitle.Render(parts[1]))
+			lines = append(lines, styles.StyleInputLabel.Render("  Net I/O:  ")+styles.StyleSubtitle.Render(parts[2]))
+			lines = append(lines, styles.StyleInputLabel.Render("  Block I/O:")+styles.StyleSubtitle.Render(parts[3]))
+		} else {
+			lines = append(lines, styles.StyleError.Render("Error parsing stats"))
+		}
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return styles.StylePanelFocused.Width(cardW).Render(content) + "\n\n  press any key to dismiss"
 }

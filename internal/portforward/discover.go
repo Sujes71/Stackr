@@ -15,6 +15,17 @@ func CheckKubectl() bool {
 	return err == nil
 }
 
+// CheckK8sAuth verifies kubectl can access the given context by running
+// `kubectl cluster-info --context <ctx>`. Returns nil on success, or an
+// error containing the stderr output on failure (expired token, etc.).
+func CheckK8sAuth(context string) error {
+	out, err := exec.Command("kubectl", "cluster-info", "--context", context).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // DiscoverContexts returns the list of available K8s context names
 // by running: kubectl config get-contexts -o name.
 func DiscoverContexts() ([]string, error) {

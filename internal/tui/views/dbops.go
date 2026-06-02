@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stackr/stackr/internal/config"
+	"github.com/stackr/stackr/internal/crypto"
 	"github.com/stackr/stackr/internal/docker"
 	"github.com/stackr/stackr/internal/tui/styles"
 )
@@ -32,6 +33,11 @@ const (
 type dbOpsDoneMsg struct {
 	result string
 	err    error
+}
+
+// serviceStartedMsg is sent when docker.UpService completes for the prompt flow.
+type serviceStartedMsg struct {
+	err error
 }
 
 // ── Model ─────────────────────────────────────────────────────────────────────
@@ -61,6 +67,11 @@ type DBOpsModel struct {
 	actions            []actionItem // cached for view rendering
 	truncatedSinceData bool         // disable truncate until next import
 	lastActionLabel    string       // label of action being executed
+
+	// Prompt state (start service before import/truncate)
+	promptStartService bool
+	startingService    bool
+	pendingAction      string // action label to execute after service starts
 
 	// Running state (shared across screens)
 	running    bool
@@ -336,18 +347,47 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 // ── Task 4.3: SyncEnv Actions screen ─────────────────────────────────────────
 
 func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Handle start-service prompt inline
+	if m.promptStartService {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "y", "Y":
+				m.promptStartService = false
+				m.startingService = true
+				svc := m.currentService()
+				if svc == nil {
+					m.promptStartService = false
+					m.startingService = false
+					m.pendingAction = ""
+					m.lastResult = styles.StyleError.Render("Service not found.")
+					return m, ClearActionAfter(3 * time.Second)
+				}
+				return m, func() tea.Msg {
+					err := docker.UpService(m.profile.Name, m.envName, svc.ComposeName())
+					return serviceStartedMsg{err: err}
+				}
+			case "n", "N", "esc":
+				m.promptStartService = false
+				m.pendingAction = ""
+				return m, nil
+			}
+		}
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, dbOpsBack):
-			if m.running {
+			if m.running || m.startingService {
 				return m, nil
 			}
 			m.screen = dbScreenSyncEnvList
 			m.selectedEnv = ""
 			m.actions = nil
 
-		case key.Matches(msg, dbOpsUp) && !m.running:
+		case key.Matches(msg, dbOpsUp) && !m.running && !m.promptStartService && !m.startingService:
 			for i := m.actionCursor - 1; i >= 0; i-- {
 				if m.actions[i].enabled {
 					m.actionCursor = i
@@ -355,7 +395,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, dbOpsDown) && !m.running:
+		case key.Matches(msg, dbOpsDown) && !m.running && !m.promptStartService && !m.startingService:
 			for i := m.actionCursor + 1; i < len(m.actions); i++ {
 				if m.actions[i].enabled {
 					m.actionCursor = i
@@ -363,10 +403,19 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, dbOpsEnter) && !m.running:
+		case key.Matches(msg, dbOpsEnter) && !m.running && !m.promptStartService && !m.startingService:
 			if m.actionCursor < len(m.actions) {
 				act := m.actions[m.actionCursor]
 				if act.enabled {
+					// For Import/Truncate actions, check container is running and offer to start it
+					if act.group == "Import" || strings.Contains(act.label, "Truncate") {
+						container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
+						if !m.isContainerRunning(container) {
+							m.promptStartService = true
+							m.pendingAction = act.label
+							return m, nil
+						}
+					}
 					m.running = true
 					m.lastResult = ""
 					m.lastActionLabel = act.label
@@ -404,6 +453,31 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ClearActionMsg:
 		m.lastResult = ""
+
+	case serviceStartedMsg:
+		m.startingService = false
+		if msg.err != nil {
+			m.lastResult = formatErrorMsg("start service: " + msg.err.Error())
+			return m, ClearActionAfter(3 * time.Second)
+		}
+		// Execute the pending action
+		m.running = true
+		m.lastResult = ""
+		m.lastActionLabel = m.pendingAction
+		svc := m.currentService()
+		if svc != nil {
+			if se := svc.FindSyncEnv(m.selectedEnv); se != nil {
+				m.actions = m.buildActionsList(se)
+				for _, act := range m.actions {
+					if act.label == m.pendingAction && act.enabled {
+						return m, act.execute()
+					}
+				}
+			}
+		}
+		m.running = false
+		m.lastResult = styles.StyleError.Render("Could not find action '" + m.pendingAction + "'")
+		return m, ClearActionAfter(3 * time.Second)
 	}
 	return m, nil
 }
@@ -430,7 +504,20 @@ func (m *DBOpsModel) viewActions() string {
 	b.WriteString(styles.StyleSubtitle.Render(
 		fmt.Sprintf("  %s  %s:%s  %s@%s", syncEnv.DBType, syncEnv.Host, syncEnv.Port, syncEnv.User, syncEnv.Database),
 	))
+	if syncEnv.Password != "" && crypto.IsEncrypted(syncEnv.Password) {
+		b.WriteString("\n" + styles.StyleSubtitle.Render("  \U0001F512 Password: [encrypted]"))
+	}
 	b.WriteString("\n\n")
+
+	// Prompt: start service before import/truncate
+	if m.promptStartService {
+		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
+		b.WriteString(styles.StyleSubtitle.Render("  Service '" + m.serviceName + "' is not running.") + "\n")
+		b.WriteString("  " + promptStyle.Render("Start it?") + "  " + styles.StyleSubtitle.Render("(y/n)") + "\n\n\n")
+	}
+	if m.startingService {
+		b.WriteString(styles.StyleSubtitle.Render("  Starting " + m.serviceName + "\u2026") + "\n\n")
+	}
 
 	// Action group sections rendered inline (no boxes)
 	groupHeaderStyle := lipgloss.NewStyle().
@@ -450,7 +537,7 @@ func (m *DBOpsModel) viewActions() string {
 
 		isCursor := i == m.actionCursor
 
-		if act.enabled && !m.running {
+		if act.enabled && !m.running && !m.startingService {
 			if isCursor {
 				b.WriteString(selStyle.Render("    > " + act.label) + "\n")
 			} else {

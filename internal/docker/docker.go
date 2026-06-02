@@ -124,6 +124,10 @@ func DownVolumes(profileName, envName string) error {
 	return runDocker(composeArgs(profileName, envName, "down", "-v")...)
 }
 
+func ComposePull(profileName, envName, service string) error {
+	return runDocker(composeArgs(profileName, envName, "pull", service)...)
+}
+
 func Restart(profileName, envName, service string) error {
 	return runDocker(composeArgs(profileName, envName, "restart", service)...)
 }
@@ -208,8 +212,12 @@ func PgDump(syncEnv *config.SyncEnv, outPath, flag string) error {
 		args = append(args, flag)
 	}
 	args = append(args, syncEnv.Database)
+	pass, err := syncEnv.GetPassword()
+	if err != nil {
+		return fmt.Errorf("decrypt password: %w", err)
+	}
 	cmd := exec.Command("pg_dump", args...)
-	cmd.Env = append(os.Environ(), "PGPASSWORD="+syncEnv.Password)
+	cmd.Env = append(os.Environ(), "PGPASSWORD="+pass)
 	out, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -225,10 +233,14 @@ func MongoDump(syncEnv *config.SyncEnv, outDir string) error {
 	if !ToolAvailable("mongodump") {
 		return fmt.Errorf("mongodump not found in PATH. Install MongoDB Database Tools: brew install mongodb-database-tools")
 	}
+	pass, err := syncEnv.GetPassword()
+	if err != nil {
+		return fmt.Errorf("decrypt password: %w", err)
+	}
 	cmd := exec.Command("mongodump",
 		"--host", syncEnv.Host+":"+syncEnv.Port,
 		"--username", syncEnv.User,
-		"--password", syncEnv.Password,
+		"--password", pass,
 		"--authenticationDatabase", syncEnv.AuthDB,
 		"--db", syncEnv.Database,
 		"--out", outDir,
@@ -246,8 +258,12 @@ func MySqlDump(syncEnv *config.SyncEnv, outPath string) error {
 		return fmt.Errorf("mysqldump not found in PATH. Install MySQL client tools: brew install mysql-client")
 	}
 	args := []string{"-h", syncEnv.Host, "-P", syncEnv.Port, "-u", syncEnv.User, syncEnv.Database}
+	pass, err := syncEnv.GetPassword()
+	if err != nil {
+		return fmt.Errorf("decrypt password: %w", err)
+	}
 	cmd := exec.Command("mysqldump", args...)
-	cmd.Env = append(os.Environ(), "MYSQL_PWD="+syncEnv.Password)
+	cmd.Env = append(os.Environ(), "MYSQL_PWD="+pass)
 	out, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("mysqldump: %w", err)
@@ -286,6 +302,27 @@ func ContainerExec(container string, args ...string) (string, error) {
 		return "", fmt.Errorf("docker exec: %w", err)
 	}
 	return string(out), nil
+}
+
+// ExecShell returns a command to open an interactive shell (bash or sh) in the container.
+// The command is NOT executed — the caller must run it or pass it to tea.Exec.
+// Stdio is connected to the terminal so the shell is fully interactive.
+func ExecShell(containerName string) (*exec.Cmd, error) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		return nil, fmt.Errorf("docker not available")
+	}
+
+	shell := "sh"
+	checkCmd := exec.Command("docker", "exec", containerName, "which", "bash")
+	if err := checkCmd.Run(); err == nil {
+		shell = "bash"
+	}
+
+	cmd := exec.Command("docker", "exec", "-it", containerName, shell)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd, nil
 }
 
 // ContainerExecWithEnv runs a command inside the container with env vars set via -e flags.
@@ -550,12 +587,16 @@ func SqlPackageExport(syncEnv *config.SyncEnv, outPath string) error {
 	if !ToolAvailable("sqlpackage") {
 		return fmt.Errorf("sqlpackage CLI not found. Install via: dotnet tool install -g microsoft.sqlpackage")
 	}
+	pass, err := syncEnv.GetPassword()
+	if err != nil {
+		return fmt.Errorf("decrypt password: %w", err)
+	}
 	args := []string{
 		"/Action:Export",
 		"/SourceServerName:" + syncEnv.Host + "," + syncEnv.Port,
 		"/SourceDatabaseName:" + syncEnv.Database,
 		"/SourceUser:" + syncEnv.User,
-		"/SourcePassword:" + syncEnv.Password,
+		"/SourcePassword:" + pass,
 		"/TargetFile:" + outPath,
 	}
 	return exec.Command("sqlpackage", args...).Run()

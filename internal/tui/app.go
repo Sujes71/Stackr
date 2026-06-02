@@ -29,6 +29,7 @@ type App struct {
 	width           int
 	height          int
 	profileNavState map[string]views.ProfileNavState
+	homeCursor      int
 
 	// child views
 	home        *views.HomeModel
@@ -98,12 +99,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 	a.err = ""
 	a.captureProfileNavState(nav)
+	if a.screen == ScreenHome {
+		a.homeCursor = a.home.Cursor()
+	}
 	switch nav.Screen {
 
 	case views.NavHome:
 		a.screen = ScreenHome
 		a.home = views.NewHome(a.cfg)
 		a.home.SetSize(a.width, a.height)
+		a.home.SetCursor(a.homeCursor)
 		return a, a.home.Init()
 
 	case views.NavNewProfile:

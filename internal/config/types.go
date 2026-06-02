@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stackr/stackr/internal/crypto"
 	"gopkg.in/yaml.v3"
 )
 
@@ -37,6 +38,7 @@ type Profile struct {
 	Environments []Environment `yaml:"environments"`
 	ActiveEnv            string      `yaml:"active_env"`
 	LegacyDBOpsMigrated  bool        `yaml:"legacy_db_ops_migrated,omitempty"`
+	ConfigVersion        int         `yaml:"config_version,omitempty"` // 0 = legacy/plaintext, 1 = encrypted passwords
 }
 
 type Environment struct {
@@ -173,6 +175,31 @@ type PortForward struct {
 	K8sService   string `yaml:"k8s_service"`
 }
 
+// GetPassword returns the decrypted password.
+// If the password is encrypted, it is decrypted on-the-fly using the master key.
+// Empty passwords are returned as-is.
+func (s SyncEnv) GetPassword() (string, error) {
+	if s.Password == "" {
+		return "", nil
+	}
+	return crypto.Decrypt(crypto.GetKey(), s.Password)
+}
+
+// SetPassword encrypts the plaintext password and stores it in the Password field.
+// Empty passwords are stored as empty (not encrypted).
+func (s *SyncEnv) SetPassword(plaintext string) error {
+	if plaintext == "" {
+		s.Password = ""
+		return nil
+	}
+	encrypted, err := crypto.Encrypt(crypto.GetKey(), plaintext)
+	if err != nil {
+		return fmt.Errorf("encrypt password: %w", err)
+	}
+	s.Password = encrypted
+	return nil
+}
+
 // Validate checks that all required fields are set and valid.
 // Returns a map of field name → error message for invalid fields.
 func (s SyncEnv) Validate() map[string]string {
@@ -258,7 +285,48 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	var cfg Config
-	return &cfg, yaml.Unmarshal(data, &cfg)
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	// Initialize encryption key before any crypto operations
+	if err := crypto.Init(); err != nil {
+		return nil, fmt.Errorf("init encryption: %w", err)
+	}
+	// Migrate legacy plaintext passwords to encrypted format if needed
+	if err := cfg.maybeMigratePasswords(); err != nil {
+		return nil, fmt.Errorf("password migration: %w", err)
+	}
+	return &cfg, nil
+}
+
+// maybeMigratePasswords encrypts any plaintext SyncEnv passwords in profiles
+// that have ConfigVersion < 1, then saves the migrated config.
+func (c *Config) maybeMigratePasswords() error {
+	migrated := false
+	for i := range c.Profiles {
+		p := &c.Profiles[i]
+		if p.ConfigVersion >= 1 {
+			continue
+		}
+		for j := range p.Environments {
+			for k := range p.Environments[j].Services {
+				for l := range p.Environments[j].Services[k].SyncEnvs {
+					se := &p.Environments[j].Services[k].SyncEnvs[l]
+					if se.Password != "" && !crypto.IsEncrypted(se.Password) {
+						if err := se.SetPassword(se.Password); err != nil {
+							return err
+						}
+						migrated = true
+					}
+				}
+			}
+		}
+		p.ConfigVersion = 1
+	}
+	if migrated {
+		return c.Save()
+	}
+	return nil
 }
 
 func (c *Config) Save() error {
