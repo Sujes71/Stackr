@@ -759,12 +759,12 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case key.Matches(keyMsg, dbOpsBack):
 		m.addingCustomAction = false
 
-	case keyMsg.String() == "shift+tab":
+	case key.Matches(keyMsg, dbOpsUp):
 		if m.customFormFocus > 0 {
 			m.customFormFocus--
 		}
 
-	case key.Matches(keyMsg, dbOpsDown), keyMsg.String() == "tab":
+	case key.Matches(keyMsg, dbOpsDown):
 		if m.customFormFocus < 1 {
 			m.customFormFocus++
 		}
@@ -1103,9 +1103,9 @@ func (m *DBOpsModel) viewCustomForm() string {
 	}
 
 		b.WriteString("  " + styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "field"),
 			styles.HelpItem("↵", "save"),
-			styles.HelpItem("esc", "cancel"),
 		) + "\n\n")
 	return b.String()
 }
@@ -1134,8 +1134,8 @@ func (m *DBOpsModel) viewParamPrompt() string {
 
 	b.WriteString("\n")
 	b.WriteString("  " + styles.InlineHelp(
-		styles.HelpItem("enter", "next"),
 		styles.HelpItem("esc", "cancel"),
+		styles.HelpItem("enter", "next"),
 	) + "\n")
 	return b.String()
 }
