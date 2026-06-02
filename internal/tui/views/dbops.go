@@ -589,19 +589,21 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastResult = formatErrorMsg(msg.err.Error())
 		} else {
 			m.lastResult = styles.StyleSuccess.Render("\u2713 " + msg.result)
-			// Re-scan dump states — imports/exports affect dump availability
-			svc := m.currentService()
-			if svc != nil {
-				if se := svc.FindSyncEnv(m.selectedEnv); se != nil {
-					m.actions = m.buildActionsList(se)
-					m.actionCursor = m.firstEnabledAction()
-				}
-			}
-			// Track truncate vs import to toggle truncate availability
+			// Track truncate vs import to toggle truncate availability (must happen before rebuild)
 			if m.lastActionLabel == "Truncate tables" {
 				m.truncatedSinceData = true
 			} else if hasImportPrefix(m.lastActionLabel) {
 				m.truncatedSinceData = false
+			}
+			// Re-scan dump states — imports/exports affect dump availability
+			svc := m.currentService()
+			if svc != nil {
+				if se := svc.FindSyncEnv(m.selectedEnv); se != nil {
+			m.actions = m.buildActionsList(se)
+			if m.actionCursor >= len(m.actions) || !m.actions[m.actionCursor].enabled {
+				m.actionCursor = m.firstEnabledAction()
+			}
+				}
 			}
 			return m, ClearActionAfter(3 * time.Second)
 		}
@@ -681,7 +683,11 @@ func (m *DBOpsModel) updateCustomConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.confirmCustomAction = false
 			m.running = true
 			m.lastResult = ""
-			m.lastActionLabel = "Custom action"
+			if m.actionCursor < len(m.actions) {
+				m.lastActionLabel = m.actions[m.actionCursor].label
+			} else {
+				m.lastActionLabel = "Custom action"
+			}
 			return m, tea.Batch(m.customActionExecCmd(m.pendingCustomCmd), spinnerCmd())
 		case key.Matches(msg, dbOpsBack):
 			m.confirmCustomAction = false
@@ -798,11 +804,67 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *DBOpsModel) customActionExecCmd(cmd string) tea.Cmd {
 	return func() tea.Msg {
-		substituted := cmd
-		for k, v := range m.paramValues {
+		svc := m.currentService()
+		if svc == nil {
+			return dbOpsDoneMsg{err: fmt.Errorf("service not found")}
+		}
+		se := svc.FindSyncEnv(m.selectedEnv)
+		if se == nil {
+			return dbOpsDoneMsg{err: fmt.Errorf("sync env not found")}
+		}
+
+	container := docker.ContainerName(m.profile.Name, m.envName, svc.ComposeName())
+
+	// Get local Docker credentials from service environment variables
+	localUser, localPass, localDB := getLocalDBCredentials(svc, se.DBType)
+
+	// Build auto-variables: {host} uses remote for exports, {local_host} etc for local ops
+	autoVars := map[string]string{
+		"host":        se.Host,
+		"user":        se.User,
+		"password":    se.Password,
+		"database":    se.Database,
+		"db":          se.Database,
+		"env":         m.envName,
+		"local_user":  localUser,
+		"local_pass":  localPass,
+		"local_db":    localDB,
+	}
+
+	// Substitute all variables (auto + user params)
+	substituted := cmd
+	for k, v := range m.paramValues {
+		substituted = strings.ReplaceAll(substituted, "{"+k+"}", v)
+	}
+	for k, v := range autoVars {
+		if v != "" {
 			substituted = strings.ReplaceAll(substituted, "{"+k+"}", v)
 		}
-		out, err := exec.Command("sh", "-c", substituted).CombinedOutput()
+	}
+
+	// Auto-wrap in DB client if it looks like raw SQL (no shell command prefix)
+	shellCmd := substituted
+	if !strings.HasPrefix(shellCmd, "psql") &&
+		!strings.HasPrefix(shellCmd, "mysql") &&
+		!strings.HasPrefix(shellCmd, "mongo") &&
+		!strings.HasPrefix(shellCmd, "mongosh") &&
+		!strings.HasPrefix(shellCmd, "sqlcmd") &&
+		!strings.HasPrefix(shellCmd, "sh ") &&
+		!strings.HasPrefix(shellCmd, "bash ") {
+		switch se.DBType {
+		case "postgres":
+			shellCmd = fmt.Sprintf(`psql -h localhost -U %s -d %s -c "%s"`, localUser, localDB, strings.ReplaceAll(substituted, `"`, `\"`))
+		case "mongo":
+			shellCmd = fmt.Sprintf(`mongo -u %s -p %s --authenticationDatabase admin %s --eval '%s'`, localUser, localPass, localDB, strings.ReplaceAll(substituted, "'", `'\''`))
+		case "mysql", "mariadb":
+			shellCmd = fmt.Sprintf(`mysql -h localhost -u %s -p%s %s -e "%s"`, localUser, localPass, localDB, strings.ReplaceAll(substituted, `"`, `\"`))
+		case "mssql":
+			shellCmd = fmt.Sprintf(`sqlcmd -S localhost -U %s -P %s -d %s -Q "%s"`, localUser, localPass, localDB, strings.ReplaceAll(substituted, `"`, `\"`))
+			}
+		}
+
+		dockerCmd := exec.Command("docker", "exec", "-i", container, "sh", "-c", shellCmd)
+		out, err := dockerCmd.CombinedOutput()
 		if err != nil {
 			return dbOpsDoneMsg{err: fmt.Errorf("custom action: %s: %w", strings.TrimSpace(string(out)), err)}
 		}
@@ -817,14 +879,22 @@ func (m *DBOpsModel) customActionExecCmd(cmd string) tea.Cmd {
 
 var paramRe = regexp.MustCompile(`\{(\w+)\}`)
 
+// autoVars are built-in placeholders replaced automatically (not prompted).
+var autoVarNames = map[string]bool{
+	"host": true, "user": true, "password": true,
+	"database": true, "db": true, "env": true,
+	"local_user": true, "local_pass": true, "local_db": true,
+}
+
 func extractParams(cmd string) []string {
 	matches := paramRe.FindAllStringSubmatch(cmd, -1)
 	var params []string
 	seen := map[string]bool{}
 	for _, m := range matches {
-		if !seen[m[1]] {
-			seen[m[1]] = true
-			params = append(params, m[1])
+		name := m[1]
+		if !seen[name] && !autoVarNames[name] {
+			seen[name] = true
+			params = append(params, name)
 		}
 	}
 	return params
@@ -913,7 +983,14 @@ func (m *DBOpsModel) viewActions() string {
 			if i > 0 {
 				b.WriteString("\n")
 			}
-			b.WriteString("  " + groupHeaderStyle.Render(currentGroup) + "\n")
+			b.WriteString("  " + groupHeaderStyle.Render(currentGroup))
+			switch currentGroup {
+			case "Export":
+				b.WriteString(" " + styles.StyleSubtitle.Render("("+m.selectedEnv+")"))
+			default:
+				b.WriteString(" " + styles.StyleSubtitle.Render("(local)"))
+			}
+			b.WriteString("\n")
 		}
 
 		isCursor := i == m.actionCursor
@@ -1491,4 +1568,51 @@ func (m *DBOpsModel) firstEnabledAction() int {
 // hasImportPrefix returns true when label matches any "Import" action.
 func hasImportPrefix(label string) bool {
 	return strings.HasPrefix(label, "Import")
+}
+
+// getLocalDBCredentials extracts local database credentials from the service's
+// environment variables (POSTGRES_USER, MYSQL_ROOT_PASSWORD, etc.).
+func getLocalDBCredentials(svc *config.Service, dbType string) (user, pass, db string) {
+	envMap := make(map[string]string)
+	for _, ev := range svc.EnvVars {
+		envMap[ev.Key] = ev.Value
+	}
+
+	switch dbType {
+	case "postgres":
+		user = envMap["POSTGRES_USER"]
+		if user == "" {
+			user = "postgres"
+		}
+		pass = envMap["POSTGRES_PASSWORD"]
+		db = envMap["POSTGRES_DB"]
+		if db == "" {
+			db = "postgres"
+		}
+	case "mongo":
+		user = envMap["MONGO_INITDB_ROOT_USERNAME"]
+		if user == "" {
+			user = "admin"
+		}
+		pass = envMap["MONGO_INITDB_ROOT_PASSWORD"]
+		db = envMap["MONGO_INITDB_DATABASE"]
+		if db == "" {
+			db = "admin"
+		}
+	case "mysql", "mariadb":
+		user = "root"
+		pass = envMap["MYSQL_ROOT_PASSWORD"]
+		db = envMap["MYSQL_DATABASE"]
+		if db == "" {
+			db = "mysql"
+		}
+	case "mssql":
+		user = "sa"
+		pass = envMap["SA_PASSWORD"] // or MSSQL_SA_PASSWORD
+		db = envMap["MSSQL_DB"]
+		if db == "" {
+			db = "master"
+		}
+	}
+	return
 }
