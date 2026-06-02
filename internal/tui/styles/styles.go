@@ -263,7 +263,7 @@ func ForwardDot(state portforward.ForwardState) string {
 	case portforward.ForwardFailed:
 		c = ColorError // red
 	case portforward.ForwardStopped:
-		c = ColorMuted // gray
+		c = ColorError // red — match Docker Dot("stopped")
 	default:
 		c = ColorMuted // gray
 	}

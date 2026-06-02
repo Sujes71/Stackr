@@ -71,6 +71,10 @@ type ProfileViewModel struct {
 	showStats      bool
 	statsContainer string
 	statsData      string
+
+	// ── Batch Spinner ──
+	pendingOps   map[string]string // containerName → "start" | "stop"
+	spinnerFrame int
 }
 
 type ProfileEnvState struct {
@@ -104,6 +108,7 @@ func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
 		localProcesses: make(map[string]*exec.Cmd),
 		portInput:      portInput,
 		viewingService: -1,
+		pendingOps:  make(map[string]string),
 	}
 	// set activeEnv to the profile's saved active env
 	for i, env := range p.Environments {
@@ -136,12 +141,24 @@ type statusLoadedMsg struct {
 	err      string
 }
 
-// ── Stubs (kept for compilation, no-op) ─────────────────────────────────
+// ── Container name helper ───────────────────────────────────────────────
 
-var spinnerFrames = []string{""}
+func containerName(profile, env, compose string) string {
+	return fmt.Sprintf("stackr-%s-%s-%s", profile, env, compose)
+}
+
+// ── Spinner ─────────────────────────────────────────────────────────────
+
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func spinnerCmd() tea.Cmd {
-	return func() tea.Msg { return nil }
+	return func() tea.Msg { return spinnerTickMsg{} }
+}
+
+func (m *ProfileViewModel) renderSpinnerDot(op string) string {
+	c := styles.ColorAccent
+	frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+	return lipgloss.NewStyle().Foreground(c).Render(fmt.Sprintf("%s %s", frame, op))
 }
 
 type ClearActionMsg struct{}
@@ -398,6 +415,49 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusErr = msg.err
 		m.ensureValidSelection()
 		m.rebuildDisplayOrders()
+
+		// Resolve pending ops against actual status
+		statusMap := map[string]string{}
+		for _, st := range m.statuses {
+			statusMap[st.Name] = st.State
+		}
+		for key, op := range m.pendingOps {
+			if strings.HasPrefix(key, "proc:") {
+				procName := strings.TrimPrefix(key, "proc:")
+				running := m.isLocalProcRunning(procName)
+				if (op == "start" && running) || (op == "stop" && !running) {
+					delete(m.pendingOps, key)
+				}
+			} else if strings.HasPrefix(key, "pf:") {
+				fwdName := strings.TrimPrefix(key, "pf:")
+				for _, h := range m.currentForwards() {
+					if h.Config.Name == fwdName {
+						if (op == "start" && (h.State == portforward.ForwardRunning || h.State == portforward.ForwardFailed)) ||
+							(op == "stop" && (h.State == portforward.ForwardStopped || h.State == portforward.ForwardFailed)) {
+							delete(m.pendingOps, key)
+						}
+						break
+					}
+				}
+			} else {
+				state := statusMap[key]
+				if op == "start" && (state == "running" || state == "starting") {
+					delete(m.pendingOps, key)
+				}
+				if op == "stop" && (state == "" || state == "stopped" || state == "exited") {
+					delete(m.pendingOps, key)
+				}
+			}
+		}
+
+	case spinnerTickMsg:
+		if len(m.pendingOps) > 0 {
+			m.spinnerFrame++
+			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+				return spinnerTickMsg{}
+			})
+		}
+		m.spinnerFrame = 0
 
 	case ClearActionMsg:
 
@@ -755,18 +815,24 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 					if isRunning {
+						m.pendingOps[containerName] = "stop"
 						return m, tea.Batch(
 							func() tea.Msg {
 								_ = docker.DownService(m.profile.Name, envName, compName)
 								return m.refreshStatus()
 							},
+							m.loadStatus(),
+							func() tea.Msg { return spinnerTickMsg{} },
 						)
 					}
+					m.pendingOps[containerName] = "start"
 					return m, tea.Batch(
 						func() tea.Msg {
 							_ = docker.UpService(m.profile.Name, envName, compName)
 							return m.refreshStatus()
 						},
+						m.loadStatus(),
+						func() tea.Msg { return spinnerTickMsg{} },
 					)
 				}
 			} else {
@@ -775,6 +841,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if procIdx < len(env.LocalProcesses) {
 					proc := env.LocalProcesses[procIdx]
 					if m.isLocalProcRunning(proc.Name) {
+						m.pendingOps["proc:"+proc.Name] = "stop"
 						cmd := m.localProcesses[proc.Name]
 						return m, tea.Batch(
 							func() tea.Msg {
@@ -783,11 +850,13 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 									go func() { cmd.Process.Wait() }()
 								}
 								delete(m.localProcesses, proc.Name)
-								return nil
+								return m.refreshStatus()
 							},
 							m.loadStatus(),
+							func() tea.Msg { return spinnerTickMsg{} },
 						)
 					}
+					m.pendingOps["proc:"+proc.Name] = "start"
 					return m, tea.Batch(
 						func() tea.Msg {
 							if m.isLocalProcRunning(proc.Name) {
@@ -806,12 +875,13 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								cmd.Dir = wd
 							}
 							if err := cmd.Start(); err != nil {
-								return nil
+								return m.refreshStatus()
 							}
 							m.localProcesses[proc.Name] = cmd
-							return nil
+							return m.refreshStatus()
 						},
 						m.loadStatus(),
+						func() tea.Msg { return spinnerTickMsg{} },
 					)
 				}
 			}
@@ -821,9 +891,23 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if env != nil {
 				if m.isPortForwardEnv() {
 					envName := m.profile.Environments[m.activeEnv].Name
+					for _, h := range m.forwardHandles[envName] {
+						if h.State != portforward.ForwardRunning && h.State != portforward.ForwardStarting {
+							m.pendingOps["pf:"+h.Config.Name] = "start"
+						}
+					}
 					cmds := m.startEnvForwards(envName)
-					cmds = append(cmds, m.loadStatus())
+					cmds = append(cmds, m.loadStatus(), func() tea.Msg { return spinnerTickMsg{} })
 					return m, tea.Batch(cmds...)
+				}
+				// Populate pending ops for spinner
+				for i := range env.Services {
+					svc := env.Services[i]
+					cn := containerName(m.profile.Name, env.Name, svc.ComposeName())
+					m.pendingOps[cn] = "start"
+				}
+				for i := range env.LocalProcesses {
+					m.pendingOps["proc:"+env.LocalProcesses[i].Name] = "start"
 				}
 				// Start ALL local processes at once (non-blocking)
 				m.startAllLocalProcesses(env)
@@ -836,7 +920,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m.refreshStatus()
 					})
 				}
-				cmds = append(cmds, m.loadStatus())
+				cmds = append(cmds, m.loadStatus(), func() tea.Msg { return spinnerTickMsg{} })
 				return m, tea.Batch(cmds...)
 			}
 
@@ -845,9 +929,23 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if env != nil {
 				if m.isPortForwardEnv() {
 					envName := m.profile.Environments[m.activeEnv].Name
+					for _, h := range m.forwardHandles[envName] {
+						if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
+							m.pendingOps["pf:"+h.Config.Name] = "stop"
+						}
+					}
 					cmds := m.stopEnvForwards(envName)
-					cmds = append(cmds, m.loadStatus())
+					cmds = append(cmds, m.loadStatus(), func() tea.Msg { return spinnerTickMsg{} })
 					return m, tea.Batch(cmds...)
+				}
+				// Populate pending ops for spinner
+				for i := range env.Services {
+					svc := env.Services[i]
+					cn := containerName(m.profile.Name, env.Name, svc.ComposeName())
+					m.pendingOps[cn] = "stop"
+				}
+				for i := range env.LocalProcesses {
+					m.pendingOps["proc:"+env.LocalProcesses[i].Name] = "stop"
 				}
 				// Stop ALL local processes at once
 				m.StopAllLocalProcesses()
@@ -860,7 +958,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m.refreshStatus()
 					})
 				}
-				cmds = append(cmds, m.loadStatus())
+				cmds = append(cmds, m.loadStatus(), func() tea.Msg { return spinnerTickMsg{} })
 				return m, tea.Batch(cmds...)
 			}
 
@@ -1260,12 +1358,10 @@ func (m *ProfileViewModel) startEnvForwards(envName string) []tea.Cmd {
 	var cmds []tea.Cmd
 	for _, h := range m.forwardHandles[envName] {
 		if h.State != portforward.ForwardRunning && h.State != portforward.ForwardStarting {
+			h := h // capture
 			cmds = append(cmds, func() tea.Msg {
-				err := h.Start()
-				if err != nil {
-					return nil
-				}
-				return nil
+				h.Start()
+				return m.refreshStatus()
 			})
 		}
 	}
@@ -1276,12 +1372,10 @@ func (m *ProfileViewModel) stopEnvForwards(envName string) []tea.Cmd {
 	var cmds []tea.Cmd
 	for _, h := range m.forwardHandles[envName] {
 		if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
+			h := h // capture
 			cmds = append(cmds, func() tea.Msg {
-				err := h.Stop()
-				if err != nil {
-					return nil
-				}
-				return nil
+				h.Stop()
+				return m.refreshStatus()
 			})
 		}
 	}
@@ -1601,9 +1695,13 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 			containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, env.Name, svc.ComposeName())
 			st := statusMap[containerName]
 
-			dot := styles.Dot(st.State)
-			if st.State == "" {
+			var dot string
+			if op, pending := m.pendingOps[containerName]; pending {
+				dot = m.renderSpinnerDot(op)
+			} else if st.State == "" {
 				dot = styles.Dot("stopped")
+			} else {
+				dot = styles.Dot(st.State)
 			}
 
 			name := styles.StyleHeader.Render(svc.Name)
@@ -1635,7 +1733,12 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 			proc := env.LocalProcesses[procIdx]
 			running := m.isLocalProcRunning(proc.Name)
 
-			dot := styles.LocalProcessDot(running)
+			var dot string
+			if op, pending := m.pendingOps["proc:"+proc.Name]; pending {
+				dot = m.renderSpinnerDot(op)
+			} else {
+				dot = styles.LocalProcessDot(running)
+			}
 			name := styles.StyleHeader.Render(proc.Name)
 
 			line1 := lipgloss.JoinHorizontal(lipgloss.Center, dot, "  ", name)
@@ -1769,9 +1872,14 @@ func (m *ProfileViewModel) renderPortForwards() string {
 		h := forwards[i]
 		fwd := h.Config
 
-		// Line 1: state dot + name
-		stateLine := styles.ForwardDot(h.State)
-		name := styles.StyleHeader.Render(fwd.Name)
+	// Line 1: state dot + name
+	var stateLine string
+	if op, pending := m.pendingOps["pf:"+fwd.Name]; pending {
+		stateLine = m.renderSpinnerDot(op)
+	} else {
+		stateLine = styles.ForwardDot(h.State)
+	}
+	name := styles.StyleHeader.Render(fwd.Name)
 		line1 := lipgloss.JoinHorizontal(lipgloss.Center, stateLine, "  ", name)
 
 		// Line 2: local:remote  →  namespace/service
@@ -2369,22 +2477,26 @@ func (m *ProfileViewModel) handleForwardToggle() (tea.Model, tea.Cmd) {
 	h := forwards[m.selectedForwardIndex()]
 
 	if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
+		m.pendingOps["pf:"+h.Config.Name] = "stop"
 		return m, tea.Batch(
 			func() tea.Msg {
 				h.Stop()
-				return nil
+				return m.refreshStatus()
 			},
 			m.loadStatus(),
+			func() tea.Msg { return spinnerTickMsg{} },
 		)
 	}
 
 	// Start (Stopped or Failed)
+	m.pendingOps["pf:"+h.Config.Name] = "start"
 	return m, tea.Batch(
 		func() tea.Msg {
 			h.Start()
-			return nil
+			return m.refreshStatus()
 		},
 		m.loadStatus(),
+		func() tea.Msg { return spinnerTickMsg{} },
 	)
 }
 
