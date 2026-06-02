@@ -399,6 +399,23 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ensureValidSelection()
 		m.rebuildDisplayOrders()
 
+	case batchSeqMsg:
+		env := m.currentEnv()
+		if env == nil || env.Name != msg.envName {
+			return m, nil
+		}
+		var stepCmd tea.Cmd
+		if msg.isStart {
+			stepCmd = m.handleBatchStartSeq(env, msg)
+		} else {
+			stepCmd = m.handleBatchStopSeq(env, msg)
+		}
+		cmds := []tea.Cmd{m.loadStatus()}
+		if stepCmd != nil {
+			cmds = append(cmds, stepCmd)
+		}
+		return m, tea.Batch(cmds...)
+
 	case ClearActionMsg:
 
 	case statsTickMsg:
@@ -825,13 +842,13 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, m.loadStatus())
 					return m, tea.Batch(cmds...)
 				}
-				return m, tea.Batch(
-					func() tea.Msg {
-						m.startAllLocalProcesses(env)
-						_ = docker.Up(m.profile.Name, env.Name)
-						return m.refreshStatus()
-					},
-				)
+				return m, func() tea.Msg {
+					return batchSeqMsg{
+						envName: m.profile.Environments[m.activeEnv].Name,
+						isStart: true,
+						step:    0,
+					}
+				}
 			}
 
 		case key.Matches(msg, profileKeys.stop):
@@ -843,13 +860,13 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, m.loadStatus())
 					return m, tea.Batch(cmds...)
 				}
-				return m, tea.Batch(
-					func() tea.Msg {
-						m.StopAllLocalProcesses()
-						_ = docker.Down(m.profile.Name, env.Name)
-						return m.refreshStatus()
-					},
-				)
+				return m, func() tea.Msg {
+					return batchSeqMsg{
+						envName: m.profile.Environments[m.activeEnv].Name,
+						isStart: false,
+						step:    0,
+					}
+				}
 			}
 
 		case key.Matches(msg, profileKeys.resetVol):
@@ -1328,6 +1345,67 @@ func (m *ProfileViewModel) startAllLocalProcesses(env *config.Environment) {
 	for i := range env.LocalProcesses {
 		m.startLocalProcess(env.LocalProcesses[i])
 	}
+}
+
+// handleBatchStartSeq processes one step of a sequential start-all operation.
+// Steps through local processes (non-blocking, in Update), then Docker services
+// (blocking, in closure), one at a time with status refresh between each.
+func (m *ProfileViewModel) handleBatchStartSeq(env *config.Environment, msg batchSeqMsg) tea.Cmd {
+	numProcs := len(env.LocalProcesses)
+	numSvcs := len(env.Services)
+	total := numProcs + numSvcs
+
+	if msg.step < total {
+		if msg.step < numProcs {
+			// Local process step — non-blocking, run in Update
+			m.startLocalProcess(env.LocalProcesses[msg.step])
+			// Tick so the statusLoadedMsg arrives and renders before the next step
+			return tea.Tick(80*time.Millisecond, func(t time.Time) tea.Msg {
+				return batchSeqMsg{envName: msg.envName, isStart: true, step: msg.step + 1}
+			})
+		}
+		// Docker service step — blocking, run in a closure
+		svc := env.Services[msg.step-numProcs]
+		return func() tea.Msg {
+			_ = docker.UpService(m.profile.Name, env.Name, svc.ComposeName())
+			return batchSeqMsg{envName: msg.envName, isStart: true, step: msg.step + 1}
+		}
+	}
+	// All done
+	return nil
+}
+
+// handleBatchStopSeq processes one step of a sequential stop-all operation.
+// Steps through local processes (in Update), then Docker services (in closure),
+// one at a time with status refresh between each.
+func (m *ProfileViewModel) handleBatchStopSeq(env *config.Environment, msg batchSeqMsg) tea.Cmd {
+	numProcs := len(env.LocalProcesses)
+	numSvcs := len(env.Services)
+	total := numProcs + numSvcs
+
+	if msg.step < total {
+		if msg.step < numProcs {
+			// Local process step — non-blocking, run in Update
+			proc := env.LocalProcesses[msg.step]
+			if cmd, ok := m.localProcesses[proc.Name]; ok && cmd != nil && cmd.Process != nil {
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				go func(c *exec.Cmd) { c.Process.Wait() }(cmd)
+			}
+			delete(m.localProcesses, proc.Name)
+			return tea.Tick(80*time.Millisecond, func(t time.Time) tea.Msg {
+				return batchSeqMsg{envName: msg.envName, isStart: false, step: msg.step + 1}
+			})
+		}
+		// Docker service step — blocking, run in a closure
+		svc := env.Services[msg.step-numProcs]
+		return func() tea.Msg {
+			_ = docker.DownService(m.profile.Name, env.Name, svc.ComposeName())
+			return batchSeqMsg{envName: msg.envName, isStart: false, step: msg.step + 1}
+		}
+	}
+	// All done — safety net for any remaining processes
+	m.StopAllLocalProcesses()
+	return nil
 }
 
 func (m *ProfileViewModel) View() string {
