@@ -82,8 +82,7 @@ var (
 				Padding(0, 1)
 
 	StyleHelp = lipgloss.NewStyle().
-			Foreground(ColorMuted).
-			Italic(true)
+			Foreground(ColorMuted)
 
 	StyleError = lipgloss.NewStyle().
 			Foreground(ColorError).
