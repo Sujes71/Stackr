@@ -21,6 +21,7 @@ var (
 	ColorMuted     = lipgloss.Color("#54546D") // gray
 	ColorCode      = lipgloss.Color("#C0A36E") // yellow
 	ColorPurple    = lipgloss.Color("#938AA9") // purple — parameter labels
+	ColorCyan      = lipgloss.Color("#66CCCC") // cyan
 )
 
 // ── Common Styles ─────────────────────────────────────────────────────────────
@@ -265,6 +266,23 @@ func ForwardDot(state portforward.ForwardState) string {
 		c = ColorMuted // gray
 	default:
 		c = ColorMuted // gray
+	}
+	return lipgloss.NewStyle().
+		Foreground(c).
+		Render(fmt.Sprintf("● %s", state))
+}
+
+// LocalProcessDot returns a colored state indicator for local processes.
+func LocalProcessDot(running bool) string {
+	var c lipgloss.Color
+	if running {
+		c = ColorCyan // cyan
+	} else {
+		c = ColorMuted // gray
+	}
+	state := "stopped"
+	if running {
+		state = "running"
 	}
 	return lipgloss.NewStyle().
 		Foreground(c).

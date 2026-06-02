@@ -70,6 +70,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			if a.profileView != nil {
 				a.profileView.StopAllForwards()
+				a.profileView.StopAllLocalProcesses()
 			}
 			return a, tea.Quit
 		}

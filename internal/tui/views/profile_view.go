@@ -53,6 +53,8 @@ type ProfileViewModel struct {
 	// ── Port-Forward ──
 	forwardHandles map[string][]*portforward.PortForwardHandle
 
+	localProcesses map[string]*exec.Cmd
+
 	// ── Discovery State ──
 	inDiscovery      bool
 	discoveryStep    int
@@ -113,6 +115,7 @@ func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
 		envState:       make(map[string]ProfileEnvState),
 		envInput:       ti,
 		forwardHandles: make(map[string][]*portforward.PortForwardHandle),
+		localProcesses: make(map[string]*exec.Cmd),
 		portInput:      portInput,
 		viewingService: -1,
 	}
@@ -284,7 +287,7 @@ func (m *ProfileViewModel) ensureValidSelection() {
 }
 
 func (m *ProfileViewModel) clampCursor() {
-	total := len(m.currentEnvServicesUnsafe())
+	total := m.totalServiceItems()
 	if m.isPortForwardEnvUnsafe() {
 		total = len(m.currentForwardsUnsafe())
 	}
@@ -732,7 +735,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, profileKeys.down):
-			total := len(m.currentEnvServices())
+			total := m.totalServiceItems()
 			if m.isPortForwardEnv() {
 				total = len(m.currentForwards())
 			}
@@ -787,38 +790,95 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.isPortForwardEnv() {
 				return m.handleForwardToggle()
 			}
-			svcs := m.currentEnvServices()
-			if len(svcs) > 0 && m.cursor < len(svcs) {
-				svc := svcs[m.selectedServiceIndex()]
-				envName := m.profile.Environments[m.activeEnv].Name
-				compName := svc.ComposeName()
-				containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, envName, compName)
-				isRunning := false
-				for _, st := range m.statuses {
-					if st.Name == containerName && st.State == "running" {
-						isRunning = true
-						break
+			env := m.currentEnv()
+			if env == nil {
+				break
+			}
+			totalSvcs := len(env.Services)
+			if m.cursor < totalSvcs {
+				// Docker service toggle
+				svcs := m.currentEnvServices()
+				if m.cursor < len(m.serviceDisplayOrder) {
+					svcIdx := m.selectedServiceIndex()
+					if svcIdx < len(svcs) {
+						svc := svcs[svcIdx]
+						envName := env.Name
+						compName := svc.ComposeName()
+						containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, envName, compName)
+						isRunning := false
+						for _, st := range m.statuses {
+							if st.Name == containerName && st.State == "running" {
+								isRunning = true
+								break
+							}
+						}
+						m.loading = true
+						if isRunning {
+							m.lastAction = "Stopping " + svc.Name + "..."
+							return m, tea.Batch(
+								func() tea.Msg {
+									err := docker.DownService(m.profile.Name, envName, compName)
+									return actionDoneMsg{label: svc.Name + " stopped", err: err}
+								},
+								spinnerCmd(),
+							)
+						}
+						m.lastAction = "Starting " + svc.Name + "..."
+						return m, tea.Batch(
+							func() tea.Msg {
+								err := docker.UpService(m.profile.Name, envName, compName)
+								return actionDoneMsg{label: svc.Name + " started", err: err}
+							},
+							spinnerCmd(),
+						)
 					}
 				}
-				m.loading = true
-				if isRunning {
-					m.lastAction = "Stopping " + svc.Name + "..."
+			} else {
+				// Local process toggle
+				procIdx := m.cursor - totalSvcs
+				if procIdx < len(env.LocalProcesses) {
+					proc := env.LocalProcesses[procIdx]
+					if m.isLocalProcRunning(proc.Name) {
+						m.lastAction = "Stopping " + proc.Name + "..."
+						cmd := m.localProcesses[proc.Name]
+						return m, tea.Batch(
+							func() tea.Msg {
+								if cmd != nil && cmd.Process != nil {
+									cmd.Process.Kill()
+									go func() { cmd.Process.Wait() }()
+								}
+								delete(m.localProcesses, proc.Name)
+								return actionDoneMsg{label: proc.Name + " stopped", err: nil}
+							},
+							spinnerCmd(),
+						)
+					}
+					m.lastAction = "Starting " + proc.Name + "..."
 					return m, tea.Batch(
 						func() tea.Msg {
-							err := docker.DownService(m.profile.Name, envName, compName)
-							return actionDoneMsg{label: svc.Name + " stopped", err: err}
+							if m.isLocalProcRunning(proc.Name) {
+								if cmd := m.localProcesses[proc.Name]; cmd != nil && cmd.Process != nil {
+									cmd.Process.Kill()
+									go func() { cmd.Process.Wait() }()
+								}
+							}
+							cmd := exec.Command("sh", "-c", proc.Command)
+							if proc.WorkDir != "" {
+								wd := proc.WorkDir
+								if strings.HasPrefix(wd, "~") {
+									wd = strings.Replace(wd, "~", os.Getenv("HOME"), 1)
+								}
+								cmd.Dir = wd
+							}
+							if err := cmd.Start(); err != nil {
+								return actionDoneMsg{label: "Start " + proc.Name, err: err}
+							}
+							m.localProcesses[proc.Name] = cmd
+							return actionDoneMsg{label: proc.Name + " started", err: nil}
 						},
 						spinnerCmd(),
 					)
 				}
-				m.lastAction = "Starting " + svc.Name + "..."
-				return m, tea.Batch(
-					func() tea.Msg {
-						err := docker.UpService(m.profile.Name, envName, compName)
-						return actionDoneMsg{label: svc.Name + " started", err: err}
-					},
-					spinnerCmd(),
-				)
 			}
 
 		case key.Matches(msg, profileKeys.start):
@@ -902,37 +962,71 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			env := m.currentEnv()
 			svcs := m.currentEnvServices()
-			if env == nil || len(svcs) <= 1 || m.cursor >= len(svcs) {
-				break
+
+			if m.cursor < len(svcs) {
+				// Docker service delete (existing logic)
+				if env == nil || len(svcs) <= 1 || m.cursor >= len(svcs) {
+					break
+				}
+				if !m.deleteArmed {
+					m.deleteArmed = true
+					return m, nil
+				}
+				m.deleteArmed = false
+				svc := svcs[m.selectedServiceIndex()]
+				m.lastAction = "Deleting " + svc.Name + "..."
+				go func() {
+					_ = docker.Down(m.profile.Name, env.Name)
+				}()
+				updated, err := m.cfg.DeleteService(m.profile.Name, env.Name, svc.Name)
+				if err != nil {
+					m.lastAction = "✗ " + err.Error()
+					return m, tea.Batch(m.loadStatus(), ClearActionAfter(5*time.Second), spinnerCmd())
+				}
+				m.profile = updated
+				if _, err := config.GenerateCompose(*m.profile, env.Name); err != nil {
+					m.lastAction = "✗ compose gen: " + err.Error()
+					return m, tea.Batch(m.loadStatus(), ClearActionAfter(5*time.Second), spinnerCmd())
+				}
+				m.lastAction = "✓ Deleted " + svc.Name
+				remaining := m.totalServiceItems()
+				if m.cursor >= remaining && m.cursor > 0 {
+					m.cursor--
+				}
+				m.rememberCurrentEnvSelection()
+				return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second), spinnerCmd())
+			} else {
+				// Local process delete
+				procIdx := m.cursor - len(svcs)
+				if procIdx < 0 || procIdx >= len(env.LocalProcesses) {
+					break
+				}
+				if !m.deleteArmed {
+					m.deleteArmed = true
+					return m, nil
+				}
+				m.deleteArmed = false
+				proc := env.LocalProcesses[procIdx]
+				m.lastAction = "Deleting " + proc.Name + "..."
+				if cmd, ok := m.localProcesses[proc.Name]; ok && cmd != nil && cmd.Process != nil {
+					cmd.Process.Kill()
+					go func() { cmd.Process.Wait() }()
+					delete(m.localProcesses, proc.Name)
+				}
+				updated, err := m.cfg.DeleteLocalProcess(m.profile.Name, env.Name, proc.Name)
+				if err != nil {
+					m.lastAction = "✗ " + err.Error()
+					return m, tea.Batch(m.loadStatus(), ClearActionAfter(5*time.Second), spinnerCmd())
+				}
+				m.profile = updated
+				m.lastAction = "✓ Deleted " + proc.Name
+				remaining := m.totalServiceItems()
+				if m.cursor >= remaining && m.cursor > 0 {
+					m.cursor--
+				}
+				m.rememberCurrentEnvSelection()
+				return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second), spinnerCmd())
 			}
-			if !m.deleteArmed {
-				m.deleteArmed = true
-				return m, nil // return early so disarm at bottom doesn't fire
-			}
-			// Second d: delete service at cursor
-			m.deleteArmed = false
-			svc := svcs[m.selectedServiceIndex()]
-			m.lastAction = "Deleting " + svc.Name + "..."
-			go func() {
-				_ = docker.Down(m.profile.Name, env.Name)
-			}()
-			updated, err := m.cfg.DeleteService(m.profile.Name, env.Name, svc.Name)
-			if err != nil {
-				m.lastAction = "✗ " + err.Error()
-				return m, tea.Batch(m.loadStatus(), ClearActionAfter(5*time.Second), spinnerCmd())
-			}
-			m.profile = updated
-			if _, err := config.GenerateCompose(*m.profile, env.Name); err != nil {
-				m.lastAction = "✗ compose gen: " + err.Error()
-				return m, tea.Batch(m.loadStatus(), ClearActionAfter(5*time.Second), spinnerCmd())
-			}
-			m.lastAction = "✓ Deleted " + svc.Name
-			remaining := m.currentEnvServices()
-			if m.cursor >= len(remaining) && m.cursor > 0 {
-				m.cursor--
-			}
-			m.rememberCurrentEnvSelection()
-			return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second), spinnerCmd())
 
 		case key.Matches(msg, profileKeys.envDelete):
 			if len(m.profile.Environments) == 0 {
@@ -1212,6 +1306,14 @@ func (m *ProfileViewModel) currentEnvServices() []config.Service {
 	return env.Services
 }
 
+func (m *ProfileViewModel) totalServiceItems() int {
+	env := m.currentEnvUnsafe()
+	if env == nil {
+		return 0
+	}
+	return len(env.Services) + len(env.LocalProcesses)
+}
+
 func (m *ProfileViewModel) isPortForwardEnv() bool {
 	m.ensureValidSelection()
 	return m.isPortForwardEnvUnsafe()
@@ -1267,6 +1369,14 @@ func (m *ProfileViewModel) buildForwardHandles() {
 	m.clampCursor()
 }
 
+func (m *ProfileViewModel) isLocalProcRunning(name string) bool {
+	cmd, ok := m.localProcesses[name]
+	if !ok {
+		return false
+	}
+	return cmd != nil && cmd.Process != nil && cmd.ProcessState == nil
+}
+
 func (m *ProfileViewModel) startEnvForwards(envName string) []tea.Cmd {
 	var cmds []tea.Cmd
 	for _, h := range m.forwardHandles[envName] {
@@ -1311,6 +1421,16 @@ func (m *ProfileViewModel) StopAllForwards() {
 	}
 }
 
+func (m *ProfileViewModel) StopAllLocalProcesses() {
+	for name, cmd := range m.localProcesses {
+		if cmd != nil && cmd.Process != nil {
+			cmd.Process.Kill()
+			go func(c *exec.Cmd) { c.Process.Wait() }(cmd)
+		}
+		delete(m.localProcesses, name)
+	}
+}
+
 func (m *ProfileViewModel) View() string {
 	if m.showingShortcuts {
 		return m.renderShortcuts()
@@ -1333,7 +1453,7 @@ func (m *ProfileViewModel) View() string {
 		} else {
 			env := m.currentEnv()
 			if env != nil {
-				total = len(env.Services)
+				total = len(env.Services) + len(env.LocalProcesses)
 				for _, svc := range env.Services {
 					containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, env.Name, svc.ComposeName())
 					for _, st := range m.statuses {
@@ -1343,11 +1463,16 @@ func (m *ProfileViewModel) View() string {
 						}
 					}
 				}
+				for _, proc := range env.LocalProcesses {
+					if m.isLocalProcRunning(proc.Name) {
+						running++
+					}
+				}
 			}
 		}
 		if total > 0 {
 			countStr := fmt.Sprintf("%d/%d running", running, total)
-		tabsLine = tabsLine + "  " + styles.StyleSubtitle.Render(countStr)
+			tabsLine = tabsLine + "  " + styles.StyleSubtitle.Render(countStr)
 		}
 	}
 	b.WriteString(tabsLine)
@@ -1534,21 +1659,23 @@ func forwardCardHeight(h *portforward.PortForwardHandle) int {
 }
 
 func (m *ProfileViewModel) renderServices(env *config.Environment) string {
-	if len(env.Services) == 0 {
-		return styles.StyleSubtitle.Render("  No services yet. Press 'a' to add one.")
-	}
-
 	order := m.serviceDisplayOrder
 	if len(order) != len(env.Services) {
 		m.rebuildDisplayOrders()
 		order = m.serviceDisplayOrder
 	}
 
-	heights := make([]int, len(env.Services))
+	// Build heights: service cards + local process cards
+	totalItems := len(env.Services) + len(env.LocalProcesses)
+	heights := make([]int, totalItems)
 	for i, dataIdx := range order {
 		heights[i] = serviceCardHeight(len(env.Services[dataIdx].Ports))
 	}
-	win := m.serviceWindow(len(env.Services), heights)
+	for i := range env.LocalProcesses {
+		heights[len(env.Services)+i] = 3 // border(2) + name(1)
+	}
+
+	win := m.serviceWindow(totalItems, heights)
 
 	// build status map
 	statusMap := map[string]docker.ServiceStatus{}
@@ -1556,59 +1683,86 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 		statusMap[s.Name] = s
 	}
 
-	cardW := m.width - 4 // 2 left margin + 2 right margin
+	cardW := m.width - 4
 	if cardW < 40 {
 		cardW = 40
 	}
 	if cardW > 80 {
-		cardW = 80 // max width for readability
+		cardW = 80
 	}
 
 	var rows []string
 	for i := win.start; i < win.end; i++ {
-		dataIdx := order[i]
-		svc := env.Services[dataIdx]
-		containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, env.Name, svc.ComposeName())
-		st := statusMap[containerName]
+		if i < len(env.Services) {
+			// Docker service card
+			dataIdx := order[i]
+			svc := env.Services[dataIdx]
+			containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, env.Name, svc.ComposeName())
+			st := statusMap[containerName]
 
-		dot := styles.Dot(st.State)
-		if st.State == "" {
-			dot = styles.Dot("stopped")
-		}
+			dot := styles.Dot(st.State)
+			if st.State == "" {
+				dot = styles.Dot("stopped")
+			}
 
-		name := styles.StyleHeader.Render(svc.Name)
+			name := styles.StyleHeader.Render(svc.Name)
 
-		// Line 1: ● <state>  <name> (always fits in 62 content chars)
-		line1 := lipgloss.JoinHorizontal(lipgloss.Center, dot, "  ", name)
+			line1 := lipgloss.JoinHorizontal(lipgloss.Center, dot, "  ", name)
+			line2 := "   " + styles.StyleCode.Render(svc.FullImage())
 
-		// Line 2: indented image (always fits)
-		line2 := "   " + styles.StyleCode.Render(svc.FullImage())
+			var portLines []string
+			for _, p := range svc.Ports {
+				portLines = append(portLines, styles.StyleSubtitle.Render("     "+p.String()))
+			}
+			portBlock := strings.Join(portLines, "\n")
 
-		// Line 3+: ports (one per line for clean vertical display)
-		// State is already shown by the ● dot color — no text needed
-		var portLines []string
-		for _, p := range svc.Ports {
-			portLines = append(portLines, styles.StyleSubtitle.Render("     "+p.String()))
-		}
-		portBlock := strings.Join(portLines, "\n")
+			var row string
+			if len(portLines) > 0 {
+				row = lipgloss.JoinVertical(lipgloss.Left, line1, line2, portBlock)
+			} else {
+				row = lipgloss.JoinVertical(lipgloss.Left, line1, line2)
+			}
 
-		var row string
-		if len(portLines) > 0 {
-			row = lipgloss.JoinVertical(lipgloss.Left, line1, line2, portBlock)
+			if i == m.cursor {
+				rows = append(rows, styles.StylePanelFocused.Width(cardW).Render(row))
+			} else {
+				rows = append(rows, styles.StylePanel.Width(cardW).Render(row))
+			}
 		} else {
-			row = lipgloss.JoinVertical(lipgloss.Left, line1, line2)
-		}
+			// Local process card
+			procIdx := i - len(env.Services)
+			proc := env.LocalProcesses[procIdx]
+			running := m.isLocalProcRunning(proc.Name)
 
-		if i == m.cursor {
-			rows = append(rows, styles.StylePanelFocused.Width(cardW).Render(row))
-		} else {
-			rows = append(rows, styles.StylePanel.Width(cardW).Render(row))
+			dot := styles.LocalProcessDot(running)
+			name := styles.StyleHeader.Render(proc.Name)
+
+			line1 := lipgloss.JoinHorizontal(lipgloss.Center, dot, "  ", name)
+			line2 := "   " + styles.StyleCode.Render(proc.Command)
+
+			var row string
+			if proc.WorkDir != "" {
+				line3 := "     " + styles.StyleSubtitle.Render("dir: "+proc.WorkDir)
+				row = lipgloss.JoinVertical(lipgloss.Left, line1, line2, line3)
+			} else {
+				row = lipgloss.JoinVertical(lipgloss.Left, line1, line2)
+			}
+
+			if i == m.cursor {
+				rows = append(rows, styles.StylePanelFocused.Width(cardW).Render(row))
+			} else {
+				rows = append(rows, styles.StylePanel.Width(cardW).Render(row))
+			}
 		}
+	}
+
+	if len(env.Services) == 0 && len(env.LocalProcesses) == 0 {
+		return styles.StyleSubtitle.Render("  No services yet. Press 'a' to add one.")
 	}
 
 	result := strings.Join(rows, "\n")
 	if win.hasAbove || win.hasBelow {
-		result = m.decorateScroll(result, win, len(order))
+		result = m.decorateScroll(result, win, totalItems)
 	}
 	return result + "\n"
 }

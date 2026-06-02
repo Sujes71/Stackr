@@ -26,6 +26,7 @@ const (
 	svcStepEnvVars
 	svcStepVolumes
 	svcStepReview
+	svcStepRunCommand
 )
 
 type AddServiceModel struct {
@@ -83,6 +84,12 @@ type AddServiceModel struct {
 	volumes            []config.VolumeMapping
 	volumesDeleteArmed bool
 	defaultVolumes     []config.VolumeMapping // snapshot for reset on re-entry
+
+	// run command
+	runCmdName    textinput.Model
+	runCmdCmd     textinput.Model
+	runCmdWorkDir textinput.Model
+	runCmdFocus   int // 0=name, 1=command, 2=workdir
 
 	err    string
 	height int // terminal height, set via WindowSizeMsg
@@ -178,6 +185,22 @@ func NewAddService(cfg *config.Config, p *config.Profile, envName string) *AddSe
 	vs.Placeholder = "./data or volume name"
 	vs.CharLimit = 256
 	vs.Width = 30
+
+	rn := textinput.New()
+	rn.Placeholder = "my-dev-server"
+	rn.CharLimit = 64
+	rn.Width = 30
+
+	rc := textinput.New()
+	rc.Placeholder = "pnpm dev"
+	rc.CharLimit = 256
+	rc.Width = 40
+
+	rw := textinput.New()
+	rw.Placeholder = "~/my-project"
+	rw.CharLimit = 256
+	rw.Width = 40
+
 	return &AddServiceModel{
 		cfg:              cfg,
 		profile:          p,
@@ -191,6 +214,9 @@ func NewAddService(cfg *config.Config, p *config.Profile, envName string) *AddSe
 		envKey:           ek,
 		envVal:           ev,
 		volSource:        vs,
+		runCmdName:       rn,
+		runCmdCmd:        rc,
+		runCmdWorkDir:    rw,
 		protectedEnvKeys: make(map[string]bool),
 	}
 }
@@ -224,6 +250,10 @@ func (m *AddServiceModel) resetServiceData() {
 	m.tagCursor = 0
 	m.loadingTags = false
 	m.catalogCursor = 0
+	m.runCmdName.SetValue("")
+	m.runCmdCmd.SetValue("")
+	m.runCmdWorkDir.SetValue("")
+	m.runCmdFocus = 0
 }
 
 func (m *AddServiceModel) refocusInputs(step addSvcStep) tea.Cmd {
@@ -235,6 +265,9 @@ func (m *AddServiceModel) refocusInputs(step addSvcStep) tea.Cmd {
 	m.envKey.Blur()
 	m.envVal.Blur()
 	m.volSource.Blur()
+	m.runCmdName.Blur()
+	m.runCmdCmd.Blur()
+	m.runCmdWorkDir.Blur()
 
 	switch step {
 	case svcStepSearch:
@@ -257,6 +290,19 @@ func (m *AddServiceModel) refocusInputs(step addSvcStep) tea.Cmd {
 		return textinput.Blink
 	case svcStepVolumes:
 		m.volSource.Focus()
+		return textinput.Blink
+	case svcStepRunCommand:
+		m.runCmdName.Blur()
+		m.runCmdCmd.Blur()
+		m.runCmdWorkDir.Blur()
+		switch m.runCmdFocus {
+		case 0:
+			m.runCmdName.Focus()
+		case 1:
+			m.runCmdCmd.Focus()
+		case 2:
+			m.runCmdWorkDir.Focus()
+		}
 		return textinput.Blink
 	}
 	return nil
@@ -339,12 +385,17 @@ func (m *AddServiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.step = svcStepSource
 				m.sourcePath = ""
 				return m, nil
-			case svcStepSelectTag:
-				m.resetServiceData()
-				m.step = svcStepSource
-				m.sourcePath = ""
-				return m, nil
-			case svcStepName:
+		case svcStepSelectTag:
+			m.resetServiceData()
+			m.step = svcStepSource
+			m.sourcePath = ""
+			return m, nil
+		case svcStepRunCommand:
+			m.resetServiceData()
+			m.step = svcStepSource
+			m.sourcePath = ""
+			return m, nil
+		case svcStepName:
 				if m.sourcePath == "manual" {
 					m.resetServiceData()
 					m.step = svcStepSource
@@ -469,6 +520,8 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleEnvVars(msg)
 	case svcStepVolumes:
 		return m.handleVolumes(msg)
+	case svcStepRunCommand:
+		return m.handleRunCommand(msg)
 	case svcStepReview:
 		if key.Matches(msg, addSvcNext) {
 			return m, m.saveService()
@@ -478,27 +531,42 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *AddServiceModel) handleSource(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	maxIdx := 0 // only Manual
+	dockerCount := 0
+	hostOffset := 0
 	if len(hub.Catalog) > 0 {
-		maxIdx = 2 // Catalog, Search, Manual
+		dockerCount = 3 // Catalog, Search, Manual
+	} else {
+		dockerCount = 1 // Manual
 	}
+	hostOffset = dockerCount
+	maxIdx := dockerCount // last item is "Host: Run command" at position dockerCount
+
 	switch {
 	case key.Matches(msg, addSvcUp) && m.sourceCursor > 0:
 		m.sourceCursor--
 	case key.Matches(msg, addSvcDown) && m.sourceCursor < maxIdx:
 		m.sourceCursor++
 	case key.Matches(msg, addSvcNext):
-		if len(hub.Catalog) > 0 {
-			switch m.sourceCursor {
-			case 0:
-				m.sourcePath = "catalog"
-				m.step = svcStepCatalog
-			case 1:
-				m.sourcePath = "search"
-				m.step = svcStepSearch
-				m.searchInput.Focus()
-				return m, textinput.Blink
-			case 2:
+		if m.sourceCursor < hostOffset {
+			// Docker options
+			if len(hub.Catalog) > 0 {
+				switch m.sourceCursor {
+				case 0:
+					m.sourcePath = "catalog"
+					m.step = svcStepCatalog
+				case 1:
+					m.sourcePath = "search"
+					m.step = svcStepSearch
+					m.searchInput.Focus()
+					return m, textinput.Blink
+				case 2:
+					m.sourcePath = "manual"
+					m.step = svcStepName
+					m.nameFocus = 0
+					m.imageInput.Focus()
+					return m, textinput.Blink
+				}
+			} else {
 				m.sourcePath = "manual"
 				m.step = svcStepName
 				m.nameFocus = 0
@@ -506,10 +574,11 @@ func (m *AddServiceModel) handleSource(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, textinput.Blink
 			}
 		} else {
-			m.sourcePath = "manual"
-			m.step = svcStepName
-			m.nameFocus = 0
-			m.imageInput.Focus()
+			// Host: Run command
+			m.sourcePath = "run_command"
+			m.step = svcStepRunCommand
+			m.runCmdFocus = 0
+			m.runCmdName.Focus()
 			return m, textinput.Blink
 		}
 	}
@@ -972,6 +1041,147 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.updateActiveInput(msg)
 }
 
+func (m *AddServiceModel) handleRunCommand(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, addSvcUpField):
+		if m.runCmdFocus > 0 {
+			m.runCmdFocus--
+		} else {
+			m.runCmdFocus = 2
+		}
+		m.runCmdName.Blur()
+		m.runCmdCmd.Blur()
+		m.runCmdWorkDir.Blur()
+		switch m.runCmdFocus {
+		case 0:
+			m.runCmdName.Focus()
+		case 1:
+			m.runCmdCmd.Focus()
+		case 2:
+			m.runCmdWorkDir.Focus()
+		}
+		return m, textinput.Blink
+	case key.Matches(msg, addSvcDownField):
+		if m.runCmdFocus < 2 {
+			m.runCmdFocus++
+		} else {
+			m.runCmdFocus = 0
+		}
+		m.runCmdName.Blur()
+		m.runCmdCmd.Blur()
+		m.runCmdWorkDir.Blur()
+		switch m.runCmdFocus {
+		case 0:
+			m.runCmdName.Focus()
+		case 1:
+			m.runCmdCmd.Focus()
+		case 2:
+			m.runCmdWorkDir.Focus()
+		}
+		return m, textinput.Blink
+
+	case key.Matches(msg, addSvcNext):
+		name := config.SanitizeComposeName(strings.TrimSpace(m.runCmdName.Value()))
+		if name == "" {
+			m.err = "name required"
+			return m, nil
+		}
+		cmdStr := strings.TrimSpace(m.runCmdCmd.Value())
+		if cmdStr == "" {
+			m.err = "command required"
+			return m, nil
+		}
+		for _, env := range m.profile.Environments {
+			if env.Name == m.envName {
+				for _, svc := range env.Services {
+					if svc.Name == name || svc.ComposeName() == name {
+						m.err = "name already exists"
+						return m, nil
+					}
+				}
+				for _, lp := range env.LocalProcesses {
+					if lp.Name == name {
+						m.err = "name already exists"
+						return m, nil
+					}
+				}
+				break
+			}
+		}
+		m.err = ""
+		return m, m.saveLocalProcess(name, cmdStr, strings.TrimSpace(m.runCmdWorkDir.Value()))
+
+	case key.Matches(msg, addSvcTab):
+		if m.runCmdFocus < 2 {
+			m.runCmdFocus++
+		} else {
+			m.runCmdFocus = 0
+		}
+		m.runCmdName.Blur()
+		m.runCmdCmd.Blur()
+		m.runCmdWorkDir.Blur()
+		switch m.runCmdFocus {
+		case 0:
+			m.runCmdName.Focus()
+		case 1:
+			m.runCmdCmd.Focus()
+		case 2:
+			m.runCmdWorkDir.Focus()
+		}
+		return m, textinput.Blink
+	}
+	return m.updateActiveInput(msg)
+}
+
+func (m *AddServiceModel) saveLocalProcess(name, command, workDir string) tea.Cmd {
+	return func() tea.Msg {
+		for i, env := range m.profile.Environments {
+			if env.Name == m.envName {
+				m.profile.Environments[i].LocalProcesses = append(
+					m.profile.Environments[i].LocalProcesses,
+					config.LocalProcess{Name: name, Command: command, WorkDir: workDir},
+				)
+				break
+			}
+		}
+		m.profile.UpdatedAt = time.Now()
+		if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+			return ErrorMsg(err.Error())
+		}
+		return svcSavedMsg{}
+	}
+}
+
+func (m *AddServiceModel) viewRunCommand() string {
+	var b strings.Builder
+	b.WriteString("  Run command  (local process)\n\n")
+
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	normalStyle := lipgloss.NewStyle()
+
+	nameLabel, cmdLabel, dirLabel := normalStyle, normalStyle, normalStyle
+	switch m.runCmdFocus {
+	case 0:
+		nameLabel = focusStyle
+	case 1:
+		cmdLabel = focusStyle
+	case 2:
+		dirLabel = focusStyle
+	}
+
+	b.WriteString("  " + nameLabel.Render("Name:    ") + m.runCmdName.View() + "\n")
+	b.WriteString("  " + cmdLabel.Render("Command: ") + m.runCmdCmd.View() + "\n")
+	b.WriteString("  " + dirLabel.Render("Workdir: ") + m.runCmdWorkDir.View() + "\n")
+
+	b.WriteString("\n")
+	b.WriteString("  " + styles.InlineHelp(
+		styles.HelpItem("esc", "cancel"),
+		styles.HelpItem("↑ ↓", "field"),
+		styles.HelpItem("↵", "save"),
+	) + "\n")
+	return b.String()
+}
+
 func (m *AddServiceModel) saveService() tea.Cmd {
 	return func() tea.Msg {
 		for _, env := range m.profile.Environments {
@@ -1059,6 +1269,15 @@ func (m *AddServiceModel) updateActiveInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case svcStepVolumes:
 		m.volSource, cmd = m.volSource.Update(msg)
+	case svcStepRunCommand:
+		switch m.runCmdFocus {
+		case 0:
+			m.runCmdName, cmd = m.runCmdName.Update(msg)
+		case 1:
+			m.runCmdCmd, cmd = m.runCmdCmd.Update(msg)
+		case 2:
+			m.runCmdWorkDir, cmd = m.runCmdWorkDir.Update(msg)
+		}
 	}
 	return m, cmd
 }
@@ -1088,6 +1307,8 @@ func (m *AddServiceModel) View() string {
 		b.WriteString(m.viewEnvVars())
 	case svcStepVolumes:
 		b.WriteString(m.viewVolumes())
+	case svcStepRunCommand:
+		b.WriteString(m.viewRunCommand())
 	case svcStepReview:
 		b.WriteString(m.viewReview())
 	}
@@ -1099,26 +1320,33 @@ func (m *AddServiceModel) View() string {
 }
 
 func (m *AddServiceModel) viewSource() string {
-	var opts []string
+	selStyle := lipgloss.NewStyle().
+		Foreground(styles.ColorPrimary).
+		Bold(true)
+
+	groupHeaderStyle := lipgloss.NewStyle().
+		Foreground(styles.ColorSecondary).
+		Bold(true)
+
+	var b strings.Builder
+	b.WriteString("  Select source:\n\n")
+
+	// Docker group
+	var dockerItems []string
 	if len(hub.Catalog) > 0 {
-		opts = []string{
+		dockerItems = []string{
 			"Curated catalog        (postgres, mongo, redis, kafka…)",
 			"Search Docker Hub      (any public image)",
 			"Manual entry           (type image name directly)",
 		}
 	} else {
-		opts = []string{
+		dockerItems = []string{
 			"Manual entry           (type image name directly)",
 		}
 	}
 
-	selStyle := lipgloss.NewStyle().
-		Foreground(styles.ColorPrimary).
-		Bold(true)
-
-	var b strings.Builder
-	b.WriteString("  How do you want to find the image?\n\n")
-	for i, o := range opts {
+	b.WriteString("  " + groupHeaderStyle.Render("Docker") + "\n")
+	for i, o := range dockerItems {
 		if i == m.sourceCursor {
 			b.WriteString(selStyle.Render("  > " + o))
 		} else {
@@ -1126,6 +1354,20 @@ func (m *AddServiceModel) viewSource() string {
 		}
 		b.WriteString("\n")
 	}
+
+	b.WriteString("\n")
+
+	// Host group
+	hostStartIdx := len(dockerItems)
+	b.WriteString("  " + groupHeaderStyle.Render("Host") + "\n")
+	hostLabel := "Run command            (manage local processes)"
+	if m.sourceCursor == hostStartIdx {
+		b.WriteString(selStyle.Render("  > " + hostLabel))
+	} else {
+		b.WriteString("    " + hostLabel)
+	}
+	b.WriteString("\n")
+
 	b.WriteString("\n\n")
 	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "add/continue")))
 	return b.String()

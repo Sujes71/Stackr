@@ -44,7 +44,8 @@ type Profile struct {
 type Environment struct {
 	Name         string        `yaml:"name"` // local, dev, staging...
 	Services     []Service     `yaml:"services"`
-	PortForwards []PortForward `yaml:"port_forwards,omitempty"`
+	PortForwards   []PortForward   `yaml:"port_forwards,omitempty"`
+	LocalProcesses []LocalProcess  `yaml:"local_processes,omitempty"`
 }
 
 type Service struct {
@@ -236,6 +237,12 @@ func (s SyncEnv) DumpDir(profileName, envName, serviceName string) string {
 	return filepath.Join(ProfileDir(profileName), envName, "dumps", serviceName, s.Name)
 }
 
+type LocalProcess struct {
+	Name    string `yaml:"name"`
+	Command string `yaml:"command"`
+	WorkDir string `yaml:"workdir"`
+}
+
 type PortMapping struct {
 	Host      string `yaml:"host"`
 	Container string `yaml:"container"`
@@ -412,6 +419,32 @@ func (c *Config) DeleteService(profileName, envName, svcName string) (*Profile, 
 				}
 			}
 			return nil, fmt.Errorf("service %q not found in %s/%s", svcName, profileName, envName)
+		}
+		return nil, fmt.Errorf("environment %q not found in profile %q", envName, profileName)
+	}
+	return nil, fmt.Errorf("profile %q not found", profileName)
+}
+
+func (c *Config) DeleteLocalProcess(profileName, envName, procName string) (*Profile, error) {
+	for i := range c.Profiles {
+		if c.Profiles[i].Name != profileName {
+			continue
+		}
+		p := &c.Profiles[i]
+		for j := range p.Environments {
+			if p.Environments[j].Name != envName {
+				continue
+			}
+			env := &p.Environments[j]
+			for k, lp := range env.LocalProcesses {
+				if lp.Name == procName {
+					env.LocalProcesses = append(env.LocalProcesses[:k], env.LocalProcesses[k+1:]...)
+					p.UpdatedAt = time.Now()
+					cp := *p
+					return &cp, c.Save()
+				}
+			}
+			return nil, fmt.Errorf("local process %q not found in %s/%s", procName, profileName, envName)
 		}
 		return nil, fmt.Errorf("environment %q not found in profile %q", envName, profileName)
 	}
