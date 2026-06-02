@@ -1410,7 +1410,11 @@ func (m *ProfileViewModel) View() string {
 
 	if m.resetArmed {
 		b.WriteString("\n")
-		b.WriteString(styles.StyleError.Render("  Press r again to delete all, or v to reset volumes"))
+		if m.isPortForwardEnv() {
+			b.WriteString(styles.StyleError.Render("  Press r again to delete all forwards"))
+		} else {
+			b.WriteString(styles.StyleError.Render("  Press r again to delete all, or v to reset volumes"))
+		}
 		b.WriteString("\n")
 	}
 
