@@ -1107,7 +1107,7 @@ func (m *ProfileViewModel) isSelectedServiceRunning() bool {
 		return false
 	}
 	svc := env.Services[m.cursor]
-	containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, env.Name, svc.Name)
+	containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, env.Name, svc.ComposeName())
 	for _, st := range m.statuses {
 		if st.Name == containerName && st.State == "running" {
 			return true
@@ -1448,7 +1448,7 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 	var rows []string
 	for i := win.start; i < win.end; i++ {
 		svc := env.Services[i]
-		containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, env.Name, svc.Name)
+		containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, env.Name, svc.ComposeName())
 		st := statusMap[containerName]
 
 		dot := styles.Dot(st.State)
