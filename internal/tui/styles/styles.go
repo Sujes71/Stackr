@@ -20,6 +20,7 @@ var (
 	ColorError     = lipgloss.Color("#E46876") // red
 	ColorMuted     = lipgloss.Color("#54546D") // gray
 	ColorCode      = lipgloss.Color("#C0A36E") // yellow
+	ColorPurple    = lipgloss.Color("#938AA9") // purple — parameter labels
 )
 
 // ── Common Styles ─────────────────────────────────────────────────────────────

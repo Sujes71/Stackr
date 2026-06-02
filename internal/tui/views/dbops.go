@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -85,15 +86,40 @@ type DBOpsModel struct {
 
 	// Wizard (delegated)
 	wizardModel *AddSyncEnvModel
+
+	// Custom action form
+	addingCustomAction bool
+	editingCustomIdx   int    // -1 = adding new, >= 0 = editing index
+	customFormFocus    int    // 0=name, 1=command
+	customFormName     string
+	customFormCmd      string
+
+	// Custom action param prompting
+	promptingParams   bool
+	paramsToPrompt    []string
+	paramValues       map[string]string
+	currentParamIdx   int
+	currentParamInput string
+
+	// Custom action delete
+	deleteActionArmed bool
+
+	// Confirm before execute (double confirmation)
+	confirmAction       bool
+	confirmCustomAction bool
+	pendingCustomCmd   string
 }
 
 // actionItem describes a single action in the actions screen.
 type actionItem struct {
 	label          string
-	group          string // panel group label: "Export", "Import", "Truncate"
+	group          string // panel group label: "Export", "Import", "Functions"
 	enabled        bool
 	disabledReason string
 	execute        func() tea.Cmd
+	isCustom       bool
+	isAddAction    bool
+	customIdx      int // index into se.CustomActions (valid when isCustom)
 }
 
 // ── Key bindings ──────────────────────────────────────────────────────────────
@@ -396,6 +422,26 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Param prompting for custom action
+	if m.promptingParams {
+		return m.updateParamPrompt(msg)
+	}
+
+	// Confirm custom action before execute
+	if m.confirmCustomAction {
+		return m.updateCustomConfirm(msg)
+	}
+
+	// Confirm core action before execute (double confirmation)
+	if m.confirmAction {
+		return m.updateCoreConfirm(msg)
+	}
+
+	// Custom action form (add/edit)
+	if m.addingCustomAction {
+		return m.updateCustomForm(msg)
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
@@ -427,28 +473,108 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.actionCursor < len(m.actions) {
 				act := m.actions[m.actionCursor]
 				if act.enabled {
-					// For Import/Truncate actions, check container is running and offer to start it
-					if act.group == "Import" || strings.Contains(act.label, "Truncate") {
-						container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
-						if !m.isContainerRunning(container) {
-							m.promptStartService = true
-							m.pendingAction = act.label
+					if act.isAddAction {
+						m.addingCustomAction = true
+						m.editingCustomIdx = -1
+						m.customFormFocus = 0
+						m.customFormName = ""
+						m.customFormCmd = ""
+						return m, nil
+					}
+					if act.isCustom {
+						svc := m.currentService()
+						if svc == nil {
 							return m, nil
 						}
+						se := svc.FindSyncEnv(m.selectedEnv)
+						if se == nil || act.customIdx >= len(se.CustomActions) {
+							return m, nil
+						}
+						cmd := se.CustomActions[act.customIdx].Command
+						m.pendingCustomCmd = cmd
+						params := extractParams(cmd)
+						if len(params) > 0 {
+							m.promptingParams = true
+							m.paramsToPrompt = params
+							m.paramValues = make(map[string]string)
+							m.currentParamIdx = 0
+							m.currentParamInput = ""
+						} else {
+							m.confirmCustomAction = true
+						}
+						return m, nil
 					}
-				m.running = true
-				m.lastResult = ""
-				m.lastActionLabel = act.label
-				return m, tea.Batch(act.execute(), spinnerCmd())
+					// Core action: require double confirmation
+					m.confirmAction = true
 				}
 				if act.disabledReason != "" {
 					m.lastResult = styles.StyleSubtitle.Render("Unavailable: " + act.disabledReason)
 					return m, ClearActionAfter(3 * time.Second)
 				}
 			}
+
+		case key.Matches(msg, dbOpsEdit) && !m.running && !m.promptStartService && !m.startingService:
+			if m.actionCursor < len(m.actions) {
+				act := m.actions[m.actionCursor]
+				if act.isCustom {
+					svc := m.currentService()
+					if svc == nil {
+						return m, nil
+					}
+					se := svc.FindSyncEnv(m.selectedEnv)
+					if se == nil || act.customIdx >= len(se.CustomActions) {
+						return m, nil
+					}
+					m.addingCustomAction = true
+					m.editingCustomIdx = act.customIdx
+					m.customFormFocus = 0
+					m.customFormName = se.CustomActions[act.customIdx].Name
+					m.customFormCmd = se.CustomActions[act.customIdx].Command
+				}
+			}
+
+		case key.Matches(msg, dbOpsDelete) && !m.running && !m.promptStartService && !m.startingService:
+			if m.actionCursor < len(m.actions) {
+				act := m.actions[m.actionCursor]
+				if act.isCustom {
+					if !m.deleteActionArmed {
+						m.deleteActionArmed = true
+					} else {
+						// Second d: confirm delete
+						m.deleteActionArmed = false
+						svc := m.currentService()
+						if svc == nil {
+							return m, nil
+						}
+						se := svc.FindSyncEnv(m.selectedEnv)
+						if se == nil || act.customIdx >= len(se.CustomActions) {
+							return m, nil
+						}
+						se.CustomActions = append(se.CustomActions[:act.customIdx], se.CustomActions[act.customIdx+1:]...)
+						m.profile.UpdatedAt = time.Now()
+						if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+							m.lastResult = formatErrorMsg(err.Error())
+						} else {
+							m.lastResult = styles.StyleSuccess.Render("✓ Deleted custom action")
+						}
+						m.actions = m.buildActionsList(se)
+						if m.actionCursor >= len(m.actions) {
+							m.actionCursor = len(m.actions) - 1
+						}
+						return m, ClearActionAfter(3 * time.Second)
+					}
+				} else {
+					m.deleteActionArmed = false
+				}
+			}
+
+		default:
+			if m.deleteActionArmed {
+				m.deleteActionArmed = false
+			}
 		}
 
-		case dbOpsDoneMsg:
+	case dbOpsDoneMsg:
 		m.running = false
 		if msg.err != nil {
 			m.lastResult = formatErrorMsg(msg.err.Error())
@@ -503,6 +629,220 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// ── Param prompt update ───────────────────────────────────────────────────────
+
+func (m *DBOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch {
+		case key.Matches(msg, dbOpsBack):
+			m.promptingParams = false
+			return m, nil
+		case key.Matches(msg, dbOpsEnter):
+			if m.currentParamInput != "" {
+				paramName := m.paramsToPrompt[m.currentParamIdx]
+				m.paramValues[paramName] = m.currentParamInput
+				m.currentParamIdx++
+				m.currentParamInput = ""
+				if m.currentParamIdx >= len(m.paramsToPrompt) {
+					m.promptingParams = false
+					m.confirmCustomAction = true
+				}
+			}
+		default:
+			switch msg.String() {
+			case "backspace":
+				if len(m.currentParamInput) > 0 {
+					m.currentParamInput = m.currentParamInput[:len(m.currentParamInput)-1]
+				}
+			default:
+				if len(msg.String()) == 1 {
+					m.currentParamInput += msg.String()
+				}
+			}
+		}
+	}
+	return m, nil
+}
+
+// ── Custom confirm update ─────────────────────────────────────────────────────
+
+func (m *DBOpsModel) updateCustomConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch {
+		case key.Matches(msg, dbOpsEnter):
+			m.confirmCustomAction = false
+			m.running = true
+			m.lastResult = ""
+			m.lastActionLabel = "Custom action"
+			return m, tea.Batch(m.customActionExecCmd(m.pendingCustomCmd), spinnerCmd())
+		case key.Matches(msg, dbOpsBack):
+			m.confirmCustomAction = false
+		default:
+			m.confirmCustomAction = false
+		}
+	}
+	return m, nil
+}
+
+// ── Core confirm update (double confirmation) ─────────────────────────────────
+
+func (m *DBOpsModel) updateCoreConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch {
+		case key.Matches(msg, dbOpsEnter):
+			m.confirmAction = false
+			act := m.actions[m.actionCursor]
+			if act.group == "Import" || strings.Contains(act.label, "Truncate") {
+				container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
+				if !m.isContainerRunning(container) {
+					m.promptStartService = true
+					m.pendingAction = act.label
+					return m, nil
+				}
+			}
+			m.running = true
+			m.lastResult = ""
+			m.lastActionLabel = act.label
+			return m, tea.Batch(act.execute(), spinnerCmd())
+		default:
+			m.confirmAction = false
+		}
+	}
+	return m, nil
+}
+
+// ── Custom form update ────────────────────────────────────────────────────────
+
+func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		// Ctrl+V: paste from clipboard
+		if msg.Type == tea.KeyCtrlV {
+			paste, err := exec.Command("pbpaste").Output()
+			if err == nil {
+				pasted := strings.TrimSpace(string(paste))
+				if m.customFormFocus == 0 {
+					m.customFormName += pasted
+				} else {
+					m.customFormCmd += pasted
+				}
+			}
+			return m, nil
+		}
+
+		switch {
+		case key.Matches(msg, dbOpsBack):
+			m.addingCustomAction = false
+
+		case key.Matches(msg, dbOpsUp), msg.String() == "tab":
+			if m.customFormFocus > 0 {
+				m.customFormFocus--
+			}
+
+		case key.Matches(msg, dbOpsDown):
+			if m.customFormFocus < 1 {
+				m.customFormFocus++
+			}
+
+		case key.Matches(msg, dbOpsEnter):
+			// Save only when on Command field AND both fields non-empty
+			if m.customFormFocus == 1 && m.customFormName != "" && m.customFormCmd != "" {
+				svc := m.currentService()
+				if svc == nil {
+					return m, nil
+				}
+				se := svc.FindSyncEnv(m.selectedEnv)
+				if se == nil {
+					return m, nil
+				}
+
+				if m.editingCustomIdx >= 0 && m.editingCustomIdx < len(se.CustomActions) {
+					se.CustomActions[m.editingCustomIdx].Name = m.customFormName
+					se.CustomActions[m.editingCustomIdx].Command = m.customFormCmd
+				} else {
+					se.CustomActions = append(se.CustomActions, config.CustomAction{
+						Name:    m.customFormName,
+						Command: m.customFormCmd,
+					})
+				}
+				m.profile.UpdatedAt = time.Now()
+				if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+					m.lastResult = formatErrorMsg(err.Error())
+				} else {
+					m.lastResult = styles.StyleSuccess.Render("✓ Custom action saved")
+				}
+				m.addingCustomAction = false
+				m.actions = m.buildActionsList(se)
+				if m.actionCursor >= len(m.actions) {
+					m.actionCursor = len(m.actions) - 1
+				}
+				return m, ClearActionAfter(3 * time.Second)
+			}
+
+		default:
+			switch msg.String() {
+			case "backspace":
+				if m.customFormFocus == 0 && len(m.customFormName) > 0 {
+					m.customFormName = m.customFormName[:len(m.customFormName)-1]
+				} else if m.customFormFocus == 1 && len(m.customFormCmd) > 0 {
+					m.customFormCmd = m.customFormCmd[:len(m.customFormCmd)-1]
+				}
+			default:
+				if len(msg.String()) == 1 {
+					ch := msg.String()
+					if m.customFormFocus == 0 {
+						m.customFormName += ch
+					} else {
+						m.customFormCmd += ch
+					}
+				}
+			}
+		}
+	}
+	return m, nil
+}
+
+// ── Custom action execution ───────────────────────────────────────────────────
+
+func (m *DBOpsModel) customActionExecCmd(cmd string) tea.Cmd {
+	return func() tea.Msg {
+		substituted := cmd
+		for k, v := range m.paramValues {
+			substituted = strings.ReplaceAll(substituted, "{"+k+"}", v)
+		}
+		out, err := exec.Command("sh", "-c", substituted).CombinedOutput()
+		if err != nil {
+			return dbOpsDoneMsg{err: fmt.Errorf("custom action: %s: %w", strings.TrimSpace(string(out)), err)}
+		}
+		if len(out) > 0 {
+			return dbOpsDoneMsg{result: "Custom action completed: " + strings.TrimSpace(string(out))}
+		}
+		return dbOpsDoneMsg{result: "Custom action completed"}
+	}
+}
+
+// ── Param extraction ──────────────────────────────────────────────────────────
+
+var paramRe = regexp.MustCompile(`\{(\w+)\}`)
+
+func extractParams(cmd string) []string {
+	matches := paramRe.FindAllStringSubmatch(cmd, -1)
+	var params []string
+	seen := map[string]bool{}
+	for _, m := range matches {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			params = append(params, m[1])
+		}
+	}
+	return params
+}
+
+// ── View: Actions screen ──────────────────────────────────────────────────────
+
 func (m *DBOpsModel) viewActions() string {
 	svc := m.currentService()
 	if svc == nil {
@@ -534,17 +874,48 @@ func (m *DBOpsModel) viewActions() string {
 	if m.promptStartService {
 		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 		b.WriteString(styles.StyleSubtitle.Render("  Service '" + m.serviceName + "' is not running.") + "\n")
-		b.WriteString("  " + promptStyle.Render("Start it?") + "  " + styles.StyleSubtitle.Render("(y/n)") + "\n\n\n")
+		b.WriteString("  " + promptStyle.Render("Start it?") + "  " + styles.StyleSubtitle.Render("(y/n)") + "\n\n")
 	}
+
 	if m.startingService {
 		b.WriteString(styles.StyleSubtitle.Render("  Starting " + m.serviceName + "\u2026") + "\n\n")
+	}
+
+	// ── Custom action form ────────────────────────────────────────────────────
+	if m.addingCustomAction {
+		b.WriteString(m.viewCustomForm())
+		b.WriteString("\n")
+		return b.String()
+	}
+
+	// ── Param prompting ───────────────────────────────────────────────────────
+	if m.promptingParams {
+		b.WriteString(m.viewParamPrompt())
+		b.WriteString("\n")
+		return b.String()
+	}
+
+	// ── Confirm messages ──────────────────────────────────────────────────────
+	if m.confirmCustomAction {
+		b.WriteString(styles.StyleError.Render("  Press enter to execute custom action, esc to cancel") + "\n\n")
+	}
+	if m.confirmAction {
+		b.WriteString(styles.StyleError.Render("  Press enter again to confirm, any other key to cancel") + "\n\n")
 	}
 
 	// Action group sections rendered inline (no boxes)
 	groupHeaderStyle := lipgloss.NewStyle().
 		Foreground(styles.ColorPrimary).
 		Bold(true)
-	selStyle := groupHeaderStyle
+	selStyle := lipgloss.NewStyle().
+		Foreground(styles.ColorPrimary).
+		Bold(true)
+	customSelStyle := lipgloss.NewStyle().
+		Foreground(styles.ColorAccent).
+		Bold(true)
+	addSelStyle := lipgloss.NewStyle().
+		Foreground(styles.ColorPrimary).
+		Bold(true)
 
 	currentGroup := ""
 	for i, act := range m.actions {
@@ -558,17 +929,29 @@ func (m *DBOpsModel) viewActions() string {
 
 		isCursor := i == m.actionCursor
 
-		if act.enabled && !m.running && !m.startingService {
-			if isCursor {
-				b.WriteString(selStyle.Render("    > " + act.label) + "\n")
-			} else {
-				b.WriteString("      " + act.label + "\n")
-			}
-		} else {
+		if !act.enabled {
 			b.WriteString(styles.StyleSubtitle.Render("      " + act.label) + "\n")
-			if !act.enabled && act.disabledReason != "" {
+			if act.disabledReason != "" {
 				b.WriteString(styles.StyleSubtitle.Render("      unavailable: " + act.disabledReason) + "\n")
 			}
+			continue
+		}
+
+		if m.running || m.startingService {
+			b.WriteString("      " + act.label + "\n")
+			continue
+		}
+
+		if isCursor {
+			if act.isCustom {
+				b.WriteString(customSelStyle.Render("    > " + act.label) + "\n")
+			} else if act.isAddAction {
+				b.WriteString(addSelStyle.Render("    > " + act.label) + "\n")
+			} else {
+				b.WriteString(selStyle.Render("    > " + act.label) + "\n")
+			}
+		} else {
+			b.WriteString("      " + act.label + "\n")
 		}
 	}
 
@@ -583,11 +966,87 @@ func (m *DBOpsModel) viewActions() string {
 		b.WriteString("  " + m.lastResult + "\n\n")
 	}
 
+	if m.deleteActionArmed {
+		b.WriteString(styles.StyleError.Render("  Press d again to delete this custom action") + "\n")
+	}
+
 	if m.running || m.promptStartService || m.startingService {
 		b.WriteString(styles.StyleHelp.Render("  " + "Please wait…"))
+	} else if m.confirmAction || m.confirmCustomAction {
+		b.WriteString(styles.BackHelp())
 	} else {
-		b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "run")))
+		var helpItems []styles.HelpItemResult
+		helpItems = append(helpItems, styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "run"))
+		if m.actionCursor < len(m.actions) && m.actions[m.actionCursor].isCustom {
+			helpItems = append(helpItems, styles.HelpItem("e", "edit"), styles.HelpItem("d d", "delete"))
+		}
+		b.WriteString(styles.BackHelp(helpItems...))
 	}
+	return b.String()
+}
+
+// ── Custom form rendering ─────────────────────────────────────────────────────
+
+func (m *DBOpsModel) viewCustomForm() string {
+	var b strings.Builder
+	titleStr := "Add Custom Action"
+	if m.editingCustomIdx >= 0 {
+		titleStr = "Edit Custom Action"
+	}
+	b.WriteString(styles.StyleSubtitle.Render("  " + titleStr) + "\n\n")
+
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	normalStyle := lipgloss.NewStyle().Foreground(styles.ColorFg)
+
+	// Name field
+	if m.customFormFocus == 0 {
+		b.WriteString("  " + focusStyle.Render("Name: ") + focusStyle.Render(m.customFormName+"▌") + "\n")
+	} else {
+		b.WriteString("  " + normalStyle.Render("Name: ") + normalStyle.Render(m.customFormName) + "\n")
+	}
+
+	// Command field
+	if m.customFormFocus == 1 {
+		b.WriteString("  " + focusStyle.Render("Command: ") + focusStyle.Render(m.customFormCmd+"▌") + "\n\n")
+	} else {
+		b.WriteString("  " + normalStyle.Render("Command: ") + normalStyle.Render(m.customFormCmd) + "\n\n")
+	}
+
+		b.WriteString("  " + styles.InlineHelp(
+			styles.HelpItem("↑ ↓", "field"),
+			styles.HelpItem("enter", "save"),
+			styles.HelpItem("esc", "cancel"),
+		) + "\n\n")
+	return b.String()
+}
+
+// ── Param prompt rendering ────────────────────────────────────────────────────
+
+func (m *DBOpsModel) viewParamPrompt() string {
+	var b strings.Builder
+	b.WriteString(styles.StyleSubtitle.Render("  Enter parameter values") + "\n\n")
+
+	purpleStyle := lipgloss.NewStyle().Foreground(styles.ColorPurple).Bold(true)
+	valStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+
+	for i, param := range m.paramsToPrompt {
+		if i < m.currentParamIdx {
+			// Already filled
+			b.WriteString("  " + purpleStyle.Render("{"+param+"}") + " " + valStyle.Render(m.paramValues[param]) + "\n")
+		} else if i == m.currentParamIdx {
+			// Current
+			b.WriteString("  " + purpleStyle.Render("{"+param+"}") + " " + valStyle.Render(m.currentParamInput+"▌") + "\n")
+		} else {
+			// Upcoming
+			b.WriteString("  " + purpleStyle.Render("{"+param+"}") + " \n")
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString("  " + styles.InlineHelp(
+		styles.HelpItem("enter", "next"),
+		styles.HelpItem("esc", "cancel"),
+	) + "\n")
 	return b.String()
 }
 
@@ -597,12 +1056,13 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 	dDir := m.dumpDir(se)
 	truncate := func() tea.Cmd { return m.truncateTables(se) }
 
+	var actions []actionItem
 	switch se.DBType {
 	case "postgres":
 		pgDumpAvailable := docker.ToolAvailable("pg_dump")
 		hasSchema := docker.HasDumpFile(dDir, "schema-*.sql")
 		hasData := docker.HasDumpFile(dDir, "data-*.sql")
-		return []actionItem{
+		actions = []actionItem{
 			{label: "Export schema", group: "Export", enabled: pgDumpAvailable, disabledReason: disabledIf(!pgDumpAvailable, "pg_dump not found in PATH"), execute: func() tea.Cmd { return m.exportSchema(se) }},
 			{label: "Export data", group: "Export", enabled: pgDumpAvailable, disabledReason: disabledIf(!pgDumpAvailable, "pg_dump not found in PATH"), execute: func() tea.Cmd { return m.exportData(se) }},
 			{label: "Import schema", group: "Import", enabled: hasSchema, disabledReason: disabledIf(!hasSchema, "no schema dump"), execute: func() tea.Cmd { return m.importSchema(se) }},
@@ -613,7 +1073,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 	case "mongo":
 		mongodumpAvailable := docker.ToolAvailable("mongodump")
 		hasData := m.hasMongoDump(dDir)
-		return []actionItem{
+		actions = []actionItem{
 			{label: "Export", group: "Export", enabled: mongodumpAvailable, disabledReason: disabledIf(!mongodumpAvailable, "mongodump not found in PATH"), execute: func() tea.Cmd { return m.exportData(se) }},
 			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump"), execute: func() tea.Cmd { return m.importData(se) }},
 			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: disabledIf(!m.truncateEnabled(hasData), "import data first"), execute: truncate},
@@ -622,7 +1082,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 	case "mysql":
 		mysqldumpAvailable := docker.ToolAvailable("mysqldump")
 		hasData := docker.HasDumpFile(dDir, "data-*.sql")
-		return []actionItem{
+		actions = []actionItem{
 			{label: "Export", group: "Export", enabled: mysqldumpAvailable, disabledReason: disabledIf(!mysqldumpAvailable, "mysqldump not found in PATH"), execute: func() tea.Cmd { return m.exportData(se) }},
 			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump file"), execute: func() tea.Cmd { return m.importData(se) }},
 			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: disabledIf(!m.truncateEnabled(hasData), "import data first"), execute: truncate},
@@ -631,13 +1091,36 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 	case "mssql":
 		sqlpackageAvailable := docker.ToolAvailable("sqlpackage")
 		hasData := docker.HasDumpFile(dDir, "data-*.bacpac")
-		return []actionItem{
+		actions = []actionItem{
 			{label: "Export", group: "Export", enabled: sqlpackageAvailable, disabledReason: disabledIf(!sqlpackageAvailable, "sqlpackage not found in PATH"), execute: func() tea.Cmd { return m.exportData(se) }},
 			{label: "Import", group: "Import", enabled: hasData && sqlpackageAvailable, disabledReason: disabledIf(!hasData, "no .bacpac file"), execute: func() tea.Cmd { return m.importData(se) }},
 			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: disabledIf(!m.truncateEnabled(hasData), "import data first"), execute: truncate},
 		}
 	}
-	return nil
+
+	// Append custom actions below Truncate tables in Functions group
+	for idx := range se.CustomActions {
+		i := idx
+		actions = append(actions, actionItem{
+			label:    se.CustomActions[i].Name,
+			group:    "Functions",
+			enabled:  true,
+			isCustom: true,
+			customIdx: i,
+			execute:  nil,
+		})
+	}
+
+	// "+ Add function" entry
+	actions = append(actions, actionItem{
+		label:       "+ Add function",
+		group:       "Functions",
+		enabled:     true,
+		isAddAction: true,
+		execute:     nil,
+	})
+
+	return actions
 }
 
 // ── Export Cmd factories ──────────────────────────────────────────────────────

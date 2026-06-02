@@ -153,16 +153,23 @@ func (e Environment) DatabaseTypes() []string {
 	return types
 }
 
+// CustomAction defines a user-defined database command with placeholder support.
+type CustomAction struct {
+	Name    string `yaml:"name"`
+	Command string `yaml:"command"`
+}
+
 // SyncEnv defines a sync-from environment's database credentials.
 type SyncEnv struct {
-	Name     string `yaml:"name"`
-	DBType   string `yaml:"db_type"`
-	Host     string `yaml:"host"`
-	Port     string `yaml:"port"`
-	User     string `yaml:"user"`
-	Password string `yaml:"password,omitempty"`
-	Database string `yaml:"database"`
-	AuthDB   string `yaml:"auth_db,omitempty"`
+	Name          string         `yaml:"name"`
+	DBType        string         `yaml:"db_type"`
+	Host          string         `yaml:"host"`
+	Port          string         `yaml:"port"`
+	User          string         `yaml:"user"`
+	Password      string         `yaml:"password,omitempty"`
+	Database      string         `yaml:"database"`
+	AuthDB        string         `yaml:"auth_db,omitempty"`
+	CustomActions []CustomAction `yaml:"custom_actions,omitempty"`
 }
 
 // PortForward defines a K8s port-forward configuration.
