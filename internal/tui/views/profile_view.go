@@ -63,7 +63,8 @@ type ProfileViewModel struct {
 	editingPort      bool
 	portInput        textinput.Model
 	editFwdIdx       int
-	viewingService   int // -1 = not viewing
+	viewingService   int    // -1 = not viewing
+	viewingProcess   string // "" = not viewing
 	showingShortcuts bool
 
 	// ── Docker Stats ──
@@ -479,6 +480,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Dismiss overlays on any key
 		if m.viewingService >= 0 {
 			m.viewingService = -1
+			return m, nil
+		}
+		if m.viewingProcess != "" {
+			m.viewingProcess = ""
 			return m, nil
 		}
 		if m.showingShortcuts {
@@ -1002,10 +1007,16 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, profileKeys.viewConfig):
-			if !m.isPortForwardEnv() {
-				svcs := m.currentEnvServices()
-				if len(svcs) > 0 && m.cursor < len(svcs) {
+			env := m.currentEnv()
+			if env != nil {
+				totalSvcs := len(env.Services)
+				if m.cursor < totalSvcs {
 					m.viewingService = m.selectedServiceIndex()
+					return m, nil
+				}
+				procIdx := m.cursor - totalSvcs
+				if procIdx >= 0 && procIdx < len(env.LocalProcesses) {
+					m.viewingProcess = env.LocalProcesses[procIdx].Name
 					return m, nil
 				}
 			}
@@ -1389,6 +1400,13 @@ func (m *ProfileViewModel) View() string {
 			b.WriteString(m.renderStats())
 		} else if m.viewingService >= 0 && m.viewingService < len(env.Services) {
 			b.WriteString(m.renderConfigPanel(env.Services[m.viewingService]))
+		} else if m.viewingProcess != "" {
+			for i := range env.LocalProcesses {
+				if env.LocalProcesses[i].Name == m.viewingProcess {
+					b.WriteString(m.renderLocalProcPanel(env.LocalProcesses[i]))
+					break
+				}
+			}
 		} else {
 			b.WriteString(m.renderServices(env))
 		}
@@ -1424,25 +1442,25 @@ func (m *ProfileViewModel) View() string {
 		b.WriteString("\n")
 	}
 
-	if !m.inDiscovery && m.viewingService < 0 && !m.showStats {
+	if !m.inDiscovery && m.viewingService < 0 && m.viewingProcess == "" && !m.showStats {
 		b.WriteString("\n\n")
 	}
 
 	// ── Help bar ──
-	if m.inDiscovery || m.viewingService >= 0 || m.showStats {
+	if m.inDiscovery || m.viewingService >= 0 || m.viewingProcess != "" || m.showStats {
 		// No help bar needed — discovery/config/stats have their own hints
 	} else if m.isPortForwardEnv() {
 		b.WriteString(m.renderPFHelpBar())
 	} else {
 		b.WriteString(m.renderDockerHelpBar())
 	}
-	if !m.inDiscovery && m.viewingService < 0 && !m.showStats {
+	if !m.inDiscovery && m.viewingService < 0 && m.viewingProcess == "" && !m.showStats {
 		b.WriteString("\n\n")
 	}
 	if m.inDiscovery {
 		b.WriteString("\n\n")
 		b.WriteString(styles.InlineHelp(styles.HelpItem("esc", "cancel")))
-	} else if m.viewingService >= 0 || m.showStats {
+	} else if m.viewingService >= 0 || m.viewingProcess != "" || m.showStats {
 		// Config/stats overlay has its own "press any key to return" hint
 	} else if m.inputtingEnv {
 		b.WriteString(styles.BackHelp())
@@ -1950,7 +1968,7 @@ func (m *ProfileViewModel) renderDockerHelpBar() string {
 	}
 	envItems = append(envItems, styles.HelpItem("a", "add service"))
 
-	if len(svcs) > 0 {
+	if len(svcs) > 0 || len(m.currentEnv().LocalProcesses) > 0 {
 		svcItems = append(svcItems, styles.HelpItem("↵", "toggle"))
 		if m.selectedDBType() != "" {
 			svcItems = append(svcItems, styles.HelpItem("o", "db ops"))
@@ -1959,7 +1977,9 @@ func (m *ProfileViewModel) renderDockerHelpBar() string {
 			svcItems = append(svcItems, styles.HelpItem("d d", "delete"))
 		}
 		svcItems = append(svcItems, styles.HelpItem("v", "view"))
-		svcItems = append(svcItems, styles.HelpItem("p", "pull"))
+		if len(svcs) > 0 && m.cursor < len(svcs) {
+			svcItems = append(svcItems, styles.HelpItem("p", "pull"))
+		}
 		if hasRunning && m.isSelectedServiceRunning() {
 			svcItems = append(svcItems, styles.HelpItem("h", "shell"))
 			svcItems = append(svcItems, styles.HelpItem("t", "stats"))
@@ -2058,6 +2078,35 @@ func (m *ProfileViewModel) renderConfigPanel(svc config.Service) string {
 	} else {
 		lines = append(lines, styles.StyleSubtitle.Render("  (none)"))
 	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return styles.StylePanelFocused.Width(cardW).Render(content) + "\n\n  press any key to return"
+}
+
+func (m *ProfileViewModel) renderLocalProcPanel(proc config.LocalProcess) string {
+	cardW := m.width - 4
+	if cardW < 40 {
+		cardW = 40
+	}
+	if cardW > 80 {
+		cardW = 80
+	}
+
+	var lines []string
+	lines = append(lines, styles.StyleHeader.Render(proc.Name))
+	lines = append(lines, "  "+styles.StyleCode.Render(proc.Command))
+	lines = append(lines, "")
+
+	lines = append(lines, styles.StyleInputLabel.Render("Work Dir"))
+	if proc.WorkDir != "" {
+		lines = append(lines, styles.StyleSubtitle.Render("  "+proc.WorkDir))
+	} else {
+		lines = append(lines, styles.StyleSubtitle.Render("  (default)"))
+	}
+	lines = append(lines, "")
+
+	lines = append(lines, styles.StyleInputLabel.Render("Type"))
+	lines = append(lines, styles.StyleSubtitle.Render("  Host"))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return styles.StylePanelFocused.Width(cardW).Render(content) + "\n\n  press any key to return"
