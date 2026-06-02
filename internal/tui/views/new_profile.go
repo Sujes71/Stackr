@@ -206,7 +206,7 @@ func (m *NewProfileModel) View() string {
 		b.WriteString(styles.StyleSubtitle.Render("  Will be used as folder name: ~/.stackr/<name>/"))
 
 	case npStepDesc:
-		b.WriteString(styles.StyleInputLabel.Render("Description"))
+		b.WriteString(styles.StyleInputLabel.Render("Description  ") + styles.StyleSubtitle.Render("(optional)"))
 		b.WriteString("\n")
 		b.WriteString("  " + m.desc.View())
 		b.WriteString("\n")

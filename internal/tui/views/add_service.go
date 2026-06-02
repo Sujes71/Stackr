@@ -1170,7 +1170,7 @@ func (m *AddServiceModel) viewRunCommand() string {
 
 	b.WriteString("  " + nameLabel.Render("Name:    ") + m.runCmdName.View() + "\n")
 	b.WriteString("  " + cmdLabel.Render("Command: ") + m.runCmdCmd.View() + "\n")
-	b.WriteString("  " + dirLabel.Render("Workdir: ") + m.runCmdWorkDir.View() + "\n")
+	b.WriteString("  " + dirLabel.Render("Workdir: ") + styles.StyleSubtitle.Render("(optional) ") + m.runCmdWorkDir.View() + "\n")
 
 	b.WriteString("\n")
 	b.WriteString("  " + styles.InlineHelp(

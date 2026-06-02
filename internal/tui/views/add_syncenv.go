@@ -585,7 +585,7 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 	}
 
 	// Password
-	label = "  " + styles.StyleInputLabel.Render("Password")
+	label = "  " + styles.StyleInputLabel.Render("Password  ") + styles.StyleSubtitle.Render("(optional)")
 	if m.credFocus == credFocusPass {
 		b.WriteString(fmt.Sprintf("%s  %s\n", label, m.passInput.View()))
 	} else {
@@ -611,7 +611,7 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 
 	// AuthDB (mongo only)
 	if m.dbType == "mongo" {
-		label = "  " + styles.StyleInputLabel.Render("Auth DB")
+		label = "  " + styles.StyleInputLabel.Render("Auth DB  ") + styles.StyleSubtitle.Render("(optional)")
 		if m.credFocus == credFocusAuthDB {
 			b.WriteString(fmt.Sprintf("%s  %s\n", label, m.authDBInput.View()))
 		} else {
