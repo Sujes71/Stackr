@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stackr/stackr/internal/config"
@@ -89,17 +90,17 @@ type DBOpsModel struct {
 
 	// Custom action form
 	addingCustomAction bool
-	editingCustomIdx   int    // -1 = adding new, >= 0 = editing index
-	customFormFocus    int    // 0=name, 1=command
-	customFormName     string
-	customFormCmd      string
+	editingCustomIdx   int // -1 = adding new, >= 0 = editing index
+	customFormFocus    int // 0=name, 1=command
+	customNameInput    textinput.Model
+	customCmdInput     textinput.Model
 
 	// Custom action param prompting
 	promptingParams   bool
 	paramsToPrompt    []string
 	paramValues       map[string]string
 	currentParamIdx   int
-	currentParamInput string
+	paramInput       textinput.Model
 
 	// Custom action delete
 	deleteActionArmed bool
@@ -143,7 +144,13 @@ func NewDBOps(cfg *config.Config, p *config.Profile, envName, serviceName string
 		envName:     envName,
 		serviceName: serviceName,
 		screen:      dbScreenSyncEnvList,
+		customNameInput: textinput.New(),
+		customCmdInput:  textinput.New(),
+		paramInput:      textinput.New(),
 	}
+	m.customNameInput.Placeholder = "Function name"
+	m.customCmdInput.Placeholder = "SQL command (use {param} for variables)"
+	m.paramInput.Placeholder = "value"
 	// Resolve service index for mutations
 	for i, svc := range m.currentEnv().Services {
 		if svc.Name == serviceName {
@@ -477,9 +484,9 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.addingCustomAction = true
 						m.editingCustomIdx = -1
 						m.customFormFocus = 0
-						m.customFormName = ""
-						m.customFormCmd = ""
-						return m, nil
+			m.customNameInput.SetValue("")
+			m.customCmdInput.SetValue("")
+			return m, nil
 					}
 					if act.isCustom {
 						svc := m.currentService()
@@ -496,9 +503,11 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if len(params) > 0 {
 							m.promptingParams = true
 							m.paramsToPrompt = params
-							m.paramValues = make(map[string]string)
-							m.currentParamIdx = 0
-							m.currentParamInput = ""
+			m.paramValues = make(map[string]string)
+			m.currentParamIdx = 0
+			m.paramInput.SetValue("")
+			m.paramInput.Placeholder = params[0]
+			m.paramInput.Focus()
 						} else {
 							m.confirmCustomAction = true
 						}
@@ -528,8 +537,8 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.addingCustomAction = true
 					m.editingCustomIdx = act.customIdx
 					m.customFormFocus = 0
-					m.customFormName = se.CustomActions[act.customIdx].Name
-					m.customFormCmd = se.CustomActions[act.customIdx].Command
+			m.customNameInput.SetValue(se.CustomActions[act.customIdx].Name)
+			m.customCmdInput.SetValue(se.CustomActions[act.customIdx].Command)
 				}
 			}
 
@@ -632,35 +641,32 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 // ── Param prompt update ───────────────────────────────────────────────────────
 
 func (m *DBOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch {
-		case key.Matches(msg, dbOpsBack):
-			m.promptingParams = false
-			return m, nil
-		case key.Matches(msg, dbOpsEnter):
-			if m.currentParamInput != "" {
-				paramName := m.paramsToPrompt[m.currentParamIdx]
-				m.paramValues[paramName] = m.currentParamInput
-				m.currentParamIdx++
-				m.currentParamInput = ""
-				if m.currentParamIdx >= len(m.paramsToPrompt) {
-					m.promptingParams = false
-					m.confirmCustomAction = true
-				}
-			}
-		default:
-			switch msg.String() {
-			case "backspace":
-				if len(m.currentParamInput) > 0 {
-					m.currentParamInput = m.currentParamInput[:len(m.currentParamInput)-1]
-				}
-			default:
-				if len(msg.String()) == 1 {
-					m.currentParamInput += msg.String()
-				}
+	keyMsg, isKey := msg.(tea.KeyMsg)
+	if !isKey {
+		var cmd tea.Cmd
+		m.paramInput, cmd = m.paramInput.Update(msg)
+		return m, cmd
+	}
+
+	switch {
+	case key.Matches(keyMsg, dbOpsBack):
+		m.promptingParams = false
+	case key.Matches(keyMsg, dbOpsEnter):
+		if m.paramInput.Value() != "" {
+			paramName := m.paramsToPrompt[m.currentParamIdx]
+			m.paramValues[paramName] = m.paramInput.Value()
+			m.currentParamIdx++
+			m.paramInput.SetValue("")
+			m.paramInput.Placeholder = m.paramsToPrompt[min(m.currentParamIdx, len(m.paramsToPrompt)-1)]
+			if m.currentParamIdx >= len(m.paramsToPrompt) {
+				m.promptingParams = false
+				m.confirmCustomAction = true
 			}
 		}
+	default:
+		var cmd tea.Cmd
+		m.paramInput, cmd = m.paramInput.Update(msg)
+		return m, cmd
 	}
 	return m, nil
 }
@@ -717,90 +723,73 @@ func (m *DBOpsModel) updateCoreConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 // ── Custom form update ────────────────────────────────────────────────────────
 
 func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		// Ctrl+V: paste from clipboard
-		if msg.Type == tea.KeyCtrlV {
-			paste, err := exec.Command("pbpaste").Output()
-			if err == nil {
-				pasted := strings.TrimSpace(string(paste))
-				if m.customFormFocus == 0 {
-					m.customFormName += pasted
-				} else {
-					m.customFormCmd += pasted
-				}
-			}
-			return m, nil
+	keyMsg, isKey := msg.(tea.KeyMsg)
+	if !isKey {
+		// Forward non-key messages to focused input
+		var cmd tea.Cmd
+		if m.customFormFocus == 0 {
+			m.customNameInput, cmd = m.customNameInput.Update(msg)
+		} else {
+			m.customCmdInput, cmd = m.customCmdInput.Update(msg)
+		}
+		return m, cmd
+	}
+
+	switch {
+	case key.Matches(keyMsg, dbOpsBack):
+		m.addingCustomAction = false
+
+	case key.Matches(keyMsg, dbOpsUp), keyMsg.String() == "tab":
+		if m.customFormFocus > 0 {
+			m.customFormFocus--
 		}
 
-		switch {
-		case key.Matches(msg, dbOpsBack):
+	case key.Matches(keyMsg, dbOpsDown):
+		if m.customFormFocus < 1 {
+			m.customFormFocus++
+		}
+
+	case key.Matches(keyMsg, dbOpsEnter):
+		if m.customFormFocus == 1 && m.customNameInput.Value() != "" && m.customCmdInput.Value() != "" {
+			svc := m.currentService()
+			if svc == nil {
+				return m, nil
+			}
+			se := svc.FindSyncEnv(m.selectedEnv)
+			if se == nil {
+				return m, nil
+			}
+			name := strings.TrimSpace(m.customNameInput.Value())
+			cmd := strings.TrimSpace(m.customCmdInput.Value())
+			if m.editingCustomIdx >= 0 && m.editingCustomIdx < len(se.CustomActions) {
+				se.CustomActions[m.editingCustomIdx].Name = name
+				se.CustomActions[m.editingCustomIdx].Command = cmd
+			} else {
+				se.CustomActions = append(se.CustomActions, config.CustomAction{Name: name, Command: cmd})
+			}
+			m.profile.UpdatedAt = time.Now()
+			if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+				m.lastResult = formatErrorMsg(err.Error())
+			} else {
+				m.lastResult = styles.StyleSuccess.Render("✓ Custom action saved")
+			}
 			m.addingCustomAction = false
-
-		case key.Matches(msg, dbOpsUp), msg.String() == "tab":
-			if m.customFormFocus > 0 {
-				m.customFormFocus--
+			m.actions = m.buildActionsList(se)
+			if m.actionCursor >= len(m.actions) {
+				m.actionCursor = len(m.actions) - 1
 			}
-
-		case key.Matches(msg, dbOpsDown):
-			if m.customFormFocus < 1 {
-				m.customFormFocus++
-			}
-
-		case key.Matches(msg, dbOpsEnter):
-			// Save only when on Command field AND both fields non-empty
-			if m.customFormFocus == 1 && m.customFormName != "" && m.customFormCmd != "" {
-				svc := m.currentService()
-				if svc == nil {
-					return m, nil
-				}
-				se := svc.FindSyncEnv(m.selectedEnv)
-				if se == nil {
-					return m, nil
-				}
-
-				if m.editingCustomIdx >= 0 && m.editingCustomIdx < len(se.CustomActions) {
-					se.CustomActions[m.editingCustomIdx].Name = m.customFormName
-					se.CustomActions[m.editingCustomIdx].Command = m.customFormCmd
-				} else {
-					se.CustomActions = append(se.CustomActions, config.CustomAction{
-						Name:    m.customFormName,
-						Command: m.customFormCmd,
-					})
-				}
-				m.profile.UpdatedAt = time.Now()
-				if err := m.cfg.UpdateProfile(*m.profile); err != nil {
-					m.lastResult = formatErrorMsg(err.Error())
-				} else {
-					m.lastResult = styles.StyleSuccess.Render("✓ Custom action saved")
-				}
-				m.addingCustomAction = false
-				m.actions = m.buildActionsList(se)
-				if m.actionCursor >= len(m.actions) {
-					m.actionCursor = len(m.actions) - 1
-				}
-				return m, ClearActionAfter(3 * time.Second)
-			}
-
-		default:
-			switch msg.String() {
-			case "backspace":
-				if m.customFormFocus == 0 && len(m.customFormName) > 0 {
-					m.customFormName = m.customFormName[:len(m.customFormName)-1]
-				} else if m.customFormFocus == 1 && len(m.customFormCmd) > 0 {
-					m.customFormCmd = m.customFormCmd[:len(m.customFormCmd)-1]
-				}
-			default:
-				if len(msg.String()) == 1 {
-					ch := msg.String()
-					if m.customFormFocus == 0 {
-						m.customFormName += ch
-					} else {
-						m.customFormCmd += ch
-					}
-				}
-			}
+			return m, ClearActionAfter(3 * time.Second)
 		}
+
+	default:
+		// Forward to focused text input (handles typing, backspace, cursor, paste)
+		var cmd tea.Cmd
+		if m.customFormFocus == 0 {
+			m.customNameInput, cmd = m.customNameInput.Update(msg)
+		} else {
+			m.customCmdInput, cmd = m.customCmdInput.Update(msg)
+		}
+		return m, cmd
 	}
 	return m, nil
 }
@@ -1000,16 +989,22 @@ func (m *DBOpsModel) viewCustomForm() string {
 
 	// Name field
 	if m.customFormFocus == 0 {
-		b.WriteString("  " + focusStyle.Render("Name: ") + focusStyle.Render(m.customFormName+"▌") + "\n")
+		m.customNameInput.Focus()
+		m.customCmdInput.Blur()
+		b.WriteString("  " + focusStyle.Render("Name: ") + m.customNameInput.View() + "\n")
 	} else {
-		b.WriteString("  " + normalStyle.Render("Name: ") + normalStyle.Render(m.customFormName) + "\n")
+		m.customNameInput.Blur()
+		b.WriteString("  " + normalStyle.Render("Name: ") + m.customNameInput.View() + "\n")
 	}
 
 	// Command field
 	if m.customFormFocus == 1 {
-		b.WriteString("  " + focusStyle.Render("Command: ") + focusStyle.Render(m.customFormCmd+"▌") + "\n\n")
+		m.customCmdInput.Focus()
+		m.customNameInput.Blur()
+		b.WriteString("  " + focusStyle.Render("Command: ") + m.customCmdInput.View() + "\n\n")
 	} else {
-		b.WriteString("  " + normalStyle.Render("Command: ") + normalStyle.Render(m.customFormCmd) + "\n\n")
+		m.customCmdInput.Blur()
+		b.WriteString("  " + normalStyle.Render("Command: ") + m.customCmdInput.View() + "\n\n")
 	}
 
 		b.WriteString("  " + styles.InlineHelp(
@@ -1035,7 +1030,7 @@ func (m *DBOpsModel) viewParamPrompt() string {
 			b.WriteString("  " + purpleStyle.Render("{"+param+"}") + " " + valStyle.Render(m.paramValues[param]) + "\n")
 		} else if i == m.currentParamIdx {
 			// Current
-			b.WriteString("  " + purpleStyle.Render("{"+param+"}") + " " + valStyle.Render(m.currentParamInput+"▌") + "\n")
+			b.WriteString("  " + purpleStyle.Render("{"+param+"}") + " " + m.paramInput.View() + "\n")
 		} else {
 			// Upcoming
 			b.WriteString("  " + purpleStyle.Render("{"+param+"}") + " \n")
