@@ -170,7 +170,7 @@ var profileKeys = struct {
 	back, up, down, enter, start, stop, addSvc, svcDelete, dbOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort, viewConfig, stats, pull, shell key.Binding
 }{
 	back:           key.NewBinding(key.WithKeys("esc", "backspace")),
-	up:             key.NewBinding(key.WithKeys("up")),
+	up:             key.NewBinding(key.WithKeys("up", "k")),
 	down:           key.NewBinding(key.WithKeys("down", "j")),
 	enter:          key.NewBinding(key.WithKeys("enter")),
 	start:          key.NewBinding(key.WithKeys("s")),
@@ -192,6 +192,7 @@ var profileKeys = struct {
 }
 
 func (m *ProfileViewModel) Init() tea.Cmd {
+	m.loading = true
 	m.ensureValidSelection()
 	var cmds []tea.Cmd
 	cmds = append(cmds, m.loadStatus())
@@ -530,7 +531,9 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.isPortForwardEnv() {
 						forwards := m.currentForwards()
 						if len(forwards) == 0 {
-							break
+							m.lastAction = "No forwards to reset"
+							m.keyPending = ""
+							return m, ClearActionAfter(3 * time.Second)
 						}
 						envName := m.profile.Environments[m.activeEnv].Name
 						for _, h := range forwards {
@@ -549,7 +552,9 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, ClearActionAfter(3 * time.Second)
 					}
 					if len(m.currentEnvServices()) == 0 {
-						break
+						m.lastAction = "No services to reset"
+						m.keyPending = ""
+						return m, ClearActionAfter(3 * time.Second)
 					}
 				m.lastAction = "Deleting all services..."
 				go func() {
@@ -673,6 +678,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.rememberCurrentEnvSelection()
 				m.activeEnv--
 				m.statuses = nil
+				m.loading = true
 				m.persistActiveEnv()
 				m.restoreCurrentEnvSelection()
 				if m.isPortForwardEnv() {
@@ -688,6 +694,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.rememberCurrentEnvSelection()
 				m.activeEnv++
 				m.statuses = nil
+				m.loading = true
 				m.persistActiveEnv()
 				m.restoreCurrentEnvSelection()
 				if m.isPortForwardEnv() {
@@ -1757,7 +1764,7 @@ func (m *ProfileViewModel) renderDiscovery() string {
 
 	case 1:
 		dTotal := len(m.discoveryNSs)
-		b.WriteString(styles.StyleHeader.Render("  Select namespace for '" + m.discoverySelCtx + "':"))
+		b.WriteString(styles.StyleHeader.Render("  Select namespace for '" + shortCtxName(m.discoverySelCtx) + "':"))
 		b.WriteString("\n\n")
 		if dTotal == 0 {
 			b.WriteString(styles.StyleSubtitle.Render("  Loading namespaces..."))
@@ -1781,7 +1788,7 @@ func (m *ProfileViewModel) renderDiscovery() string {
 
 	case 2:
 		dTotal := len(m.discoverySvcs)
-		b.WriteString(styles.StyleHeader.Render("  Select service in '" + m.discoverySelCtx + "/" + m.discoverySelNS + "':"))
+		b.WriteString(styles.StyleHeader.Render("  Select service in '" + shortCtxName(m.discoverySelCtx) + "/" + m.discoverySelNS + "':"))
 		b.WriteString("\n\n")
 		if dTotal == 0 {
 			b.WriteString(styles.StyleSubtitle.Render("  Loading services..."))
@@ -1980,14 +1987,37 @@ func (m *ProfileViewModel) renderShortcuts() string {
 		{"esc", "back"},
 	})
 
+	if m.isPortForwardEnv() {
+		pf := col("Port-Forward", []pair{
+			{"↵", "toggle"},
+			{"d d", "delete"},
+			{"e", "edit port"},
+			{"k", "discover"},
+		})
+
+		envCol := col("Env / Stack", []pair{
+			{"s", "start all"},
+			{"x", "stop all"},
+			{"r r", "reset all"},
+			{"n", "add env"},
+			{"D D", "delete env"},
+		})
+
+		pad := "   "
+		row1 := lipgloss.JoinHorizontal(lipgloss.Top, nav, pad, pf)
+		row2 := lipgloss.JoinHorizontal(lipgloss.Top, envCol)
+		content := lipgloss.JoinVertical(lipgloss.Left, row1, "", row2)
+		return styles.StylePanelFocused.Width(cardW).Render(content) + "\n\n  press any key to return"
+	}
+
 	svc := col("Services", []pair{
-		{"s", "start"},
-		{"x", "stop"},
 		{"a", "add service"},
 		{"d d", "delete svc"},
 		{"o", "db ops"},
 		{"v", "view config"},
 		{"t", "stats"},
+		{"p", "pull"},
+		{"h", "shell"},
 	})
 
 	envCol := col("Env / Stack", []pair{
@@ -1999,16 +2029,9 @@ func (m *ProfileViewModel) renderShortcuts() string {
 		{"D D", "delete env"},
 	})
 
-	pf := col("Port-Forward", []pair{
-		{"e", "edit port"},
-		{"k", "discover"},
-		{"↵", "toggle"},
-		{"d d", "delete"},
-	})
-
 	pad := "   "
 	row1 := lipgloss.JoinHorizontal(lipgloss.Top, nav, pad, svc)
-	row2 := lipgloss.JoinHorizontal(lipgloss.Top, envCol, pad, pf)
+	row2 := lipgloss.JoinHorizontal(lipgloss.Top, envCol)
 	content := lipgloss.JoinVertical(lipgloss.Left, row1, "", row2)
 
 	return styles.StylePanelFocused.Width(cardW).Render(content) + "\n\n  press any key to return"
@@ -2182,14 +2205,17 @@ func (m *ProfileViewModel) handleForwardToggle() (tea.Model, tea.Cmd) {
 	h := forwards[m.cursor]
 
 	if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
-		// Stop
-		return m, func() tea.Msg {
-			err := h.Stop()
-			if err != nil {
-				return actionDoneMsg{label: "Stop " + h.Config.Name, err: err}
-			}
-			return actionDoneMsg{label: h.Config.Name + " stopped", err: nil}
-		}
+		m.lastAction = "Stopping " + h.Config.Name + "..."
+		return m, tea.Batch(
+			func() tea.Msg {
+				err := h.Stop()
+				if err != nil {
+					return actionDoneMsg{label: "Stop " + h.Config.Name, err: err}
+				}
+				return actionDoneMsg{label: h.Config.Name + " stopped", err: nil}
+			},
+			spinnerCmd(),
+		)
 	}
 
 	// Start (Stopped or Failed)

@@ -47,11 +47,6 @@ type discoveryErrorMsg struct {
 	err string
 }
 
-type discoveryAuthErrorMsg struct {
-	err string
-	ctx string
-}
-
 // ── Stats Messages ──
 
 type statsTickMsg struct {
@@ -65,6 +60,4 @@ type statsResultMsg struct {
 
 // ── Spinner Messages ──
 
-type spinnerTickMsg struct {
-	frame int
-}
+type spinnerTickMsg struct{}

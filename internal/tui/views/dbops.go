@@ -77,6 +77,12 @@ type DBOpsModel struct {
 	running    bool
 	lastResult string
 
+	// Spinner
+	spinnerFrame int
+
+	// Viewport
+	height int
+
 	// Wizard (delegated)
 	wizardModel *AddSyncEnvModel
 }
@@ -170,9 +176,23 @@ func (m *DBOpsModel) Init() tea.Cmd {
 	return nil
 }
 
+func (m *DBOpsModel) SetSize(w, h int) {
+	m.height = max(0, h)
+}
+
 // ── Update dispatch ───────────────────────────────────────────────────────────
 
 func (m *DBOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, ok := msg.(spinnerTickMsg); ok {
+		if m.running {
+			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
+			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+				return spinnerTickMsg{}
+			})
+		}
+		return m, nil
+	}
+
 	switch m.screen {
 	case dbScreenWizard:
 		return m.updateWizard(msg)
@@ -416,10 +436,10 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 							return m, nil
 						}
 					}
-					m.running = true
-					m.lastResult = ""
-					m.lastActionLabel = act.label
-					return m, act.execute()
+				m.running = true
+				m.lastResult = ""
+				m.lastActionLabel = act.label
+				return m, tea.Batch(act.execute(), spinnerCmd())
 				}
 				if act.disabledReason != "" {
 					m.lastResult = styles.StyleSubtitle.Render("Unavailable: " + act.disabledReason)
@@ -464,13 +484,14 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.running = true
 		m.lastResult = ""
 		m.lastActionLabel = m.pendingAction
+		m.spinnerFrame = 0
 		svc := m.currentService()
 		if svc != nil {
 			if se := svc.FindSyncEnv(m.selectedEnv); se != nil {
 				m.actions = m.buildActionsList(se)
 				for _, act := range m.actions {
 					if act.label == m.pendingAction && act.enabled {
-						return m, act.execute()
+						return m, tea.Batch(act.execute(), spinnerCmd())
 					}
 				}
 			}
@@ -554,14 +575,19 @@ func (m *DBOpsModel) viewActions() string {
 	b.WriteString("\n")
 
 	if m.running {
-		b.WriteString(styles.StyleSubtitle.Render("  Running\u2026") + "\n\n")
+		spinner := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+		b.WriteString("  " + spinner + " Running " + m.lastActionLabel + "\n\n")
 	}
 
 	if m.lastResult != "" {
 		b.WriteString("  " + m.lastResult + "\n\n")
 	}
 
-	b.WriteString(styles.BackHelp(styles.HelpItem("\u2191 \u2193", "navigate"), styles.HelpItem("\u21b5", "run")))
+	if m.running || m.promptStartService || m.startingService {
+		b.WriteString(styles.StyleHelp.Render("  " + "Please wait…"))
+	} else {
+		b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "run")))
+	}
 	return b.String()
 }
 

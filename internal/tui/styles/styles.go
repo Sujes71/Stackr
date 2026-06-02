@@ -154,10 +154,11 @@ func InlineHelp(items ...HelpItemResult) string {
 	return StyleHelp.Render(strings.Join(parts, "  "))
 }
 
-// BackHelp renders the shared back hint plus any additional inline hints.
+// BackHelp renders the shared back hint plus any additional inline hints,
+// indented 2 spaces to match content alignment.
 func BackHelp(items ...HelpItemResult) string {
 	base := []HelpItemResult{HelpItem("esc", "back")}
-	return InlineHelp(append(base, items...)...)
+	return "  " + InlineHelp(append(base, items...)...)
 }
 
 // HelpGroup defines a labeled section of help items for HelpBar.

@@ -29,7 +29,8 @@ type NewProfileModel struct {
 	envs          []string // environment names being built
 	envInput      textinput.Model
 	err           string
-	confirmRemove bool // double-tap d protection
+	confirmRemove bool   // double-tap d protection
+	height        int    // terminal height, set via WindowSizeMsg
 }
 
 func NewNewProfile(cfg *config.Config) *NewProfileModel {
@@ -66,6 +67,10 @@ var npKeys = struct {
 
 func (m *NewProfileModel) Init() tea.Cmd {
 	return textinput.Blink
+}
+
+func (m *NewProfileModel) SetSize(w, h int) {
+	m.height = max(0, h)
 }
 
 func (m *NewProfileModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -255,12 +260,7 @@ func (m *NewProfileModel) View() string {
 		b.WriteString("\n")
 		b.WriteString(styles.StyleError.Render("  ✗ " + m.err))
 	}
-
-	if m.err != "" {
-		b.WriteString("\n")
-	} else {
-		b.WriteString("\n\n")
-	}
+	b.WriteString("\n\n")
 	if m.step == npStepEnvs {
 		if m.canRemoveEnv() {
 			b.WriteString(styles.HelpBar(

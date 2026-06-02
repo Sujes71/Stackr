@@ -291,6 +291,7 @@ var addSvcDownField = key.NewBinding(key.WithKeys("down"))
 var addSvcToggle = key.NewBinding(key.WithKeys("ctrl+t"))
 var addSvcDelete = key.NewBinding(key.WithKeys("ctrl+d"))
 var addSvcReset = key.NewBinding(key.WithKeys("ctrl+r"))
+var addSvcTab = key.NewBinding(key.WithKeys("tab"))
 
 // SetSize propagates terminal dimensions before the first WindowSizeMsg.
 // h is the full terminal height; we subtract 2 for App header + footer.
@@ -377,7 +378,7 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case svcStepName:
 		if m.sourcePath == "manual" {
 			switch {
-			case key.Matches(msg, addSvcUpField), key.Matches(msg, addSvcDownField):
+			case key.Matches(msg, addSvcUpField), key.Matches(msg, addSvcDownField), key.Matches(msg, addSvcTab):
 				if m.nameFocus == 0 {
 					m.nameFocus = 1
 					m.imageInput.Blur()
@@ -1092,7 +1093,7 @@ func (m *AddServiceModel) View() string {
 	}
 
 	if m.err != "" {
-		b.WriteString("\n" + styles.StyleError.Render("  ✗ "+m.err))
+		b.WriteString("\n" + styles.StyleError.Render("  ✗ "+m.err) + "\n")
 	}
 	return b.String()
 }

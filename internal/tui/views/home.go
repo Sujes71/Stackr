@@ -31,6 +31,12 @@ type HomeModel struct {
 	importInput textinput.Model
 	importPath  string
 	importErr   string
+	importing   bool
+}
+
+type importResultMsg struct {
+	profiles []config.Profile
+	err      string
 }
 
 func NewHome(cfg *config.Config) *HomeModel {
@@ -79,6 +85,19 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.height = max(0, msg.Height-2) // App chrome (header + footer)
 
+	case importResultMsg:
+		m.importing = false
+		if msg.err != "" {
+			m.importErr = msg.err
+			return m, nil
+		}
+		m.profiles = msg.profiles
+		m.showImport = false
+		m.importInput.Reset()
+		m.importInput.Blur()
+		m.importErr = ""
+		return m, nil
+
 	case tea.KeyMsg:
 		// ── Export overlay: any key dismisses ──
 		if m.showExport {
@@ -104,31 +123,30 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.importInput.Blur()
 					return m, nil
 				}
+				if m.importing {
+					return m, nil
+				}
 				// Expand ~
 				if strings.HasPrefix(path, "~/") {
 					home, _ := os.UserHomeDir()
 					path = filepath.Join(home, path[2:])
 				}
-				data, err := os.ReadFile(path)
-				if err != nil {
-					m.importErr = err.Error()
-					return m, nil
-				}
-				var p config.Profile
-				if err := yaml.Unmarshal(data, &p); err != nil {
-					m.importErr = "Invalid profile YAML: " + err.Error()
-					return m, nil
-				}
-				if err := m.cfg.AddProfile(p); err != nil {
-					m.importErr = err.Error()
-					return m, nil
-				}
-				m.profiles = m.cfg.Profiles
-				m.showImport = false
-				m.importInput.Reset()
-				m.importInput.Blur()
+				m.importing = true
 				m.importErr = ""
-				return m, nil
+				return m, func() tea.Msg {
+					data, err := os.ReadFile(path)
+					if err != nil {
+						return importResultMsg{err: err.Error()}
+					}
+					var p config.Profile
+					if err := yaml.Unmarshal(data, &p); err != nil {
+						return importResultMsg{err: "Invalid profile YAML: " + err.Error()}
+					}
+					if err := m.cfg.AddProfile(p); err != nil {
+						return importResultMsg{err: err.Error()}
+					}
+					return importResultMsg{profiles: m.cfg.Profiles}
+				}
 			default:
 				var cmd tea.Cmd
 				m.importInput, cmd = m.importInput.Update(msg)
@@ -255,6 +273,10 @@ func (m *HomeModel) View() string {
 		b.WriteString("\n\n")
 		b.WriteString("  " + m.importInput.View())
 		b.WriteString("\n\n")
+		if m.importing {
+			b.WriteString(styles.StyleSubtitle.Render("  Importing…"))
+			b.WriteString("\n\n")
+		}
 		if m.importErr != "" {
 			b.WriteString(styles.StyleError.Render("  " + m.importErr))
 			b.WriteString("\n\n")
@@ -331,7 +353,7 @@ func (m *HomeModel) View() string {
 		hints = append(hints, styles.HelpItem("↑ ↓", "navigate").Render())
 		hints = append(hints, styles.HelpItem("↵", "open profile").Render())
 	}
-	b.WriteString(styles.StyleHelp.Render(strings.Join(hints, "  ")))
+	b.WriteString("  " + styles.StyleHelp.Render(strings.Join(hints, "  ")))
 
 	return b.String()
 }
