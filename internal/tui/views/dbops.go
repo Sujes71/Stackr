@@ -964,14 +964,12 @@ func (m *DBOpsModel) viewActions() string {
 	// ── Custom action form ────────────────────────────────────────────────────
 	if m.addingCustomAction {
 		b.WriteString(m.viewCustomForm())
-		b.WriteString("\n")
 		return b.String()
 	}
 
 	// ── Param prompting ───────────────────────────────────────────────────────
 	if m.promptingParams {
 		b.WriteString(m.viewParamPrompt())
-		b.WriteString("\n")
 		return b.String()
 	}
 
@@ -1109,7 +1107,7 @@ func (m *DBOpsModel) viewCustomForm() string {
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "field"),
 			styles.HelpItem("↵", "save"),
-		) + "\n\n")
+		))
 	return b.String()
 }
 
@@ -1139,7 +1137,7 @@ func (m *DBOpsModel) viewParamPrompt() string {
 	b.WriteString("  " + styles.InlineHelp(
 		styles.HelpItem("esc", "cancel"),
 		styles.HelpItem("enter", "next"),
-	) + "\n")
+	))
 	return b.String()
 }
 
