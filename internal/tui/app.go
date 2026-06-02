@@ -80,7 +80,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case views.ProfileSavedMsg:
 		a.cfg = msg.Config
+		a.homeCursor = a.home.Cursor()
 		a.home = views.NewHome(a.cfg)
+		a.home.SetCursor(a.homeCursor)
 		a.screen = ScreenHome
 		return a, a.home.Init()
 

@@ -1054,7 +1054,7 @@ func (m *DBOpsModel) viewActions() string {
 		b.WriteString(styles.StyleError.Render("  Press d again to delete this custom action") + "\n")
 	}
 
-	if m.running || m.startingService {
+	if (m.running || m.startingService) && !m.promptStartService {
 		b.WriteString(styles.StyleHelp.Render("  " + "Please wait…"))
 	} else if m.confirmAction || m.confirmCustomAction {
 		b.WriteString(styles.BackHelp())

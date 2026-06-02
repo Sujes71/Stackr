@@ -1308,7 +1308,7 @@ func (m *ProfileViewModel) View() string {
 		b.WriteString(styles.StyleInputLabel.Render("  New env name:"))
 		b.WriteString(" ")
 		b.WriteString(m.envInput.View())
-		b.WriteString(styles.StyleSubtitle.Render("   ↵ add   esc cancel"))
+		b.WriteString(styles.StyleSubtitle.Render("   ↵ add"))
 		b.WriteString("\n")
 	}
 
@@ -1328,8 +1328,7 @@ func (m *ProfileViewModel) View() string {
 		b.WriteString("\n\n")
 	}
 	if m.inDiscovery {
-		b.WriteString("\n\n")
-		b.WriteString(styles.InlineHelp(styles.HelpItem("esc", "cancel")))
+		// silence — discovery steps render their own InlineHelp
 	} else if m.viewingService >= 0 || m.showStats {
 		// Config/stats overlay has its own "press any key to return" hint
 	} else if m.inputtingEnv {
@@ -1501,58 +1500,8 @@ type itemWindow struct {
 	hasBelow   bool
 }
 
-// computeItemWindow calculates which items in a list [0, total) should be
-// rendered given the cursor position and available terminal height.
-// Returns start (inclusive), end (exclusive), and visibility indicators.
-func (m *ProfileViewModel) computeItemWindow(total int, itemHeight int) itemWindow {
-	w := itemWindow{start: 0, end: total}
-
-	if total == 0 || m.height <= 0 {
-		return w
-	}
-
-	cursor := min(m.cursor, total-1) // clamp in case cursor is from a different view
-
-	// Estimate lines used by everything EXCEPT the items section
-	overhead := m.estimateItemOverhead()
-	avail := m.height - overhead
-	if avail <= 0 {
-		return itemWindow{start: cursor, end: min(cursor+1, total), hasAbove: cursor > 0, hasBelow: total-cursor > 1}
-	}
-
-	// How many items fully fit
-	fit := avail / itemHeight
-	if fit <= 0 {
-		fit = 1
-	}
-
-	if total <= fit {
-		return w
-	}
-
-	// Center cursor in the window
-	half := fit / 2
-	start := cursor - half
-	if start < 0 {
-		start = 0
-	}
-	end := start + fit
-	if end > total {
-		end = total
-		start = total - fit
-	}
-
-	return itemWindow{
-		start:    start,
-		end:      end,
-		hasAbove: start > 0,
-		hasBelow: total-end > 0,
-	}
-}
-
 // estimateItemOverhead returns the number of terminal lines consumed by
 // everything rendered before and after the dynamic items section in View().
-// Used by computeItemWindow to determine available space for items.
 func (m *ProfileViewModel) estimateItemOverhead() int {
 	// Before items
 	oh := 1 + 1 + 2 // \n + env tabs + \n\n

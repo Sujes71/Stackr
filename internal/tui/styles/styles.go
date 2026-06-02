@@ -62,18 +62,6 @@ var (
 			Foreground(ColorSecondary).
 			Bold(true)
 
-	StyleListItem = lipgloss.NewStyle().
-			Padding(0, 2)
-
-	StyleListItemSelected = lipgloss.NewStyle().
-				Foreground(ColorPrimary).
-				Bold(true).
-				Padding(0, 2)
-
-	StyleListItemDisabled = lipgloss.NewStyle().
-				Foreground(ColorMuted).
-				Padding(0, 2)
-
 	StyleBadgeEnv = lipgloss.NewStyle().
 			Foreground(ColorBg).
 			Background(ColorPrimary).
@@ -90,12 +78,6 @@ var (
 	StyleBadgeEnvInactive = lipgloss.NewStyle().
 				Foreground(ColorFg).
 				Background(lipgloss.Color("#363646")).
-				Padding(0, 1)
-
-	StyleButtonSecondary = lipgloss.NewStyle().
-				Foreground(ColorMuted).
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(ColorMuted).
 				Padding(0, 1)
 
 	StyleHelp = lipgloss.NewStyle().
@@ -267,16 +249,6 @@ func Separator(width int) string {
 	return lipgloss.NewStyle().
 		Foreground(ColorMuted).
 		Render(strings.Repeat("─", width))
-}
-
-// EmptyState renders a centered empty-state message inside a panel.
-func EmptyState(msg string) string {
-	return StylePanel.Width(60).Render(StyleSubtitle.Render(msg))
-}
-
-// PadLeft returns n spaces for consistent indentation.
-func PadLeft(n int) string {
-	return strings.Repeat(" ", n)
 }
 
 // ForwardDot returns a colored state indicator for port-forward states.

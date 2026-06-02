@@ -42,6 +42,7 @@ type importResultMsg struct {
 func NewHome(cfg *config.Config) *HomeModel {
 	ti := textinput.New()
 	ti.Prompt = ""
+	ti.CharLimit = 100
 
 	importTi := textinput.New()
 	importTi.Prompt = ""
@@ -340,7 +341,7 @@ func (m *HomeModel) View() string {
 	mgmtItems = append(mgmtItems, styles.HelpItem("n", "new profile"))
 	if len(m.profiles) > 0 {
 		mgmtItems = append(mgmtItems, styles.HelpItem("d d", "delete"))
-		mgmtItems = append(mgmtItems, styles.HelpItem("x", "export"))
+		mgmtItems = append(mgmtItems, styles.HelpItem("x", "preview"))
 		mgmtItems = append(mgmtItems, styles.HelpItem("i", "import"))
 	}
 	b.WriteString("\n")
