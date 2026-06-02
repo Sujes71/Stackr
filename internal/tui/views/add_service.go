@@ -1568,7 +1568,9 @@ func (m *AddServiceModel) viewPorts() string {
 	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
-	b.WriteString("\n\n")
+	if len(actItems) > 0 {
+		b.WriteString("\n")
+	}
 	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "add/continue")))
 	return b.String()
 }
@@ -1673,7 +1675,9 @@ func (m *AddServiceModel) viewEnvVars() string {
 	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
-	b.WriteString("\n\n")
+	if len(actItems) > 0 {
+		b.WriteString("\n")
+	}
 	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "add/continue")))
 	return b.String()
 }
@@ -1730,7 +1734,9 @@ func (m *AddServiceModel) viewVolumes() string {
 	b.WriteString(styles.HelpBar(
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
-	b.WriteString("\n\n")
+	if len(actItems) > 0 {
+		b.WriteString("\n")
+	}
 	b.WriteString(styles.BackHelp(styles.HelpItem("↵", "select")))
 	return b.String()
 }
