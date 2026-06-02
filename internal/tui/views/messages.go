@@ -61,13 +61,3 @@ type statsResultMsg struct {
 // ── Spinner Messages ──
 
 type spinnerTickMsg struct{}
-
-// ── Batch Progress ──
-
-// batchSeqMsg drives sequential start/stop-all one step at a time.
-// step goes through local processes first, then Docker services.
-type batchSeqMsg struct {
-	envName string
-	isStart bool
-	step    int
-}
