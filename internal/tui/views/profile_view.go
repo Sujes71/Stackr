@@ -410,7 +410,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ensureValidSelection()
 		if msg.err != nil {
 			m.lastAction = "✗ " + msg.err.Error()
-			return m, m.loadStatus()
+			return m, tea.Batch(m.loadStatus(), ClearActionAfter(5*time.Second))
 		}
 		m.lastAction = "✓ " + msg.label
 		// Auto-clear info message after 3 seconds
@@ -482,7 +482,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.inDiscovery = false
 			m.discoveryStep = 0
 			m.lastAction = "✗ No K8s contexts found"
-			return m, ClearActionAfter(3 * time.Second)
+			return m, ClearActionAfter(5 * time.Second)
 		}
 		m.inDiscovery = true
 		m.discoveryStep = 0
@@ -502,7 +502,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.inDiscovery = false
 		m.discoveryStep = 0
 		m.lastAction = "✗ " + msg.err
-		return m, ClearActionAfter(3 * time.Second)
+		return m, ClearActionAfter(5 * time.Second)
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -553,15 +553,15 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 						updated, err := m.cfg.ClearPortForwards(m.profile.Name, envName)
 						if err != nil {
-							m.lastAction = "✗ " + err.Error()
-							return m, ClearActionAfter(3 * time.Second)
-						}
-						m.profile = updated
-						m.buildForwardHandles()
-						m.cursor = 0
-						m.rememberCurrentEnvSelection()
-						m.lastAction = "✓ All forwards deleted"
-						return m, ClearActionAfter(3 * time.Second)
+						m.lastAction = "✗ " + err.Error()
+						return m, ClearActionAfter(5 * time.Second)
+					}
+					m.profile = updated
+					m.buildForwardHandles()
+					m.cursor = 0
+					m.rememberCurrentEnvSelection()
+					m.lastAction = "✓ All forwards deleted"
+					return m, ClearActionAfter(3 * time.Second)
 					}
 					if len(m.currentEnvServices()) == 0 {
 						m.lastAction = "No services to reset"
@@ -575,16 +575,16 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					updated, err := m.cfg.ClearServices(m.profile.Name, env.Name)
 					if err != nil {
 						m.lastAction = "✗ " + err.Error()
-					} else {
-						m.profile = updated
-						if _, err := config.GenerateCompose(*m.profile, env.Name); err != nil {
-							m.lastAction = "✗ compose gen: " + err.Error()
-						} else {
-							m.lastAction = "✓ All services deleted"
-						}
-						m.cursor = 0
-						m.rememberCurrentEnvSelection()
+						return m, tea.Batch(m.loadStatus(), ClearActionAfter(5*time.Second), spinnerCmd())
 					}
+					m.profile = updated
+					if _, err := config.GenerateCompose(*m.profile, env.Name); err != nil {
+						m.lastAction = "✗ compose gen: " + err.Error()
+						return m, tea.Batch(m.loadStatus(), ClearActionAfter(5*time.Second), spinnerCmd())
+					}
+					m.lastAction = "✓ All services deleted"
+					m.cursor = 0
+					m.rememberCurrentEnvSelection()
 					return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second), spinnerCmd())
 
 				case "v":
@@ -630,14 +630,14 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				if name == "" || name == "." || name == ".." {
 					m.lastAction = "✗ Invalid environment name"
-					return m, nil
+					return m, ClearActionAfter(5 * time.Second)
 				}
 
 				// Check for duplicates
 				for _, env := range m.profile.Environments {
 					if env.Name == name {
 						m.lastAction = "✗ Environment " + name + " already exists"
-						return m, nil
+						return m, ClearActionAfter(5 * time.Second)
 					}
 				}
 
@@ -645,18 +645,18 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				sanitized := config.SanitizeComposeName(name)
 				if sanitized != name {
 					m.lastAction = "✗ Invalid name: use letters, numbers, dots, hyphens or underscores"
-					return m, nil
+					return m, ClearActionAfter(5 * time.Second)
 				}
 
 				m.profile.Environments = append(m.profile.Environments, config.Environment{Name: name})
 				if err := m.cfg.UpdateProfile(*m.profile); err != nil {
 					m.lastAction = "✗ " + err.Error()
-					return m, nil
+					return m, ClearActionAfter(5 * time.Second)
 				}
 				// Generate empty compose for the new env
 				if _, err := config.GenerateCompose(*m.profile, name); err != nil {
 					m.lastAction = "✗ compose gen: " + err.Error()
-					return m, nil
+					return m, ClearActionAfter(5 * time.Second)
 				}
 				m.envState[name] = ProfileEnvState{}
 				m.lastAction = "✓ Added environment " + name
@@ -749,7 +749,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.isPortForwardEnv() && !m.inDiscovery {
 				if !portforward.CheckKubectl() {
 					m.lastAction = "✗ kubectl not found in PATH"
-					return m, ClearActionAfter(3 * time.Second)
+					return m, ClearActionAfter(5 * time.Second)
 				}
 				m.inDiscovery = true
 				m.discoveryStep = 0
@@ -919,19 +919,19 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			updated, err := m.cfg.DeleteService(m.profile.Name, env.Name, svc.Name)
 			if err != nil {
 				m.lastAction = "✗ " + err.Error()
-			} else {
-				m.profile = updated
-				if _, err := config.GenerateCompose(*m.profile, env.Name); err != nil {
-					m.lastAction = "✗ compose gen: " + err.Error()
-				} else {
-					m.lastAction = "✓ Deleted " + svc.Name
-				}
-				remaining := m.currentEnvServices()
-				if m.cursor >= len(remaining) && m.cursor > 0 {
-					m.cursor--
-				}
-				m.rememberCurrentEnvSelection()
+				return m, tea.Batch(m.loadStatus(), ClearActionAfter(5*time.Second), spinnerCmd())
 			}
+			m.profile = updated
+			if _, err := config.GenerateCompose(*m.profile, env.Name); err != nil {
+				m.lastAction = "✗ compose gen: " + err.Error()
+				return m, tea.Batch(m.loadStatus(), ClearActionAfter(5*time.Second), spinnerCmd())
+			}
+			m.lastAction = "✓ Deleted " + svc.Name
+			remaining := m.currentEnvServices()
+			if m.cursor >= len(remaining) && m.cursor > 0 {
+				m.cursor--
+			}
+			m.rememberCurrentEnvSelection()
 			return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second), spinnerCmd())
 
 		case key.Matches(msg, profileKeys.envDelete):
@@ -970,7 +970,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 			if err := m.cfg.UpdateProfile(*m.profile); err != nil {
 				m.lastAction = "✗ " + err.Error()
-				return m, nil
+				return m, ClearActionAfter(5 * time.Second)
 			}
 			// Adjust activeEnv if needed
 			m.ensureValidSelection()
@@ -1025,7 +1025,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if !isRunning {
 				m.lastAction = "✗ unavailable: service not running"
-				return m, ClearActionAfter(3 * time.Second)
+				return m, ClearActionAfter(5 * time.Second)
 			}
 			m.showStats = true
 			m.statsContainer = containerName
@@ -1073,12 +1073,12 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if !isRunning {
 				m.lastAction = "✗ unavailable: service not running"
-				return m, ClearActionAfter(3 * time.Second)
+				return m, ClearActionAfter(5 * time.Second)
 			}
 			cmd, err := docker.ExecShell(containerName)
 			if err != nil {
 				m.lastAction = "✗ " + err.Error()
-				return m, ClearActionAfter(3 * time.Second)
+				return m, ClearActionAfter(5 * time.Second)
 			}
 			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
 				return actionDoneMsg{label: "shell closed", err: err}
@@ -1388,8 +1388,10 @@ func (m *ProfileViewModel) View() string {
 		msg = "  " + strings.ReplaceAll(msg, "\n", "\n  ")
 		if strings.HasPrefix(m.lastAction, "✗") {
 			b.WriteString(styles.StyleError.Render(msg))
-		} else {
+		} else if strings.HasPrefix(m.lastAction, "✓") {
 			b.WriteString(styles.StyleSuccess.Render(msg))
+		} else {
+			b.WriteString(styles.StyleSubtitle.Render(msg))
 		}
 		b.WriteString("\n")
 	}
@@ -2137,13 +2139,13 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 			port, err := strconv.Atoi(portStr)
 			if err != nil || port < 1 || port > 65535 {
 				m.lastAction = "✗ Invalid port. Must be 1-65535."
-				return m, nil
+				return m, ClearActionAfter(5 * time.Second)
 			}
 			// Check port conflict
 			for _, h := range m.currentForwards() {
 				if h.Config.LocalPort == port {
 					m.lastAction = fmt.Sprintf("✗ Port %d already in use by '%s'", port, h.Config.Name)
-					return m, nil
+					return m, ClearActionAfter(5 * time.Second)
 				}
 			}
 
@@ -2380,14 +2382,14 @@ func (m *ProfileViewModel) handlePortEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd
 		port, err := strconv.Atoi(portStr)
 		if err != nil || port < 1 || port > 65535 {
 			m.lastAction = "✗ Invalid port. Must be 1-65535."
-			return m, nil
+			return m, ClearActionAfter(5 * time.Second)
 		}
 		// Check port conflict with other forwards
 		fwdName := m.currentForwards()[m.editFwdIdx].Config.Name
 		for i, h := range m.currentForwards() {
 			if i != m.editFwdIdx && h.Config.LocalPort == port {
 				m.lastAction = fmt.Sprintf("✗ Port %d is already assigned to '%s'", port, h.Config.Name)
-				return m, nil
+				return m, ClearActionAfter(5 * time.Second)
 			}
 		}
 		// Update config
@@ -2402,7 +2404,7 @@ func (m *ProfileViewModel) handlePortEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd
 		updated, err := m.cfg.UpdatePortForward(m.profile.Name, envName, fwdName, updatedPF)
 		if err != nil {
 			m.lastAction = "✗ " + err.Error()
-			return m, nil
+			return m, ClearActionAfter(5 * time.Second)
 		}
 		m.profile = updated
 		m.buildForwardHandles()

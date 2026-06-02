@@ -1176,7 +1176,7 @@ func (m *AddServiceModel) viewSearch() string {
 	}
 	b.WriteString("\n\n")
 	if m.searchErr != "" {
-		b.WriteString(styles.StyleError.Render("  "+m.searchErr) + "\n")
+		b.WriteString(styles.StyleError.Render("  ✗ "+m.searchErr) + "\n")
 	}
 	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 

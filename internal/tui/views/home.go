@@ -217,13 +217,13 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			path := filepath.Join(exportDir, p.Name+".yaml")
 			data, err := yaml.Marshal(p)
 			if err != nil {
-				m.lastResult = "✗ export: " + err.Error()
+				m.lastResult = styles.StyleError.Render("✗ export: " + err.Error())
 			} else if err := os.WriteFile(path, data, 0644); err != nil {
-				m.lastResult = "✗ export: " + err.Error()
+				m.lastResult = styles.StyleError.Render("✗ export: " + err.Error())
 			} else {
-				m.lastResult = "✓ Exported to " + path
+				m.lastResult = styles.StyleSuccess.Render("✓ Exported to " + path)
 			}
-			return m, ClearActionAfter(5 * time.Second)
+			return m, ClearActionAfter(3 * time.Second)
 
 		case key.Matches(msg, homeKeys.import_):
 			// Scan exports folder for available profiles
@@ -240,7 +240,7 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if len(m.importFiles) == 0 {
-				m.lastResult = "No profiles available to import. Export one first with 'x'."
+				m.lastResult = styles.StyleSubtitle.Render("No profiles available to import. Export one first with 'x'.")
 				return m, ClearActionAfter(3 * time.Second)
 			}
 			m.showImport = true

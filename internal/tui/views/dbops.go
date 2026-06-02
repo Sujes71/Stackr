@@ -296,6 +296,7 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.profile.UpdatedAt = time.Now()
 				if err := m.cfg.UpdateProfile(*m.profile); err != nil {
 					m.lastResult = formatErrorMsg(err.Error())
+					return m, ClearActionAfter(5 * time.Second)
 				} else {
 					m.lastResult = styles.StyleSuccess.Render("✓ Deleted " + name)
 					if m.listCursor >= len(svc.SyncEnvs) && m.listCursor > 0 {
@@ -413,8 +414,8 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.promptStartService = false
 					m.startingService = false
 					m.pendingAction = ""
-					m.lastResult = styles.StyleError.Render("Service not found.")
-					return m, ClearActionAfter(3 * time.Second)
+			m.lastResult = styles.StyleError.Render("Service not found.")
+			return m, ClearActionAfter(5 * time.Second)
 				}
 			return m, tea.Batch(
 				func() tea.Msg {
@@ -570,6 +571,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.profile.UpdatedAt = time.Now()
 						if err := m.cfg.UpdateProfile(*m.profile); err != nil {
 							m.lastResult = formatErrorMsg(err.Error())
+							return m, ClearActionAfter(5 * time.Second)
 						} else {
 							m.lastResult = styles.StyleSuccess.Render("✓ Deleted custom action")
 						}
@@ -623,7 +625,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.startingService = false
 		if msg.err != nil {
 			m.lastResult = formatErrorMsg("start service: " + msg.err.Error())
-			return m, ClearActionAfter(3 * time.Second)
+			return m, ClearActionAfter(5 * time.Second)
 		}
 		// Execute the pending action
 		m.running = true
@@ -649,7 +651,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.running = false
 		m.lastResult = styles.StyleError.Render("Could not find action '" + m.pendingAction + "'")
-		return m, ClearActionAfter(3 * time.Second)
+		return m, ClearActionAfter(5 * time.Second)
 	}
 	return m, nil
 }
@@ -797,6 +799,7 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.profile.UpdatedAt = time.Now()
 			if err := m.cfg.UpdateProfile(*m.profile); err != nil {
 				m.lastResult = formatErrorMsg(err.Error())
+				return m, ClearActionAfter(5 * time.Second)
 			} else {
 				m.lastResult = styles.StyleSuccess.Render("✓ Custom action saved")
 			}
@@ -1054,7 +1057,7 @@ func (m *DBOpsModel) viewActions() string {
 	}
 
 	if (m.running || m.startingService) && !m.promptStartService {
-		b.WriteString(styles.StyleHelp.Render("  " + "Please wait…"))
+		b.WriteString(styles.StyleSubtitle.Render("  Please wait…"))
 	} else if m.confirmAction || m.confirmCustomAction {
 		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n\n")
 		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "execute")))
