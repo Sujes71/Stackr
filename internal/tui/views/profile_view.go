@@ -1545,9 +1545,8 @@ func (m *ProfileViewModel) View() string {
 
 	if m.inputtingEnv {
 		b.WriteString("\n")
-		b.WriteString(styles.StyleInputLabel.Render("  New env name:"))
-		b.WriteString(" ")
-		b.WriteString(m.envInput.View())
+		focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+		b.WriteString("  " + focusStyle.Render("New env name:") + " " + m.envInput.View())
 		b.WriteString(styles.StyleSubtitle.Render("   ↵ add"))
 		b.WriteString("\n")
 	}
@@ -2070,7 +2069,8 @@ func (m *ProfileViewModel) renderDiscovery() string {
 }
 
 func (m *ProfileViewModel) renderPortEditor() string {
-	return "  " + styles.StyleInputLabel.Render("Local port:") +
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	return "  " + focusStyle.Render("Local port:") +
 		" " + m.portInput.View() +
 		"  " + styles.InlineHelp(styles.HelpItem("↵", "save"), styles.HelpItem("esc", "cancel"))
 }

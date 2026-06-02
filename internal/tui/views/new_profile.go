@@ -199,17 +199,13 @@ func (m *NewProfileModel) View() string {
 
 	switch m.step {
 	case npStepName:
-		b.WriteString(styles.StyleInputLabel.Render("Profile name"))
-		b.WriteString("\n")
-		b.WriteString("  " + m.name.View())
-		b.WriteString("\n")
+		focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+		b.WriteString("  " + focusStyle.Render("Profile name: ") + m.name.View() + "\n")
 		b.WriteString(styles.StyleSubtitle.Render("  Will be used as folder name: ~/.stackr/<name>/"))
 
 	case npStepDesc:
-		b.WriteString(styles.StyleInputLabel.Render("Description  ") + styles.StyleSubtitle.Render("(optional)"))
-		b.WriteString("\n")
-		b.WriteString("  " + m.desc.View())
-		b.WriteString("\n")
+		focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+		b.WriteString("  " + focusStyle.Render("Description: ") + styles.StyleSubtitle.Render("(optional) ") + m.desc.View() + "\n")
 		b.WriteString(styles.StyleSubtitle.Render("  Optional — helps identify the profile at a glance"))
 
 	case npStepEnvs:

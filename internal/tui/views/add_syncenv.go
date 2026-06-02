@@ -533,8 +533,8 @@ func (m *AddSyncEnvModel) viewNameStep() string {
 	var b strings.Builder
 
 	b.WriteString(fmt.Sprintf("  DB type: %s\n\n", styles.StyleCode.Render(m.dbType)))
-	b.WriteString("  " + styles.StyleInputLabel.Render("Name") + "\n")
-	b.WriteString("  " + m.nameInput.View() + "\n")
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	b.WriteString("  " + focusStyle.Render("Name: ") + m.nameInput.View() + "\n")
 	b.WriteString("  " + styles.StyleSubtitle.Render("e.g., staging, prod, dev"))
 
 	if m.nameErr != "" {
@@ -550,78 +550,32 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 	var b strings.Builder
 	b.WriteString("  Connection details\n\n")
 
-	// Host
-	label := "  " + styles.StyleInputLabel.Render("Host")
-	if m.credFocus == credFocusHost {
-		b.WriteString(fmt.Sprintf("%s  %s\n", label, m.hostInput.View()))
-	} else {
-		val := m.hostInput.Value()
-		display := styles.StyleCode.Render(val)
-		if val == "" {
-			display = styles.StyleSubtitle.Render("(empty)")
-		}
-		b.WriteString(fmt.Sprintf("%s  %s\n", label, display))
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	normalStyle := lipgloss.NewStyle()
+
+	hostLabel, portLabel, userLabel, passLabel, dbLabel, authLabel := normalStyle, normalStyle, normalStyle, normalStyle, normalStyle, normalStyle
+	switch m.credFocus {
+	case credFocusHost:
+		hostLabel = focusStyle
+	case credFocusPort:
+		portLabel = focusStyle
+	case credFocusUser:
+		userLabel = focusStyle
+	case credFocusPass:
+		passLabel = focusStyle
+	case credFocusDB:
+		dbLabel = focusStyle
+	case credFocusAuthDB:
+		authLabel = focusStyle
 	}
 
-	// Port
-	label = "  " + styles.StyleInputLabel.Render("Port")
-	if m.credFocus == credFocusPort {
-		b.WriteString(fmt.Sprintf("%s  %s\n", label, m.portInput.View()))
-	} else {
-		b.WriteString(fmt.Sprintf("%s  %s\n", label, styles.StyleCode.Render(m.portInput.Value())))
-	}
-
-	// User
-	label = "  " + styles.StyleInputLabel.Render("User")
-	if m.credFocus == credFocusUser {
-		b.WriteString(fmt.Sprintf("%s  %s\n", label, m.userInput.View()))
-	} else {
-		val := m.userInput.Value()
-		display := styles.StyleCode.Render(val)
-		if val == "" {
-			display = styles.StyleSubtitle.Render("(empty)")
-		}
-		b.WriteString(fmt.Sprintf("%s  %s\n", label, display))
-	}
-
-	// Password
-	label = "  " + styles.StyleInputLabel.Render("Password  ") + styles.StyleSubtitle.Render("(optional)")
-	if m.credFocus == credFocusPass {
-		b.WriteString(fmt.Sprintf("%s  %s\n", label, m.passInput.View()))
-	} else {
-		masked := styles.StyleSubtitle.Render("(empty)")
-		if m.passInput.Value() != "" {
-			masked = styles.StyleSubtitle.Render("\u2022\u2022\u2022\u2022\u2022\u2022")
-		}
-		b.WriteString(fmt.Sprintf("%s  %s\n", label, masked))
-	}
-
-	// Database
-	label = "  " + styles.StyleInputLabel.Render("Database")
-	if m.credFocus == credFocusDB {
-		b.WriteString(fmt.Sprintf("%s  %s\n", label, m.dbInput.View()))
-	} else {
-		val := m.dbInput.Value()
-		display := styles.StyleCode.Render(val)
-		if val == "" {
-			display = styles.StyleSubtitle.Render("(empty)")
-		}
-		b.WriteString(fmt.Sprintf("%s  %s\n", label, display))
-	}
-
-	// AuthDB (mongo only)
+	b.WriteString("  " + hostLabel.Render("Host:     ") + m.hostInput.View() + "\n")
+	b.WriteString("  " + portLabel.Render("Port:     ") + m.portInput.View() + "\n")
+	b.WriteString("  " + userLabel.Render("User:     ") + m.userInput.View() + "\n")
+	b.WriteString("  " + passLabel.Render("Password: ") + styles.StyleSubtitle.Render("(optional) ") + m.passInput.View() + "\n")
+	b.WriteString("  " + dbLabel.Render("Database: ") + m.dbInput.View() + "\n")
 	if m.dbType == "mongo" {
-		label = "  " + styles.StyleInputLabel.Render("Auth DB  ") + styles.StyleSubtitle.Render("(optional)")
-		if m.credFocus == credFocusAuthDB {
-			b.WriteString(fmt.Sprintf("%s  %s\n", label, m.authDBInput.View()))
-		} else {
-			val := m.authDBInput.Value()
-			display := styles.StyleCode.Render(val)
-			if val == "" {
-				display = styles.StyleSubtitle.Render("(none)")
-			}
-			b.WriteString(fmt.Sprintf("%s  %s\n", label, display))
-		}
+		b.WriteString("  " + authLabel.Render("Auth DB:  ") + styles.StyleSubtitle.Render("(optional) ") + m.authDBInput.View() + "\n")
 	}
 
 	if m.credErr != "" {

@@ -1083,16 +1083,16 @@ func (m *DBOpsModel) viewCustomForm() string {
 	b.WriteString(styles.StyleSubtitle.Render("  " + titleStr) + "\n\n")
 
 	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
-	normalStyle := lipgloss.NewStyle().Foreground(styles.ColorFg)
+	normalStyle := lipgloss.NewStyle()
 
 	// Name field
 	if m.customFormFocus == 0 {
 		m.customNameInput.Focus()
 		m.customCmdInput.Blur()
-		b.WriteString("  " + focusStyle.Render("Name: ") + m.customNameInput.View() + "\n")
+		b.WriteString("  " + focusStyle.Render("Name:    ") + m.customNameInput.View() + "\n")
 	} else {
 		m.customNameInput.Blur()
-		b.WriteString("  " + normalStyle.Render("Name: ") + m.customNameInput.View() + "\n")
+		b.WriteString("  " + normalStyle.Render("Name:    ") + m.customNameInput.View() + "\n")
 	}
 
 	// Command field

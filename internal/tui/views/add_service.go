@@ -1506,15 +1506,15 @@ func (m *AddServiceModel) viewName() string {
 		} else {
 			// Step 2: confirm/enter service name
 			b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
-			b.WriteString(styles.StyleInputLabel.Render("Service name") + "\n")
-			b.WriteString("  " + m.nameInput.View() + "\n")
+			focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+			b.WriteString("  " + focusStyle.Render("Service name: ") + m.nameInput.View() + "\n")
 			b.WriteString("  Used as the compose service key and container name suffix\n")
 			b.WriteString("\n  " + styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "continue")))
 		}
 	} else {
 		b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
-		b.WriteString(styles.StyleInputLabel.Render("Service name") + "\n")
-		b.WriteString("  " + m.nameInput.View() + "\n")
+		focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+		b.WriteString("  " + focusStyle.Render("Service name: ") + m.nameInput.View() + "\n")
 		b.WriteString("  Used as the compose service key and container name suffix\n")
 		b.WriteString("\n" + styles.BackHelp(styles.HelpItem("↵", "continue")))
 	}
@@ -1524,8 +1524,19 @@ func (m *AddServiceModel) viewName() string {
 func (m *AddServiceModel) viewPorts() string {
 	var b strings.Builder
 	b.WriteString("  Port mappings  (host:container)\n\n")
-	b.WriteString("  " + styles.StyleInputLabel.Render("Host port") + "  " + m.portHost.View() + "\n")
-	b.WriteString("  " + styles.StyleInputLabel.Render("Container port") + "  " + m.portContainer.View() + "\n\n")
+
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	normalStyle := lipgloss.NewStyle()
+
+	hostLabel, contLabel := normalStyle, normalStyle
+	if m.portHost.Focused() {
+		hostLabel = focusStyle
+	} else if m.portContainer.Focused() {
+		contLabel = focusStyle
+	}
+
+	b.WriteString("  " + hostLabel.Render("Host port:      ") + m.portHost.View() + "\n")
+	b.WriteString("  " + contLabel.Render("Container port: ") + m.portContainer.View() + "\n\n")
 	win := addSvcTailWindow(len(m.ports), m.height, 13)
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
@@ -1617,8 +1628,20 @@ func (m *AddServiceModel) envVarsRemovable() bool {
 func (m *AddServiceModel) viewEnvVars() string {
 	var b strings.Builder
 	b.WriteString("  Environment variables\n\n")
-	b.WriteString("  " + styles.StyleInputLabel.Render("Key") + "  " + m.envKey.View() + "\n")
-	b.WriteString("  " + styles.StyleInputLabel.Render("Value") + "  " + m.envVal.View() + "\n\n")
+
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	normalStyle := lipgloss.NewStyle()
+
+	keyLabel, valLabel := normalStyle, normalStyle
+	switch m.envFocus {
+	case 0:
+		keyLabel = focusStyle
+	case 1:
+		valLabel = focusStyle
+	}
+
+	b.WriteString("  " + keyLabel.Render("Key:  ") + m.envKey.View() + "\n")
+	b.WriteString("  " + valLabel.Render("Value:") + m.envVal.View() + "\n\n")
 	win := addSvcTailWindow(len(m.envVars), m.height, 13)
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
@@ -1662,8 +1685,16 @@ func (m *AddServiceModel) viewVolumes() string {
 	}
 	var b strings.Builder
 	b.WriteString("  Volumes\n\n")
-	b.WriteString("  " + styles.StyleInputLabel.Render("Source") + "  " + m.volSource.View() + "  ")
-	b.WriteString(styles.StyleCode.Render(namedLabel) + "\n\n")
+
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	normalStyle := lipgloss.NewStyle()
+
+	label := focusStyle
+	if !m.volSource.Focused() {
+		label = normalStyle
+	}
+
+	b.WriteString("  " + label.Render("Source: ") + m.volSource.View() + "  " + styles.StyleCode.Render(namedLabel) + "\n\n")
 	win := addSvcTailWindow(len(m.volumes), m.height, 13)
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
