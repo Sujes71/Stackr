@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -844,7 +845,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, tea.Batch(
 							func() tea.Msg {
 								if cmd != nil && cmd.Process != nil {
-									cmd.Process.Kill()
+									_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 									go func() { cmd.Process.Wait() }()
 								}
 								delete(m.localProcesses, proc.Name)
@@ -858,11 +859,12 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						func() tea.Msg {
 							if m.isLocalProcRunning(proc.Name) {
 								if cmd := m.localProcesses[proc.Name]; cmd != nil && cmd.Process != nil {
-									cmd.Process.Kill()
+									_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 									go func() { cmd.Process.Wait() }()
 								}
 							}
 							cmd := exec.Command("sh", "-c", proc.Command)
+							cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 							if proc.WorkDir != "" {
 								wd := proc.WorkDir
 								if strings.HasPrefix(wd, "~") {
@@ -1009,7 +1011,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				proc := env.LocalProcesses[procIdx]
 				m.lastAction = "Deleting " + proc.Name + "..."
 				if cmd, ok := m.localProcesses[proc.Name]; ok && cmd != nil && cmd.Process != nil {
-					cmd.Process.Kill()
+					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 					go func() { cmd.Process.Wait() }()
 					delete(m.localProcesses, proc.Name)
 				}
@@ -1424,7 +1426,7 @@ func (m *ProfileViewModel) StopAllForwards() {
 func (m *ProfileViewModel) StopAllLocalProcesses() {
 	for name, cmd := range m.localProcesses {
 		if cmd != nil && cmd.Process != nil {
-			cmd.Process.Kill()
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			go func(c *exec.Cmd) { c.Process.Wait() }(cmd)
 		}
 		delete(m.localProcesses, name)
