@@ -1459,7 +1459,7 @@ func (m *AddServiceModel) viewVolumes() string {
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
 	b.WriteString("\n\n")
-	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "select")))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↵", "select")))
 	return b.String()
 }
 

@@ -1320,7 +1320,37 @@ func (m *ProfileViewModel) View() string {
 	b.WriteString("\n")
 
 	// Env tabs
-	b.WriteString(m.renderEnvTabs())
+	tabsLine := m.renderEnvTabs()
+	if !m.inDiscovery && m.viewingService < 0 && !m.showStats {
+		var running, total int
+		if m.isPortForwardEnv() {
+			for _, h := range m.currentForwards() {
+				total++
+				if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
+					running++
+				}
+			}
+		} else {
+			env := m.currentEnv()
+			if env != nil {
+				total = len(env.Services)
+				for _, svc := range env.Services {
+					containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, env.Name, svc.ComposeName())
+					for _, st := range m.statuses {
+						if st.Name == containerName && st.State == "running" {
+							running++
+							break
+						}
+					}
+				}
+			}
+		}
+		if total > 0 {
+			countStr := fmt.Sprintf("%d/%d running", running, total)
+		tabsLine = tabsLine + "  " + styles.StyleSubtitle.Render(countStr)
+		}
+	}
+	b.WriteString(tabsLine)
 	b.WriteString("\n\n")
 
 	env := m.currentEnv()

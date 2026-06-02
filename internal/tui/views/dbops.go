@@ -126,8 +126,8 @@ type actionItem struct {
 // ── Key bindings ──────────────────────────────────────────────────────────────
 
 var (
-	dbOpsUp     = key.NewBinding(key.WithKeys("up", "k"))
-	dbOpsDown   = key.NewBinding(key.WithKeys("down", "j"))
+	dbOpsUp     = key.NewBinding(key.WithKeys("up"))
+	dbOpsDown   = key.NewBinding(key.WithKeys("down"))
 	dbOpsEnter  = key.NewBinding(key.WithKeys("enter"))
 	dbOpsBack   = key.NewBinding(key.WithKeys("esc"))
 	dbOpsAdd    = key.NewBinding(key.WithKeys("a"))
@@ -594,6 +594,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.running = false
 		if msg.err != nil {
 			m.lastResult = formatErrorMsg(msg.err.Error())
+			return m, ClearActionAfter(5 * time.Second)
 		} else {
 			m.lastResult = styles.StyleSuccess.Render("\u2713 " + msg.result)
 			// Track truncate vs import to toggle truncate availability (must happen before rebuild)
@@ -635,6 +636,12 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.actions = m.buildActionsList(se)
 				for _, act := range m.actions {
 					if act.label == m.pendingAction && act.enabled {
+						if act.isCustom {
+							m.running = true
+							m.lastResult = ""
+							m.lastActionLabel = act.label
+							return m, tea.Batch(m.customActionExecCmd(m.pendingCustomCmd), spinnerCmd())
+						}
 						return m, tea.Batch(act.execute(), spinnerCmd())
 					}
 				}
@@ -690,9 +697,9 @@ func (m *DBOpsModel) updateCustomConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
 			if !m.isContainerRunning(container) {
 				m.confirmCustomAction = false
-				m.promptStartService = true
-				m.pendingAction = "custom action"
-				return m, nil
+			m.promptStartService = true
+			m.pendingAction = m.actions[m.actionCursor].label
+			return m, nil
 			}
 			m.confirmCustomAction = false
 			m.running = true
@@ -882,10 +889,7 @@ func (m *DBOpsModel) customActionExecCmd(cmd string) tea.Cmd {
 		if err != nil {
 			return dbOpsDoneMsg{err: fmt.Errorf("custom action: %s: %w", strings.TrimSpace(string(out)), err)}
 		}
-		if len(out) > 0 {
-			return dbOpsDoneMsg{result: "Custom action completed: " + strings.TrimSpace(string(out))}
-		}
-		return dbOpsDoneMsg{result: "Custom action completed"}
+		return dbOpsDoneMsg{result: m.lastActionLabel + " completed"}
 	}
 }
 
@@ -969,12 +973,7 @@ func (m *DBOpsModel) viewActions() string {
 	}
 
 	// ── Confirm messages ──────────────────────────────────────────────────────
-	if m.confirmCustomAction {
-		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n\n")
-	}
-	if m.confirmAction {
-		b.WriteString(styles.StyleError.Render("  Press enter again to confirm, any other key to cancel") + "\n\n")
-	}
+	// Rendered in help bar section below
 
 	// Action group sections rendered inline (no boxes)
 	groupHeaderStyle := lipgloss.NewStyle().
@@ -1057,7 +1056,8 @@ func (m *DBOpsModel) viewActions() string {
 	if (m.running || m.startingService) && !m.promptStartService {
 		b.WriteString(styles.StyleHelp.Render("  " + "Please wait…"))
 	} else if m.confirmAction || m.confirmCustomAction {
-		b.WriteString(styles.BackHelp())
+		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n\n")
+		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "execute")))
 	} else {
 		var helpItems []styles.HelpItemResult
 		helpItems = append(helpItems, styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "run"))

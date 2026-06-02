@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -22,14 +23,13 @@ type HomeModel struct {
 	deleteArmed  bool
 	deleting     string         // non-empty → typed confirmation for deletion of this profile
 	confirmInput textinput.Model
+	lastResult   string
 	height       int // terminal height, set via WindowSizeMsg
 
 	// ── Export / Import ──
-	showExport  bool
-	exportYAML  string
 	showImport  bool
-	importInput textinput.Model
-	importPath  string
+	importFiles []string // available export files not yet imported
+	importCursor int
 	importErr   string
 	importing   bool
 }
@@ -44,25 +44,18 @@ func NewHome(cfg *config.Config) *HomeModel {
 	ti.Prompt = ""
 	ti.CharLimit = 100
 
-	importTi := textinput.New()
-	importTi.Prompt = ""
-	importTi.Placeholder = "~/path/to/profile.yaml"
-	importTi.CharLimit = 100
-	importTi.Width = 40
-
 	return &HomeModel{
 		cfg:          cfg,
 		profiles:     cfg.Profiles,
 		confirmInput: ti,
-		importInput:  importTi,
 	}
 }
 
 var homeKeys = struct {
 	up, down, enter, new, delete, export, import_ key.Binding
 }{
-	up:      key.NewBinding(key.WithKeys("up", "k")),
-	down:    key.NewBinding(key.WithKeys("down", "j")),
+	up:      key.NewBinding(key.WithKeys("up")),
+	down:    key.NewBinding(key.WithKeys("down")),
 	enter:   key.NewBinding(key.WithKeys("enter")),
 	new:     key.NewBinding(key.WithKeys("n")),
 	delete:  key.NewBinding(key.WithKeys("d")),
@@ -94,44 +87,35 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.profiles = msg.profiles
 		m.showImport = false
-		m.importInput.Reset()
-		m.importInput.Blur()
 		m.importErr = ""
 		return m, nil
 
-	case tea.KeyMsg:
-		// ── Export overlay: any key dismisses ──
-		if m.showExport {
-			m.showExport = false
-			m.exportYAML = ""
-			return m, nil
-		}
+	case ClearActionMsg:
+		m.lastResult = ""
 
-		// ── Import input mode ──
+	case tea.KeyMsg:
+		// ── Import overlay: select from available exports ──
 		if m.showImport {
 			switch {
 			case msg.String() == "esc":
 				m.showImport = false
-				m.importInput.Reset()
-				m.importInput.Blur()
-				m.importErr = ""
+				return m, nil
+			case msg.String() == "up":
+				if m.importCursor > 0 {
+					m.importCursor--
+				}
+				return m, nil
+			case msg.String() == "down":
+				if m.importCursor < len(m.importFiles)-1 {
+					m.importCursor++
+				}
 				return m, nil
 			case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
-				path := strings.TrimSpace(m.importInput.Value())
-				if path == "" {
-					m.showImport = false
-					m.importInput.Reset()
-					m.importInput.Blur()
+				if m.importing || m.importCursor >= len(m.importFiles) {
 					return m, nil
 				}
-				if m.importing {
-					return m, nil
-				}
-				// Expand ~
-				if strings.HasPrefix(path, "~/") {
-					home, _ := os.UserHomeDir()
-					path = filepath.Join(home, path[2:])
-				}
+				name := m.importFiles[m.importCursor]
+				path := filepath.Join(config.StackrDir(), "exports", name+".yaml")
 				m.importing = true
 				m.importErr = ""
 				return m, func() tea.Msg {
@@ -146,12 +130,14 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err := m.cfg.AddProfile(p); err != nil {
 						return importResultMsg{err: err.Error()}
 					}
+					// Regenerate compose files for imported profile
+					for _, env := range p.Environments {
+						if len(env.Services) > 0 {
+							config.GenerateCompose(p, env.Name)
+						}
+					}
 					return importResultMsg{profiles: m.cfg.Profiles}
 				}
-			default:
-				var cmd tea.Cmd
-				m.importInput, cmd = m.importInput.Update(msg)
-				return m, cmd
 			}
 		}
 		// If typed confirmation is active, handle in its own mode.
@@ -226,21 +212,41 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 			p := m.profiles[m.cursor]
+			exportDir := filepath.Join(config.StackrDir(), "exports")
+			os.MkdirAll(exportDir, 0755)
+			path := filepath.Join(exportDir, p.Name+".yaml")
 			data, err := yaml.Marshal(p)
 			if err != nil {
-				m.exportYAML = "Error: " + err.Error()
+				m.lastResult = "✗ export: " + err.Error()
+			} else if err := os.WriteFile(path, data, 0644); err != nil {
+				m.lastResult = "✗ export: " + err.Error()
 			} else {
-				m.exportYAML = string(data)
+				m.lastResult = "✓ Exported to " + path
 			}
-			m.showExport = true
-			return m, nil
+			return m, ClearActionAfter(5 * time.Second)
 
 		case key.Matches(msg, homeKeys.import_):
+			// Scan exports folder for available profiles
+			exportDir := filepath.Join(config.StackrDir(), "exports")
+			entries, _ := os.ReadDir(exportDir)
+			m.importFiles = nil
+			for _, e := range entries {
+				if !e.IsDir() && strings.HasSuffix(e.Name(), ".yaml") {
+					name := strings.TrimSuffix(e.Name(), ".yaml")
+					// Skip if already imported
+					if _, exists := m.cfg.GetProfile(name); !exists {
+						m.importFiles = append(m.importFiles, name)
+					}
+				}
+			}
+			if len(m.importFiles) == 0 {
+				m.lastResult = "No profiles available to import. Export one first with 'x'."
+				return m, ClearActionAfter(3 * time.Second)
+			}
 			m.showImport = true
-			m.importInput.Reset()
-			m.importInput.Focus()
+			m.importCursor = 0
 			m.importErr = ""
-			return m, textinput.Blink
+			return m, nil
 		default:
 			m.deleteArmed = false
 			m.deleting = ""
@@ -254,39 +260,30 @@ func (m *HomeModel) View() string {
 
 	b.WriteString("\n")
 
-	// ── Export overlay ──
-	if m.showExport {
-		b.WriteString(styles.StylePanelFocused.Render(
-			styles.StyleHeader.Render(m.profiles[m.cursor].Name) + "\n\n" +
-				styles.StyleSubtitle.Render(m.exportYAML),
-		))
-		b.WriteString("\n\n")
-		b.WriteString(styles.InlineHelp(
-			styles.HelpItem("esc", "dismiss"),
-		))
-		b.WriteString("\n")
-		return b.String()
-	}
-
 	// ── Import overlay ──
 	if m.showImport {
-		b.WriteString(styles.StyleInputLabel.Render("  Import profile from path:"))
+		b.WriteString(styles.StyleInputLabel.Render("  Select profile to import:"))
 		b.WriteString("\n\n")
-		b.WriteString("  " + m.importInput.View())
-		b.WriteString("\n\n")
-		if m.importing {
-			b.WriteString(styles.StyleSubtitle.Render("  Importing…"))
-			b.WriteString("\n\n")
+		for i, name := range m.importFiles {
+			if i == m.importCursor {
+				b.WriteString("  > " + lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true).Render(name) + "\n")
+			} else {
+				b.WriteString("    " + name + "\n")
+			}
 		}
-		if m.importErr != "" {
-			b.WriteString(styles.StyleError.Render("  " + m.importErr))
-			b.WriteString("\n\n")
-		}
+		b.WriteString("\n")
 		b.WriteString(styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("↵", "import"),
 		))
 		b.WriteString("\n")
+		if m.importing {
+			b.WriteString(styles.StyleSubtitle.Render("  Importing…") + "\n")
+		}
+		if m.importErr != "" {
+			b.WriteString(styles.StyleError.Render("  ✗ " + m.importErr) + "\n")
+		}
 		return b.String()
 	}
 
@@ -339,10 +336,13 @@ func (m *HomeModel) View() string {
 	}
 	var mgmtItems []styles.HelpItemResult
 	mgmtItems = append(mgmtItems, styles.HelpItem("n", "new profile"))
+	mgmtItems = append(mgmtItems, styles.HelpItem("i", "import"))
 	if len(m.profiles) > 0 {
 		mgmtItems = append(mgmtItems, styles.HelpItem("d d", "delete"))
-		mgmtItems = append(mgmtItems, styles.HelpItem("x", "preview"))
-		mgmtItems = append(mgmtItems, styles.HelpItem("i", "import"))
+		mgmtItems = append(mgmtItems, styles.HelpItem("x", "export"))
+	}
+	if m.lastResult != "" {
+		b.WriteString("\n  " + m.lastResult + "\n")
 	}
 	b.WriteString("\n")
 	b.WriteString(styles.HelpBar(
