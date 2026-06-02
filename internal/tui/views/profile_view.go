@@ -556,42 +556,42 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.keyPending = ""
 						return m, ClearActionAfter(3 * time.Second)
 					}
-				m.lastAction = "Deleting all services..."
-				go func() {
-					_ = docker.Down(m.profile.Name, env.Name)
-				}()
-				updated, err := m.cfg.ClearServices(m.profile.Name, env.Name)
-				if err != nil {
-					m.lastAction = "✗ " + err.Error()
-				} else {
-					m.profile = updated
-					if _, err := config.GenerateCompose(*m.profile, env.Name); err != nil {
-						m.lastAction = "✗ compose gen: " + err.Error()
+					m.lastAction = "Deleting all services..."
+					go func() {
+						_ = docker.Down(m.profile.Name, env.Name)
+					}()
+					updated, err := m.cfg.ClearServices(m.profile.Name, env.Name)
+					if err != nil {
+						m.lastAction = "✗ " + err.Error()
 					} else {
-						m.lastAction = "✓ All services deleted"
+						m.profile = updated
+						if _, err := config.GenerateCompose(*m.profile, env.Name); err != nil {
+							m.lastAction = "✗ compose gen: " + err.Error()
+						} else {
+							m.lastAction = "✓ All services deleted"
+						}
+						m.cursor = 0
+						m.rememberCurrentEnvSelection()
 					}
-					m.cursor = 0
-					m.rememberCurrentEnvSelection()
-				}
-				return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second), spinnerCmd())
+					return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second), spinnerCmd())
 
 				case "v":
 					// rv → reset volumes (Docker only)
 					if m.isPortForwardEnv() || len(m.currentEnvServices()) == 0 {
 						break
 					}
-				m.loading = true
-				m.lastAction = "Resetting volumes..."
-				return m, tea.Batch(
-					func() tea.Msg {
-						err := docker.DownVolumes(m.profile.Name, env.Name)
-						if err != nil {
-							return actionDoneMsg{label: "Reset volumes", err: err}
-						}
-						return actionDoneMsg{label: "Volumes reset. Run start to recreate.", err: nil}
-					},
-					spinnerCmd(),
-				)
+					m.loading = true
+					m.lastAction = "Resetting volumes..."
+					return m, tea.Batch(
+						func() tea.Msg {
+							err := docker.DownVolumes(m.profile.Name, env.Name)
+							if err != nil {
+								return actionDoneMsg{label: "Reset volumes", err: err}
+							}
+							return actionDoneMsg{label: "Volumes reset. Run start to recreate.", err: nil}
+						},
+						spinnerCmd(),
+					)
 				}
 			}
 			// Invalid sequence → let key fall through to normal handling below
@@ -792,67 +792,67 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						break
 					}
 				}
-			m.loading = true
-			if isRunning {
-				m.lastAction = "Stopping " + svc.Name + "..."
+				m.loading = true
+				if isRunning {
+					m.lastAction = "Stopping " + svc.Name + "..."
+					return m, tea.Batch(
+						func() tea.Msg {
+							err := docker.DownService(m.profile.Name, envName, compName)
+							return actionDoneMsg{label: svc.Name + " stopped", err: err}
+						},
+						spinnerCmd(),
+					)
+				}
+				m.lastAction = "Starting " + svc.Name + "..."
 				return m, tea.Batch(
 					func() tea.Msg {
-						err := docker.DownService(m.profile.Name, envName, compName)
-						return actionDoneMsg{label: svc.Name + " stopped", err: err}
+						err := docker.UpService(m.profile.Name, envName, compName)
+						return actionDoneMsg{label: svc.Name + " started", err: err}
 					},
 					spinnerCmd(),
 				)
-			}
-			m.lastAction = "Starting " + svc.Name + "..."
-			return m, tea.Batch(
-				func() tea.Msg {
-					err := docker.UpService(m.profile.Name, envName, compName)
-					return actionDoneMsg{label: svc.Name + " started", err: err}
-				},
-				spinnerCmd(),
-			)
 			}
 
 		case key.Matches(msg, profileKeys.start):
 			env := m.currentEnv()
 			if env != nil {
-			if m.isPortForwardEnv() {
-				envName := m.profile.Environments[m.activeEnv].Name
-				m.lastAction = "Starting forwards..."
-				cmds := m.startEnvForwards(envName)
-				cmds = append(cmds, ClearActionAfter(3*time.Second), spinnerCmd())
-				return m, tea.Batch(cmds...)
-			}
-			m.loading = true
-			m.lastAction = "Starting " + env.Name + "..."
-			return m, tea.Batch(
-				func() tea.Msg {
-					err := docker.Up(m.profile.Name, env.Name)
-					return actionDoneMsg{label: "Stack started", err: err}
-				},
-				spinnerCmd(),
-			)
+				if m.isPortForwardEnv() {
+					envName := m.profile.Environments[m.activeEnv].Name
+					m.lastAction = "Starting forwards..."
+					cmds := m.startEnvForwards(envName)
+					cmds = append(cmds, ClearActionAfter(3*time.Second), spinnerCmd())
+					return m, tea.Batch(cmds...)
+				}
+				m.loading = true
+				m.lastAction = "Starting " + env.Name + "..."
+				return m, tea.Batch(
+					func() tea.Msg {
+						err := docker.Up(m.profile.Name, env.Name)
+						return actionDoneMsg{label: "Stack started", err: err}
+					},
+					spinnerCmd(),
+				)
 			}
 
 		case key.Matches(msg, profileKeys.stop):
 			env := m.currentEnv()
 			if env != nil {
-			if m.isPortForwardEnv() {
-				envName := m.profile.Environments[m.activeEnv].Name
-				m.lastAction = "Stopping forwards..."
-				cmds := m.stopEnvForwards(envName)
-				cmds = append(cmds, ClearActionAfter(3*time.Second), spinnerCmd())
-				return m, tea.Batch(cmds...)
-			}
-			m.loading = true
-			m.lastAction = "Stopping " + env.Name + "..."
-			return m, tea.Batch(
-				func() tea.Msg {
-					err := docker.Down(m.profile.Name, env.Name)
-					return actionDoneMsg{label: "Stack stopped", err: err}
-				},
-				spinnerCmd(),
-			)
+				if m.isPortForwardEnv() {
+					envName := m.profile.Environments[m.activeEnv].Name
+					m.lastAction = "Stopping forwards..."
+					cmds := m.stopEnvForwards(envName)
+					cmds = append(cmds, ClearActionAfter(3*time.Second), spinnerCmd())
+					return m, tea.Batch(cmds...)
+				}
+				m.loading = true
+				m.lastAction = "Stopping " + env.Name + "..."
+				return m, tea.Batch(
+					func() tea.Msg {
+						err := docker.Down(m.profile.Name, env.Name)
+						return actionDoneMsg{label: "Stack stopped", err: err}
+					},
+					spinnerCmd(),
+				)
 			}
 
 		case key.Matches(msg, profileKeys.resetVol):
@@ -1249,8 +1249,8 @@ func (m *ProfileViewModel) View() string {
 			b.WriteString(styles.StyleSubtitle.Render("  context: " + shortCtxName(ctx)))
 			b.WriteString("\n\n")
 		}
-	if m.inDiscovery {
-		b.WriteString(m.renderDiscovery())
+		if m.inDiscovery {
+			b.WriteString(m.renderDiscovery())
 		} else if m.editingPort {
 			b.WriteString(m.renderPortForwards())
 			b.WriteString("\n\n")
@@ -1308,26 +1308,34 @@ func (m *ProfileViewModel) View() string {
 		b.WriteString("\n")
 	}
 
-	if !m.inDiscovery {
+	if !m.inDiscovery && m.viewingService < 0 && !m.showStats {
 		b.WriteString("\n\n")
 	}
 
 	// ── Help bar ──
-	if m.inDiscovery {
-		// Discovery has its own help inside renderDiscovery() — no big help bar needed
+	if m.inDiscovery || m.viewingService >= 0 || m.showStats {
+		// No help bar needed — discovery/config/stats have their own hints
 	} else if m.isPortForwardEnv() {
 		b.WriteString(m.renderPFHelpBar())
 	} else {
 		b.WriteString(m.renderDockerHelpBar())
 	}
-	if !m.inDiscovery {
+	if !m.inDiscovery && m.viewingService < 0 && !m.showStats {
 		b.WriteString("\n\n")
 	}
 	if m.inDiscovery {
 		b.WriteString("\n\n")
 		b.WriteString(styles.InlineHelp(styles.HelpItem("esc", "cancel")))
+	} else if m.viewingService >= 0 || m.showStats {
+		// Config/stats overlay has its own "press any key to return" hint
+	} else if m.inputtingEnv {
+		b.WriteString(styles.BackHelp())
 	} else {
-		b.WriteString(styles.BackHelp(styles.HelpItem("← →", "envs")))
+		b.WriteString(styles.BackHelp(
+			styles.HelpItem("↑ ↓", "navigate"),
+			styles.HelpItem("← →", "envs"),
+			styles.HelpItem("?", "help"),
+		))
 	}
 
 	return b.String()

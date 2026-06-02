@@ -1261,7 +1261,7 @@ func (m *AddServiceModel) viewName() string {
 			b.WriteString("  Image\n\n")
 			b.WriteString("  " + m.imageInput.View() + "\n")
 			b.WriteString("  Docker image to pull (e.g. postgres:16, mongo:4.2)\n")
-			b.WriteString("\n  " + styles.BackHelp(styles.HelpItem("↵", "use image")))
+			b.WriteString("\n  " + styles.BackHelp(styles.HelpItem("↑ ↓", "next field"), styles.HelpItem("↵", "use image")))
 		} else {
 			// Step 2: confirm/enter service name
 			b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
@@ -1459,7 +1459,7 @@ func (m *AddServiceModel) viewVolumes() string {
 		styles.HelpGroup{Label: "Manage", Items: actItems},
 	))
 	b.WriteString("\n\n")
-	b.WriteString(styles.BackHelp(styles.HelpItem("ctrl+t", "toggle type"), styles.HelpItem("↵", "add/continue")))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "select")))
 	return b.String()
 }
 

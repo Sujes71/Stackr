@@ -357,7 +357,7 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 	))
 	b.WriteString("\n\n")
 	if len(syncEnvs) > 0 {
-		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "open actions")))
+		b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "open actions")))
 	} else {
 		b.WriteString(styles.BackHelp())
 	}
