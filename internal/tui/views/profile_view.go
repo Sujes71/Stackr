@@ -523,13 +523,14 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.rememberCurrentEnvSelection()
 						return m, nil
 					}
-					if len(m.currentEnvServices()) == 0 {
+					if len(m.currentEnvServices()) == 0 && len(env.LocalProcesses) == 0 {
 						m.keyPending = ""
 						return m, nil
 					}
 					go func() {
 						_ = docker.Down(m.profile.Name, env.Name)
 					}()
+					m.StopAllLocalProcesses()
 					updated, err := m.cfg.ClearServices(m.profile.Name, env.Name)
 					if err != nil {
 						return m, m.loadStatus()
@@ -821,6 +822,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, tea.Batch(
 					func() tea.Msg {
+						m.startAllLocalProcesses(env)
 						_ = docker.Up(m.profile.Name, env.Name)
 						return m.refreshStatus()
 					},
@@ -838,6 +840,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, tea.Batch(
 					func() tea.Msg {
+						m.StopAllLocalProcesses()
 						_ = docker.Down(m.profile.Name, env.Name)
 						return m.refreshStatus()
 					},
@@ -1281,6 +1284,38 @@ func (m *ProfileViewModel) StopAllLocalProcesses() {
 			go func(c *exec.Cmd) { c.Process.Wait() }(cmd)
 		}
 		delete(m.localProcesses, name)
+	}
+}
+
+// startLocalProcess starts a single local process and stores the handle.
+// Returns true if the process was started, false on error.
+func (m *ProfileViewModel) startLocalProcess(proc config.LocalProcess) bool {
+	if m.isLocalProcRunning(proc.Name) {
+		if cmd := m.localProcesses[proc.Name]; cmd != nil && cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			go func(c *exec.Cmd) { c.Process.Wait() }(cmd)
+		}
+	}
+	cmd := exec.Command("sh", "-c", proc.Command)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if proc.WorkDir != "" {
+		wd := proc.WorkDir
+		if strings.HasPrefix(wd, "~") {
+			wd = strings.Replace(wd, "~", os.Getenv("HOME"), 1)
+		}
+		cmd.Dir = wd
+	}
+	if err := cmd.Start(); err != nil {
+		return false
+	}
+	m.localProcesses[proc.Name] = cmd
+	return true
+}
+
+// startAllLocalProcesses starts every local process in the given environment.
+func (m *ProfileViewModel) startAllLocalProcesses(env *config.Environment) {
+	for i := range env.LocalProcesses {
+		m.startLocalProcess(env.LocalProcesses[i])
 	}
 }
 
