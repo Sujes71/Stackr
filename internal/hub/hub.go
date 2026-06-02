@@ -194,19 +194,15 @@ var Catalog = []CatalogEntry{
 	},
 	{
 		Name:        "Kafka",
-		Image:       "bitnami/kafka",
+		Image:       "apache/kafka",
 		Description: "Distributed event streaming platform",
 		DefaultTag:  "latest",
 		DefaultPorts: []string{"9092:9092"},
 		DefaultEnv: map[string]string{
-			"KAFKA_CFG_NODE_ID":                        "0",
-			"KAFKA_CFG_PROCESS_ROLES":                  "controller,broker",
-			"KAFKA_CFG_LISTENERS":                      "PLAINTEXT://:9092,CONTROLLER://:9093",
-			"KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
-			"KAFKA_CFG_CONTROLLER_QUORUM_VOTERS":       "0@kafka:9093",
-			"KAFKA_CFG_CONTROLLER_LISTENER_NAMES":      "CONTROLLER",
+			"KAFKA_LISTENERS":            "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093",
+			"KAFKA_ADVERTISED_LISTENERS": "PLAINTEXT://localhost:9092",
 		},
-		DefaultVolumeTarget: "/bitnami/kafka/data",
+		DefaultVolumeTarget: "/var/lib/kafka/data",
 	},
 	{
 		Name:        "Elasticsearch",
