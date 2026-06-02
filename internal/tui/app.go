@@ -114,7 +114,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 	case views.NavNewProfile:
 		a.screen = ScreenNewProfile
 		a.newProfile = views.NewNewProfile(a.cfg)
-		a.newProfile.SetSize(a.width, a.height-2)
+		a.newProfile.SetSize(a.width, a.height-5)
 		return a, a.newProfile.Init()
 
 	case views.NavProfileView:
@@ -141,7 +141,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
 			a.screen = ScreenDBOps
 			a.dbOps = views.NewDBOps(a.cfg, p, nav.EnvName, nav.ServiceName)
-			a.dbOps.SetSize(a.width, a.height-2)
+			a.dbOps.SetSize(a.width, a.height-5)
 			return a, a.dbOps.Init()
 		}
 

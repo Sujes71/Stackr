@@ -75,15 +75,15 @@ func (m *HomeModel) Cursor() int     { return m.cursor }
 func (m *HomeModel) SetCursor(c int) { m.cursor = c }
 
 // SetSize propagates terminal dimensions before the first WindowSizeMsg.
-// h is the full terminal height; we subtract 2 for App header + footer.
+// h is the full terminal height; we subtract 5 for App chrome.
 func (m *HomeModel) SetSize(w, h int) {
-	m.height = max(0, h-2)
+	m.height = max(0, h-5)
 }
 
 func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.height = max(0, msg.Height-2) // App chrome (header + footer)
+		m.height = max(0, msg.Height-5) // App chrome
 
 	case importResultMsg:
 		m.importing = false

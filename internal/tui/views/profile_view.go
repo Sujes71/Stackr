@@ -127,10 +127,10 @@ func (m *ProfileViewModel) ProfileName() string {
 
 // SetSize propagates terminal dimensions so the viewport works before the first
 // WindowSizeMsg arrives (e.g. when the model is created mid-session).
-// h is the full terminal height; we subtract 2 for App header + footer.
+// h is the full terminal height; we subtract 5 for App chrome (header + sep + blank + footer sep + quit).
 func (m *ProfileViewModel) SetSize(w, h int) {
 	m.width = w
-	m.height = max(0, h-2)
+	m.height = max(0, h-5)
 }
 
 type statusLoadedMsg struct {
@@ -170,7 +170,7 @@ var profileKeys = struct {
 	back, up, down, enter, start, stop, addSvc, svcDelete, dbOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort, viewConfig, stats, pull, shell key.Binding
 }{
 	back:           key.NewBinding(key.WithKeys("esc", "backspace")),
-	up:             key.NewBinding(key.WithKeys("up", "k")),
+	up:             key.NewBinding(key.WithKeys("up")),
 	down:           key.NewBinding(key.WithKeys("down", "j")),
 	enter:          key.NewBinding(key.WithKeys("enter")),
 	start:          key.NewBinding(key.WithKeys("s")),
@@ -494,7 +494,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
-		m.height = max(0, msg.Height-2) // App chrome (header + footer)
+		m.height = max(0, msg.Height-5) // App chrome (header + sep + blank + footer sep + quit)
 		m.ensureValidSelection()
 
 	case tea.KeyMsg:
@@ -1238,7 +1238,7 @@ func (m *ProfileViewModel) View() string {
 
 	// Env tabs
 	b.WriteString(m.renderEnvTabs())
-	b.WriteString("\n")
+	b.WriteString("\n\n")
 
 	env := m.currentEnv()
 	if env == nil {
@@ -1543,7 +1543,7 @@ func (m *ProfileViewModel) computeItemWindow(total int, itemHeight int) itemWind
 // Used by computeItemWindow to determine available space for items.
 func (m *ProfileViewModel) estimateItemOverhead() int {
 	// Before items
-	oh := 1 + 1 + 1 // \n + env tabs + \n
+	oh := 1 + 1 + 2 // \n + env tabs + \n\n
 
 	if m.isPortForwardEnv() {
 		if ctx := m.knownForwardCtx(); ctx != "" {
@@ -1552,16 +1552,15 @@ func (m *ProfileViewModel) estimateItemOverhead() int {
 	}
 
 	// After items: newline + help bar + newline + bottom hints
-	oh += 2 // blank line before help bar
-
 	if !m.inDiscovery {
+		oh += 2 // blank line before help bar (only when help bar is rendered)
 		if m.isPortForwardEnv() {
-			oh += 8 // renderPFHelpBar height (~8 lines, conservative to avoid clipping)
+			oh += 6 // renderPFHelpBar height (border 2 + label/blank 2 + max items 2)
 		} else {
-			oh += 8 // renderDockerHelpBar height (~8 lines, conservative to avoid clipping)
+			oh += 6 // renderDockerHelpBar height (border 2 + label/blank 2 + max items 2)
 		}
 	}
-	oh += 1 + 1 // newline after help bar + bottom hints
+	oh += 3 // \n\n after help bar + bottom hints
 
 	// Optional status lines (lastAction, armed states, input mode)
 	if m.lastAction != "" {
