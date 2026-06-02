@@ -273,18 +273,18 @@ func ForwardDot(state portforward.ForwardState) string {
 }
 
 // LocalProcessDot returns a colored state indicator for local processes.
+// Uses the same colors as Dot() for running/stopped, but a different glyph (▶)
+// so users can distinguish Docker services from host/local processes at a glance.
 func LocalProcessDot(running bool) string {
 	var c lipgloss.Color
-	if running {
-		c = ColorCyan // cyan
-	} else {
-		c = ColorMuted // gray
-	}
 	state := "stopped"
 	if running {
+		c = ColorSecondary // green
 		state = "running"
+	} else {
+		c = ColorError // red
 	}
 	return lipgloss.NewStyle().
 		Foreground(c).
-		Render(fmt.Sprintf("● %s", state))
+		Render(fmt.Sprintf("▶ %s", state))
 }
