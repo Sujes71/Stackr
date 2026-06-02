@@ -59,6 +59,10 @@ type ProfileViewModel struct {
 	discoverySelNS   string
 	discoveredPF     *config.PortForward
 	discoveryEnvName string
+	// Per-step cursor preservation for back navigation
+	discoveryCtxCur int
+	discoveryNSCur  int
+	discoverySvcCur int
 
 	// ── Port Editing ──
 	editingPort      bool
@@ -2053,13 +2057,8 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 		switch {
 		case msg.String() == "esc":
 			m.portInput.Blur()
-			m.inDiscovery = false
-			m.discoveryStep = 0
-			m.discoveryCtxs = nil
-			m.discoveryNSs = nil
-			m.discoverySvcs = nil
+			m.discoveryStep = 2
 			m.discoveredPF = nil
-			m.discoveryCursor = 0
 			return m, nil
 
 		case key.Matches(msg, profileKeys.enter):
@@ -2110,9 +2109,15 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 	// ── Steps 0-2: navigation mode ──
 	switch {
 	case key.Matches(msg, profileKeys.back):
-		if m.discoveryStep > 0 {
+		if m.discoveryStep > 1 {
 			m.discoveryStep--
-			m.discoveryCursor = 0
+			// Restore cursor from previous step
+			switch m.discoveryStep {
+			case 1:
+				m.discoveryCursor = m.discoveryNSCur
+			case 2:
+				m.discoveryCursor = m.discoverySvcCur
+			}
 			return m, nil
 		}
 		m.inDiscovery = false
@@ -2170,9 +2175,11 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 		case 1:
 			if m.discoveryCursor < len(m.discoveryNSs) {
 				m.discoverySelNS = m.discoveryNSs[m.discoveryCursor]
+				m.discoveryNSCur = m.discoveryCursor
 				m.discoverySvcs = nil
 				m.discoveryStep = 2
 				m.discoveryCursor = 0
+				m.discoverySvcCur = 0
 				return m, func() tea.Msg {
 					svcs, err := portforward.DiscoverServices(m.discoverySelCtx, m.discoverySelNS)
 					if err != nil {
@@ -2188,6 +2195,7 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 		case 2:
 			if m.discoveryCursor < len(m.discoverySvcs) {
 				svc := m.discoverySvcs[m.discoveryCursor]
+				m.discoverySvcCur = m.discoveryCursor
 				m.discoveredPF = &svc
 				nextPort := portforward.AssignPort(8080, m.currentForwards())
 				m.discoveredPF.LocalPort = nextPort
