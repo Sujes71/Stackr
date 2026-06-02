@@ -1672,7 +1672,11 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 		heights[i] = serviceCardHeight(len(env.Services[dataIdx].Ports))
 	}
 	for i := range env.LocalProcesses {
-		heights[len(env.Services)+i] = 3 // border(2) + name(1)
+		h := 4 // border(2) + name(1) + command(1)
+		if env.LocalProcesses[i].WorkDir != "" {
+			h = 5 // + workdir line
+		}
+		heights[len(env.Services)+i] = h
 	}
 
 	win := m.serviceWindow(totalItems, heights)

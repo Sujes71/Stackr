@@ -348,7 +348,11 @@ func (m *AddServiceModel) SetSize(w, h int) {
 func (m *AddServiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.height = max(0, msg.Height-5) // App chrome (header + sep + blank + footer sep + quit)
+		m.height = max(0, msg.Height-5)
+		return m, nil
+
+	case ClearActionMsg:
+		m.err = ""
 		return m, nil
 
 	case hubSearchResultMsg:
@@ -1082,15 +1086,10 @@ func (m *AddServiceModel) handleRunCommand(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 
 	case key.Matches(msg, addSvcNext):
 		name := config.SanitizeComposeName(strings.TrimSpace(m.runCmdName.Value()))
-		if name == "" {
-			m.err = "name required"
+		if name == "" || strings.TrimSpace(m.runCmdCmd.Value()) == "" {
 			return m, nil
 		}
 		cmdStr := strings.TrimSpace(m.runCmdCmd.Value())
-		if cmdStr == "" {
-			m.err = "command required"
-			return m, nil
-		}
 		for _, env := range m.profile.Environments {
 			if env.Name == m.envName {
 				for _, svc := range env.Services {
