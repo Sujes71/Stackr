@@ -20,12 +20,6 @@ import (
 	"github.com/stackr/stackr/internal/tui/styles"
 )
 
-var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-
-func spinnerCmd() tea.Cmd {
-	return func() tea.Msg { return spinnerTickMsg{} }
-}
-
 type ProfileViewModel struct {
 	cfg            *config.Config
 	profile        *config.Profile
@@ -34,8 +28,6 @@ type ProfileViewModel struct {
 	envState       map[string]ProfileEnvState
 	statuses       []docker.ServiceStatus
 	statusErr      string
-	loading        bool
-	lastAction     string
 	width          int // terminal width, set via WindowSizeMsg
 	height         int // terminal height, set via WindowSizeMsg
 	deleteArmed    bool
@@ -78,9 +70,6 @@ type ProfileViewModel struct {
 	showStats      bool
 	statsContainer string
 	statsData      string
-
-	// ── Spinner ──
-	spinnerFrame int
 }
 
 type ProfileEnvState struct {
@@ -146,32 +135,39 @@ type statusLoadedMsg struct {
 	err      string
 }
 
-type actionDoneMsg struct {
-	label string
-	err   error
+// ── Stubs (kept for compilation, no-op) ─────────────────────────────────
+
+var spinnerFrames = []string{""}
+
+func spinnerCmd() tea.Cmd {
+	return func() tea.Msg { return nil }
 }
 
 type ClearActionMsg struct{}
 
 func ClearActionAfter(d time.Duration) tea.Cmd {
-	return tea.Tick(d, func(t time.Time) tea.Msg {
-		return ClearActionMsg{}
-	})
+	return func() tea.Msg { return nil }
 }
 
 func (m *ProfileViewModel) loadStatus() tea.Cmd {
 	return func() tea.Msg {
-		if len(m.profile.Environments) == 0 {
-			return statusLoadedMsg{}
-		}
-		env := m.profile.Environments[m.activeEnv]
-		ss, err := docker.Status(m.profile.Name, env.Name)
-		errStr := ""
-		if err != nil {
-			errStr = err.Error()
-		}
-		return statusLoadedMsg{statuses: ss, err: errStr}
+		return m.refreshStatus()
 	}
+}
+
+// refreshStatus queries Docker status and returns a statusLoadedMsg.
+// Used inside Cmd closures to refresh state after a docker operation completes.
+func (m *ProfileViewModel) refreshStatus() tea.Msg {
+	if len(m.profile.Environments) == 0 {
+		return statusLoadedMsg{}
+	}
+	env := m.profile.Environments[m.activeEnv]
+	ss, err := docker.Status(m.profile.Name, env.Name)
+	errStr := ""
+	if err != nil {
+		errStr = err.Error()
+	}
+	return statusLoadedMsg{statuses: ss, err: errStr}
 }
 
 var profileKeys = struct {
@@ -200,7 +196,6 @@ var profileKeys = struct {
 }
 
 func (m *ProfileViewModel) Init() tea.Cmd {
-	m.loading = true
 	m.ensureValidSelection()
 	var cmds []tea.Cmd
 	cmds = append(cmds, m.loadStatus())
@@ -398,25 +393,12 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case statusLoadedMsg:
-		m.loading = false
 		m.statuses = msg.statuses
 		m.statusErr = msg.err
 		m.ensureValidSelection()
 		m.rebuildDisplayOrders()
 
-	case actionDoneMsg:
-		m.loading = false
-		m.ensureValidSelection()
-		if msg.err != nil {
-			m.lastAction = "✗ " + msg.err.Error()
-			return m, tea.Batch(m.loadStatus(), ClearActionAfter(5*time.Second))
-		}
-		m.lastAction = "✓ " + msg.label
-		// Auto-clear info message after 3 seconds
-		return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
-
 	case ClearActionMsg:
-		m.lastAction = ""
 
 	case statsTickMsg:
 		if !m.showStats || m.statsContainer == "" {
@@ -445,19 +427,6 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case spinnerTickMsg:
-		if m.spinnerFrame < 9 {
-			m.spinnerFrame++
-		} else {
-			m.spinnerFrame = 0
-		}
-		if m.inProgress() {
-			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
-				return spinnerTickMsg{}
-			})
-		}
-		return m, nil
-
 	case portforward.ForwardMonitorTick:
 		m.ensureValidSelection()
 		if m.isPortForwardEnv() {
@@ -480,8 +449,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(msg.contexts) == 0 {
 			m.inDiscovery = false
 			m.discoveryStep = 0
-			m.lastAction = "✗ No K8s contexts found"
-			return m, ClearActionAfter(5 * time.Second)
+			return m, nil
 		}
 		m.inDiscovery = true
 		m.discoveryStep = 0
@@ -500,8 +468,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case discoveryErrorMsg:
 		m.inDiscovery = false
 		m.discoveryStep = 0
-		m.lastAction = "✗ " + msg.err
-		return m, ClearActionAfter(5 * time.Second)
+		return m, nil
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -509,9 +476,6 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ensureValidSelection()
 
 	case tea.KeyMsg:
-		// Any key press dismisses the last action message
-		m.lastAction = ""
-
 		// Dismiss overlays on any key
 		if m.viewingService >= 0 {
 			m.viewingService = -1
@@ -542,9 +506,8 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.isPortForwardEnv() {
 						forwards := m.currentForwards()
 						if len(forwards) == 0 {
-							m.lastAction = "No forwards to reset"
 							m.keyPending = ""
-							return m, ClearActionAfter(3 * time.Second)
+							return m, nil
 						}
 						envName := m.profile.Environments[m.activeEnv].Name
 						for _, h := range forwards {
@@ -552,56 +515,43 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 						updated, err := m.cfg.ClearPortForwards(m.profile.Name, envName)
 						if err != nil {
-						m.lastAction = "✗ " + err.Error()
-						return m, ClearActionAfter(5 * time.Second)
-					}
-					m.profile = updated
-					m.buildForwardHandles()
-					m.cursor = 0
-					m.rememberCurrentEnvSelection()
-					m.lastAction = "✓ All forwards deleted"
-					return m, ClearActionAfter(3 * time.Second)
+							return m, nil
+						}
+						m.profile = updated
+						m.buildForwardHandles()
+						m.cursor = 0
+						m.rememberCurrentEnvSelection()
+						return m, nil
 					}
 					if len(m.currentEnvServices()) == 0 {
-						m.lastAction = "No services to reset"
 						m.keyPending = ""
-						return m, ClearActionAfter(3 * time.Second)
+						return m, nil
 					}
-					m.lastAction = "Deleting all services..."
 					go func() {
 						_ = docker.Down(m.profile.Name, env.Name)
 					}()
 					updated, err := m.cfg.ClearServices(m.profile.Name, env.Name)
 					if err != nil {
-						m.lastAction = "✗ " + err.Error()
-						return m, tea.Batch(m.loadStatus(), ClearActionAfter(5*time.Second), spinnerCmd())
+						return m, m.loadStatus()
 					}
 					m.profile = updated
 					if _, err := config.GenerateCompose(*m.profile, env.Name); err != nil {
-						m.lastAction = "✗ compose gen: " + err.Error()
-						return m, tea.Batch(m.loadStatus(), ClearActionAfter(5*time.Second), spinnerCmd())
+						return m, m.loadStatus()
 					}
-					m.lastAction = "✓ All services deleted"
 					m.cursor = 0
 					m.rememberCurrentEnvSelection()
-					return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second), spinnerCmd())
+					return m, m.loadStatus()
 
 				case "v":
 					// rv → reset volumes (Docker only)
 					if m.isPortForwardEnv() || len(m.currentEnvServices()) == 0 {
 						break
 					}
-					m.loading = true
-					m.lastAction = "Resetting volumes..."
 					return m, tea.Batch(
 						func() tea.Msg {
-							err := docker.DownVolumes(m.profile.Name, env.Name)
-							if err != nil {
-								return actionDoneMsg{label: "Reset volumes", err: err}
-							}
-							return actionDoneMsg{label: "Volumes reset. Run start to recreate.", err: nil}
+							_ = docker.DownVolumes(m.profile.Name, env.Name)
+							return m.refreshStatus()
 						},
-						spinnerCmd(),
 					)
 				}
 			}
@@ -628,38 +578,32 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.resetArmed = false
 
 				if name == "" || name == "." || name == ".." {
-					m.lastAction = "✗ Invalid environment name"
-					return m, ClearActionAfter(5 * time.Second)
+					return m, nil
 				}
 
 				// Check for duplicates
 				for _, env := range m.profile.Environments {
 					if env.Name == name {
-						m.lastAction = "✗ Environment " + name + " already exists"
-						return m, ClearActionAfter(5 * time.Second)
+						return m, nil
 					}
 				}
 
 				// Sanitize for docker-compose safety
 				sanitized := config.SanitizeComposeName(name)
 				if sanitized != name {
-					m.lastAction = "✗ Invalid name: use letters, numbers, dots, hyphens or underscores"
-					return m, ClearActionAfter(5 * time.Second)
+					return m, nil
 				}
 
 				m.profile.Environments = append(m.profile.Environments, config.Environment{Name: name})
 				if err := m.cfg.UpdateProfile(*m.profile); err != nil {
-					m.lastAction = "✗ " + err.Error()
-					return m, ClearActionAfter(5 * time.Second)
+					return m, nil
 				}
 				// Generate empty compose for the new env
 				if _, err := config.GenerateCompose(*m.profile, name); err != nil {
-					m.lastAction = "✗ compose gen: " + err.Error()
-					return m, ClearActionAfter(5 * time.Second)
+					return m, nil
 				}
 				m.envState[name] = ProfileEnvState{}
-				m.lastAction = "✓ Added environment " + name
-				return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
+				return m, m.loadStatus()
 
 			default:
 				var cmd tea.Cmd
@@ -689,8 +633,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.rememberCurrentEnvSelection()
 				m.activeEnv--
 				m.statuses = nil
-				m.loading = true
-				m.persistActiveEnv()
+					m.persistActiveEnv()
 				m.restoreCurrentEnvSelection()
 				if m.isPortForwardEnv() {
 					m.buildForwardHandles()
@@ -705,8 +648,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.rememberCurrentEnvSelection()
 				m.activeEnv++
 				m.statuses = nil
-				m.loading = true
-				m.persistActiveEnv()
+					m.persistActiveEnv()
 				m.restoreCurrentEnvSelection()
 				if m.isPortForwardEnv() {
 					m.buildForwardHandles()
@@ -747,8 +689,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, profileKeys.k8sDiscover):
 			if m.isPortForwardEnv() && !m.inDiscovery {
 				if !portforward.CheckKubectl() {
-					m.lastAction = "✗ kubectl not found in PATH"
-					return m, ClearActionAfter(5 * time.Second)
+					return m, nil
 				}
 				m.inDiscovery = true
 				m.discoveryStep = 0
@@ -807,24 +748,19 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							break
 						}
 					}
-					m.loading = true
 					if isRunning {
-						m.lastAction = "Stopping " + svc.Name + "..."
 						return m, tea.Batch(
 							func() tea.Msg {
-								err := docker.DownService(m.profile.Name, envName, compName)
-								return actionDoneMsg{label: svc.Name + " stopped", err: err}
+								_ = docker.DownService(m.profile.Name, envName, compName)
+								return m.refreshStatus()
 							},
-							spinnerCmd(),
 						)
 					}
-					m.lastAction = "Starting " + svc.Name + "..."
 					return m, tea.Batch(
 						func() tea.Msg {
-							err := docker.UpService(m.profile.Name, envName, compName)
-							return actionDoneMsg{label: svc.Name + " started", err: err}
+							_ = docker.UpService(m.profile.Name, envName, compName)
+							return m.refreshStatus()
 						},
-						spinnerCmd(),
 					)
 				}
 			} else {
@@ -833,7 +769,6 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if procIdx < len(env.LocalProcesses) {
 					proc := env.LocalProcesses[procIdx]
 					if m.isLocalProcRunning(proc.Name) {
-						m.lastAction = "Stopping " + proc.Name + "..."
 						cmd := m.localProcesses[proc.Name]
 						return m, tea.Batch(
 							func() tea.Msg {
@@ -842,12 +777,11 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 									go func() { cmd.Process.Wait() }()
 								}
 								delete(m.localProcesses, proc.Name)
-								return actionDoneMsg{label: proc.Name + " stopped", err: nil}
+								return nil
 							},
-							spinnerCmd(),
+							m.loadStatus(),
 						)
 					}
-					m.lastAction = "Starting " + proc.Name + "..."
 					return m, tea.Batch(
 						func() tea.Msg {
 							if m.isLocalProcRunning(proc.Name) {
@@ -866,12 +800,12 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								cmd.Dir = wd
 							}
 							if err := cmd.Start(); err != nil {
-								return actionDoneMsg{label: "Start " + proc.Name, err: err}
+								return nil
 							}
 							m.localProcesses[proc.Name] = cmd
-							return actionDoneMsg{label: proc.Name + " started", err: nil}
+							return nil
 						},
-						spinnerCmd(),
+						m.loadStatus(),
 					)
 				}
 			}
@@ -881,19 +815,15 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if env != nil {
 				if m.isPortForwardEnv() {
 					envName := m.profile.Environments[m.activeEnv].Name
-					m.lastAction = "Starting forwards..."
 					cmds := m.startEnvForwards(envName)
-					cmds = append(cmds, ClearActionAfter(3*time.Second), spinnerCmd())
+					cmds = append(cmds, m.loadStatus())
 					return m, tea.Batch(cmds...)
 				}
-				m.loading = true
-				m.lastAction = "Starting " + env.Name + "..."
 				return m, tea.Batch(
 					func() tea.Msg {
-						err := docker.Up(m.profile.Name, env.Name)
-						return actionDoneMsg{label: "Stack started", err: err}
+						_ = docker.Up(m.profile.Name, env.Name)
+						return m.refreshStatus()
 					},
-					spinnerCmd(),
 				)
 			}
 
@@ -902,19 +832,15 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if env != nil {
 				if m.isPortForwardEnv() {
 					envName := m.profile.Environments[m.activeEnv].Name
-					m.lastAction = "Stopping forwards..."
 					cmds := m.stopEnvForwards(envName)
-					cmds = append(cmds, ClearActionAfter(3*time.Second), spinnerCmd())
+					cmds = append(cmds, m.loadStatus())
 					return m, tea.Batch(cmds...)
 				}
-				m.loading = true
-				m.lastAction = "Stopping " + env.Name + "..."
 				return m, tea.Batch(
 					func() tea.Msg {
-						err := docker.Down(m.profile.Name, env.Name)
-						return actionDoneMsg{label: "Stack stopped", err: err}
+						_ = docker.Down(m.profile.Name, env.Name)
+						return m.refreshStatus()
 					},
-					spinnerCmd(),
 				)
 			}
 
@@ -969,27 +895,23 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.deleteArmed = false
 				svc := svcs[m.selectedServiceIndex()]
-				m.lastAction = "Deleting " + svc.Name + "..."
 				go func() {
 					_ = docker.Down(m.profile.Name, env.Name)
 				}()
 				updated, err := m.cfg.DeleteService(m.profile.Name, env.Name, svc.Name)
 				if err != nil {
-					m.lastAction = "✗ " + err.Error()
-					return m, tea.Batch(m.loadStatus(), ClearActionAfter(5*time.Second), spinnerCmd())
+					return m, m.loadStatus()
 				}
 				m.profile = updated
 				if _, err := config.GenerateCompose(*m.profile, env.Name); err != nil {
-					m.lastAction = "✗ compose gen: " + err.Error()
-					return m, tea.Batch(m.loadStatus(), ClearActionAfter(5*time.Second), spinnerCmd())
+					return m, m.loadStatus()
 				}
-				m.lastAction = "✓ Deleted " + svc.Name
 				remaining := m.totalServiceItems()
 				if m.cursor >= remaining && m.cursor > 0 {
 					m.cursor--
 				}
 				m.rememberCurrentEnvSelection()
-				return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second), spinnerCmd())
+				return m, m.loadStatus()
 			} else {
 				// Local process delete
 				procIdx := m.cursor - len(svcs)
@@ -1002,7 +924,6 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.deleteArmed = false
 				proc := env.LocalProcesses[procIdx]
-				m.lastAction = "Deleting " + proc.Name + "..."
 				if cmd, ok := m.localProcesses[proc.Name]; ok && cmd != nil && cmd.Process != nil {
 					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 					go func() { cmd.Process.Wait() }()
@@ -1010,17 +931,15 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				updated, err := m.cfg.DeleteLocalProcess(m.profile.Name, env.Name, proc.Name)
 				if err != nil {
-					m.lastAction = "✗ " + err.Error()
-					return m, tea.Batch(m.loadStatus(), ClearActionAfter(5*time.Second), spinnerCmd())
+					return m, m.loadStatus()
 				}
 				m.profile = updated
-				m.lastAction = "✓ Deleted " + proc.Name
 				remaining := m.totalServiceItems()
 				if m.cursor >= remaining && m.cursor > 0 {
 					m.cursor--
 				}
 				m.rememberCurrentEnvSelection()
-				return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second), spinnerCmd())
+				return m, m.loadStatus()
 			}
 
 		case key.Matches(msg, profileKeys.envDelete):
@@ -1037,8 +956,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// ⚠️ Prevent deletion of local environment
 			if envName == "local" {
-				m.lastAction = "✗ Cannot delete the local environment"
-				return m, ClearActionAfter(3 * time.Second)
+				return m, nil
 			}
 
 			// Stop running forwards for this env
@@ -1046,7 +964,6 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			delete(m.forwardHandles, envName)
 			delete(m.envState, envName)
 
-			m.lastAction = "Deleting environment " + envName + "..."
 			envIdx := m.activeEnv
 			// Stop containers for this env (fire and forget)
 			_ = docker.Down(m.profile.Name, envName)
@@ -1058,15 +975,13 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.profile.Environments[envIdx+1:]...,
 			)
 			if err := m.cfg.UpdateProfile(*m.profile); err != nil {
-				m.lastAction = "✗ " + err.Error()
-				return m, ClearActionAfter(5 * time.Second)
+				return m, nil
 			}
 			// Adjust activeEnv if needed
 			m.ensureValidSelection()
 			m.restoreCurrentEnvSelection()
 			m.persistActiveEnv()
-			m.lastAction = "✓ Deleted environment " + envName
-			return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
+			return m, m.loadStatus()
 
 		case key.Matches(msg, profileKeys.dbOps):
 			svcs := m.currentEnvServices()
@@ -1113,8 +1028,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if !isRunning {
-				m.lastAction = "✗ unavailable: service not running"
-				return m, ClearActionAfter(5 * time.Second)
+				return m, nil
 			}
 			m.showStats = true
 			m.statsContainer = containerName
@@ -1133,12 +1047,12 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			svc := svcs[m.selectedServiceIndex()]
 			env := m.currentEnv()
-			m.lastAction = "Pulling " + svc.Name + "..."
-			m.loading = true
-			return m, tea.Batch(spinnerCmd(), func() tea.Msg {
-				err := docker.ComposePull(m.profile.Name, env.Name, svc.Name)
-				return actionDoneMsg{label: svc.Name + " pull completed", err: err}
-			})
+			return m, tea.Batch(
+				func() tea.Msg {
+					_ = docker.ComposePull(m.profile.Name, env.Name, svc.Name)
+					return m.refreshStatus()
+				},
+			)
 
 		case key.Matches(msg, profileKeys.shell):
 			if m.isPortForwardEnv() {
@@ -1161,16 +1075,14 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if !isRunning {
-				m.lastAction = "✗ unavailable: service not running"
-				return m, ClearActionAfter(5 * time.Second)
+				return m, nil
 			}
 			cmd, err := docker.ExecShell(containerName)
 			if err != nil {
-				m.lastAction = "✗ " + err.Error()
-				return m, ClearActionAfter(5 * time.Second)
+				return m, nil
 			}
 			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
-				return actionDoneMsg{label: "shell closed", err: err}
+				return nil
 			})
 
 		case msg.String() == "?":
@@ -1325,9 +1237,9 @@ func (m *ProfileViewModel) startEnvForwards(envName string) []tea.Cmd {
 			cmds = append(cmds, func() tea.Msg {
 				err := h.Start()
 				if err != nil {
-					return actionDoneMsg{label: "Start " + h.Config.Name, err: err}
+					return nil
 				}
-				return actionDoneMsg{label: h.Config.Name + " started", err: nil}
+				return nil
 			})
 		}
 	}
@@ -1341,9 +1253,9 @@ func (m *ProfileViewModel) stopEnvForwards(envName string) []tea.Cmd {
 			cmds = append(cmds, func() tea.Msg {
 				err := h.Stop()
 				if err != nil {
-					return actionDoneMsg{label: "Stop " + h.Config.Name, err: err}
+					return nil
 				}
-				return actionDoneMsg{label: h.Config.Name + " stopped", err: nil}
+				return nil
 			})
 		}
 	}
@@ -1445,21 +1357,6 @@ func (m *ProfileViewModel) View() string {
 		} else {
 			b.WriteString(m.renderServices(env))
 		}
-	}
-
-	if m.lastAction != "" {
-		b.WriteString("\n")
-		spinner := m.spinnerFrameStr()
-		msg := wrapText(spinner+m.lastAction, m.width-4)
-		msg = "  " + strings.ReplaceAll(msg, "\n", "\n  ")
-		if strings.HasPrefix(m.lastAction, "✗") {
-			b.WriteString(styles.StyleError.Render(msg))
-		} else if strings.HasPrefix(m.lastAction, "✓") {
-			b.WriteString(styles.StyleSuccess.Render(msg))
-		} else {
-			b.WriteString(styles.StyleSubtitle.Render(msg))
-		}
-		b.WriteString("\n")
 	}
 
 	if m.deleteArmed {
@@ -1737,10 +1634,7 @@ func (m *ProfileViewModel) estimateItemOverhead() int {
 	}
 	oh += 3 // \n\n after help bar + bottom hints
 
-	// Optional status lines (lastAction, armed states, input mode)
-	if m.lastAction != "" {
-		oh += 2 // last action line + blank
-	}
+	// Optional status lines (armed states, input mode)
 	if m.deleteArmed || m.deleteEnvArmed || m.resetArmed {
 		oh += 1 // confirmation prompt
 	}
@@ -2229,14 +2123,12 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 			portStr := strings.TrimSpace(m.portInput.Value())
 			port, err := strconv.Atoi(portStr)
 			if err != nil || port < 1 || port > 65535 {
-				m.lastAction = "✗ Invalid port. Must be 1-65535."
-				return m, ClearActionAfter(5 * time.Second)
+				return m, nil
 			}
 			// Check port conflict
 			for _, h := range m.currentForwards() {
 				if h.Config.LocalPort == port {
-					m.lastAction = fmt.Sprintf("✗ Port %d already in use by '%s'", port, h.Config.Name)
-					return m, ClearActionAfter(5 * time.Second)
+					return m, nil
 				}
 			}
 
@@ -2245,12 +2137,9 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 			pf := *m.discoveredPF
 
 			updated, err := m.cfg.AddPortForward(m.profile.Name, envName, pf)
-			if err != nil {
-				m.lastAction = "✗ " + err.Error()
-			} else {
+			if err == nil {
 				m.profile = updated
 				m.buildForwardHandles()
-				m.lastAction = fmt.Sprintf("✓ Added forward %s :%d → %s/%s", pf.Name, pf.LocalPort, pf.K8sNamespace, pf.K8sService)
 			}
 
 			m.portInput.Blur()
@@ -2261,7 +2150,7 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 			m.discoverySvcs = nil
 			m.discoveredPF = nil
 			m.discoveryCursor = 0
-			return m, ClearActionAfter(3 * time.Second)
+			return m, m.loadStatus()
 
 		default:
 			var cmd tea.Cmd
@@ -2384,30 +2273,22 @@ func (m *ProfileViewModel) handleForwardToggle() (tea.Model, tea.Cmd) {
 	h := forwards[m.selectedForwardIndex()]
 
 	if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
-		m.lastAction = "Stopping " + h.Config.Name + "..."
 		return m, tea.Batch(
 			func() tea.Msg {
-				err := h.Stop()
-				if err != nil {
-					return actionDoneMsg{label: "Stop " + h.Config.Name, err: err}
-				}
-				return actionDoneMsg{label: h.Config.Name + " stopped", err: nil}
+				h.Stop()
+				return nil
 			},
-			spinnerCmd(),
+			m.loadStatus(),
 		)
 	}
 
 	// Start (Stopped or Failed)
-	m.lastAction = "Starting " + h.Config.Name + "..."
 	return m, tea.Batch(
 		func() tea.Msg {
-			err := h.Start()
-			if err != nil {
-				return actionDoneMsg{label: "Start " + h.Config.Name, err: err}
-			}
-			return actionDoneMsg{label: h.Config.Name + " running", err: nil}
+			h.Start()
+			return nil
 		},
-		spinnerCmd(),
+		m.loadStatus(),
 	)
 }
 
@@ -2434,14 +2315,12 @@ func (m *ProfileViewModel) handleForwardDelete() (tea.Model, tea.Cmd) {
 	// Delete from config
 	updated, err := m.cfg.DeletePortForward(m.profile.Name, envName, fwdName)
 	if err != nil {
-		m.lastAction = "✗ " + err.Error()
-		return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
+		return m, m.loadStatus()
 	}
 	m.profile = updated
 	m.buildForwardHandles()
 	m.clampCursor()
-	m.lastAction = "✓ Deleted " + fwdName
-	return m, tea.Batch(m.loadStatus(), ClearActionAfter(3*time.Second))
+	return m, m.loadStatus()
 }
 
 // ── Port Editing ──────────────────────────────────────────────────────────
@@ -2472,15 +2351,13 @@ func (m *ProfileViewModel) handlePortEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd
 		portStr := strings.TrimSpace(m.portInput.Value())
 		port, err := strconv.Atoi(portStr)
 		if err != nil || port < 1 || port > 65535 {
-			m.lastAction = "✗ Invalid port. Must be 1-65535."
-			return m, ClearActionAfter(5 * time.Second)
+			return m, nil
 		}
 		// Check port conflict with other forwards
 		fwdName := m.currentForwards()[m.editFwdIdx].Config.Name
 		for i, h := range m.currentForwards() {
 			if i != m.editFwdIdx && h.Config.LocalPort == port {
-				m.lastAction = fmt.Sprintf("✗ Port %d is already assigned to '%s'", port, h.Config.Name)
-				return m, ClearActionAfter(5 * time.Second)
+				return m, nil
 			}
 		}
 		// Update config
@@ -2494,8 +2371,7 @@ func (m *ProfileViewModel) handlePortEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd
 		}
 		updated, err := m.cfg.UpdatePortForward(m.profile.Name, envName, fwdName, updatedPF)
 		if err != nil {
-			m.lastAction = "✗ " + err.Error()
-			return m, ClearActionAfter(5 * time.Second)
+			return m, nil
 		}
 		m.profile = updated
 		m.buildForwardHandles()
@@ -2507,8 +2383,7 @@ func (m *ProfileViewModel) handlePortEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd
 		m.editingPort = false
 		m.portInput.Blur()
 		m.portInput.SetValue("")
-		m.lastAction = fmt.Sprintf("✓ Port updated to %d", port)
-		return m, ClearActionAfter(3 * time.Second)
+		return m, nil
 
 	default:
 		var cmd tea.Cmd
@@ -2540,23 +2415,6 @@ func wrapText(s string, maxWidth int) string {
 		b.WriteString(line)
 	}
 	return b.String()
-}
-
-// ── Spinner ────────────────────────────────────────────────────────────────
-
-func (m *ProfileViewModel) inProgress() bool {
-	return m.loading || strings.HasPrefix(m.lastAction, "Starting") ||
-		strings.HasPrefix(m.lastAction, "Stopping") ||
-		strings.HasPrefix(m.lastAction, "Resetting") ||
-		strings.HasPrefix(m.lastAction, "Deleting")
-}
-
-func (m *ProfileViewModel) spinnerFrameStr() string {
-	if !m.inProgress() {
-		return ""
-	}
-	idx := m.spinnerFrame % len(spinnerFrames)
-	return spinnerFrames[idx] + " "
 }
 
 // ── Stats Panel ────────────────────────────────────────────────────────────
