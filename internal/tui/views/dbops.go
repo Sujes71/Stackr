@@ -217,7 +217,7 @@ func (m *DBOpsModel) SetSize(w, h int) {
 
 func (m *DBOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if _, ok := msg.(spinnerTickMsg); ok {
-		if m.running {
+		if m.running || m.startingService {
 			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
 			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 				return spinnerTickMsg{}
@@ -416,10 +416,13 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.lastResult = styles.StyleError.Render("Service not found.")
 					return m, ClearActionAfter(3 * time.Second)
 				}
-				return m, func() tea.Msg {
+			return m, tea.Batch(
+				func() tea.Msg {
 					err := docker.UpService(m.profile.Name, m.envName, svc.ComposeName())
 					return serviceStartedMsg{err: err}
-				}
+				},
+				spinnerCmd(),
+			)
 			case "n", "N", "esc":
 				m.promptStartService = false
 				m.pendingAction = ""
@@ -454,6 +457,10 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case key.Matches(msg, dbOpsBack):
 			if m.running || m.startingService {
+				m.running = false
+				m.startingService = false
+				m.promptStartService = false
+				m.pendingAction = ""
 				return m, nil
 			}
 			m.screen = dbScreenSyncEnvList
@@ -680,6 +687,13 @@ func (m *DBOpsModel) updateCustomConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, dbOpsEnter):
+			container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
+			if !m.isContainerRunning(container) {
+				m.confirmCustomAction = false
+				m.promptStartService = true
+				m.pendingAction = "custom action"
+				return m, nil
+			}
 			m.confirmCustomAction = false
 			m.running = true
 			m.lastResult = ""
@@ -745,12 +759,12 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case key.Matches(keyMsg, dbOpsBack):
 		m.addingCustomAction = false
 
-	case key.Matches(keyMsg, dbOpsUp), keyMsg.String() == "tab":
+	case keyMsg.String() == "shift+tab":
 		if m.customFormFocus > 0 {
 			m.customFormFocus--
 		}
 
-	case key.Matches(keyMsg, dbOpsDown):
+	case key.Matches(keyMsg, dbOpsDown), keyMsg.String() == "tab":
 		if m.customFormFocus < 1 {
 			m.customFormFocus++
 		}
@@ -933,7 +947,7 @@ func (m *DBOpsModel) viewActions() string {
 	if m.promptStartService {
 		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 		b.WriteString(styles.StyleSubtitle.Render("  Service '" + m.serviceName + "' is not running.") + "\n")
-		b.WriteString("  " + promptStyle.Render("Start it?") + "  " + styles.StyleSubtitle.Render("(y/n)") + "\n\n")
+		b.WriteString("  " + promptStyle.Render("Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
 	}
 
 	if m.startingService {
@@ -956,7 +970,7 @@ func (m *DBOpsModel) viewActions() string {
 
 	// ── Confirm messages ──────────────────────────────────────────────────────
 	if m.confirmCustomAction {
-		b.WriteString(styles.StyleError.Render("  Press enter to execute custom action, esc to cancel") + "\n\n")
+		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n\n")
 	}
 	if m.confirmAction {
 		b.WriteString(styles.StyleError.Render("  Press enter again to confirm, any other key to cancel") + "\n\n")
@@ -1027,6 +1041,10 @@ func (m *DBOpsModel) viewActions() string {
 		spinner := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
 		b.WriteString("  " + spinner + " Running " + m.lastActionLabel + "\n\n")
 	}
+	if m.startingService && !m.running {
+		spinner := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+		b.WriteString("  " + spinner + " Starting " + m.serviceName + "\n\n")
+	}
 
 	if m.lastResult != "" {
 		b.WriteString("  " + m.lastResult + "\n\n")
@@ -1036,7 +1054,7 @@ func (m *DBOpsModel) viewActions() string {
 		b.WriteString(styles.StyleError.Render("  Press d again to delete this custom action") + "\n")
 	}
 
-	if m.running || m.promptStartService || m.startingService {
+	if m.running || m.startingService {
 		b.WriteString(styles.StyleHelp.Render("  " + "Please wait…"))
 	} else if m.confirmAction || m.confirmCustomAction {
 		b.WriteString(styles.BackHelp())
@@ -1086,7 +1104,7 @@ func (m *DBOpsModel) viewCustomForm() string {
 
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("↑ ↓", "field"),
-			styles.HelpItem("enter", "save"),
+			styles.HelpItem("↵", "save"),
 			styles.HelpItem("esc", "cancel"),
 		) + "\n\n")
 	return b.String()
