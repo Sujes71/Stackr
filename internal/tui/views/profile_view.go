@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -44,10 +43,6 @@ type ProfileViewModel struct {
 	resetArmed     bool
 	inputtingEnv   bool
 	envInput       textinput.Model
-
-	// Display order: running items first (maps display position → data index)
-	serviceDisplayOrder []int
-	forwardDisplayOrder []int
 
 	keyPending string // for multi-key sequences: "" = none, "r" = waiting after r
 
@@ -799,40 +794,38 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < totalSvcs {
 				// Docker service toggle
 				svcs := m.currentEnvServices()
-				if m.cursor < len(m.serviceDisplayOrder) {
-					svcIdx := m.selectedServiceIndex()
-					if svcIdx < len(svcs) {
-						svc := svcs[svcIdx]
-						envName := env.Name
-						compName := svc.ComposeName()
-						containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, envName, compName)
-						isRunning := false
-						for _, st := range m.statuses {
-							if st.Name == containerName && st.State == "running" {
-								isRunning = true
-								break
-							}
+				svcIdx := m.selectedServiceIndex()
+				if svcIdx < len(svcs) {
+					svc := svcs[svcIdx]
+					envName := env.Name
+					compName := svc.ComposeName()
+					containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, envName, compName)
+					isRunning := false
+					for _, st := range m.statuses {
+						if st.Name == containerName && st.State == "running" {
+							isRunning = true
+							break
 						}
-						m.loading = true
-						if isRunning {
-							m.lastAction = "Stopping " + svc.Name + "..."
-							return m, tea.Batch(
-								func() tea.Msg {
-									err := docker.DownService(m.profile.Name, envName, compName)
-									return actionDoneMsg{label: svc.Name + " stopped", err: err}
-								},
-								spinnerCmd(),
-							)
-						}
-						m.lastAction = "Starting " + svc.Name + "..."
+					}
+					m.loading = true
+					if isRunning {
+						m.lastAction = "Stopping " + svc.Name + "..."
 						return m, tea.Batch(
 							func() tea.Msg {
-								err := docker.UpService(m.profile.Name, envName, compName)
-								return actionDoneMsg{label: svc.Name + " started", err: err}
+								err := docker.DownService(m.profile.Name, envName, compName)
+								return actionDoneMsg{label: svc.Name + " stopped", err: err}
 							},
 							spinnerCmd(),
 						)
 					}
+					m.lastAction = "Starting " + svc.Name + "..."
+					return m, tea.Batch(
+						func() tea.Msg {
+							err := docker.UpService(m.profile.Name, envName, compName)
+							return actionDoneMsg{label: svc.Name + " started", err: err}
+						},
+						spinnerCmd(),
+					)
 				}
 			} else {
 				// Local process toggle
@@ -1221,74 +1214,20 @@ func (m *ProfileViewModel) isSelectedServiceRunning() bool {
 	return false
 }
 
-func (m *ProfileViewModel) isServiceRunning(env *config.Environment, svc config.Service) bool {
-	containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, env.Name, svc.ComposeName())
-	for _, st := range m.statuses {
-		if st.Name == containerName && st.State == "running" {
-			return true
-		}
-	}
-	return false
-}
-
 func (m *ProfileViewModel) rebuildDisplayOrders() {
-	// Services: running first
-	env := m.currentEnv()
-	if env != nil && len(env.Services) > 0 {
-		type idxSvc struct{ idx int; svc config.Service }
-		items := make([]idxSvc, len(env.Services))
-		for i, svc := range env.Services {
-			items[i] = idxSvc{idx: i, svc: svc}
-		}
-		sort.SliceStable(items, func(a, b int) bool {
-			aRun := m.isServiceRunning(env, items[a].svc)
-			bRun := m.isServiceRunning(env, items[b].svc)
-			if aRun != bRun { return aRun }
-			return items[a].idx < items[b].idx
-		})
-		m.serviceDisplayOrder = make([]int, len(items))
-		for i, it := range items {
-			m.serviceDisplayOrder[i] = it.idx
-		}
-	}
-
-	// Port-forwards: running first
-	fwds := m.currentForwards()
-	if len(fwds) > 0 {
-		type idxFwd struct{ idx int; h *portforward.PortForwardHandle }
-		items := make([]idxFwd, len(fwds))
-		for i, h := range fwds {
-			items[i] = idxFwd{idx: i, h: h}
-		}
-		sort.SliceStable(items, func(a, b int) bool {
-			aRun := items[a].h.State == portforward.ForwardRunning
-			bRun := items[b].h.State == portforward.ForwardRunning
-			if aRun != bRun { return aRun }
-			return items[a].idx < items[b].idx
-		})
-		m.forwardDisplayOrder = make([]int, len(items))
-		for i, it := range items {
-			m.forwardDisplayOrder[i] = it.idx
-		}
-	}
+	// Identity mapping — items appear in config order
 }
 
-// selectedServiceIndex returns the data index of the currently selected service,
-// translating from display position to data position.
+// selectedServiceIndex returns the data index of the currently selected service.
+// With identity mapping this is simply m.cursor.
 func (m *ProfileViewModel) selectedServiceIndex() int {
-	if m.cursor < 0 || m.cursor >= len(m.serviceDisplayOrder) {
-		return m.cursor
-	}
-	return m.serviceDisplayOrder[m.cursor]
+	return m.cursor
 }
 
-// selectedForwardIndex returns the data index of the currently selected forward,
-// translating from display position to data position.
+// selectedForwardIndex returns the data index of the currently selected forward.
+// With identity mapping this is simply m.cursor.
 func (m *ProfileViewModel) selectedForwardIndex() int {
-	if m.cursor < 0 || m.cursor >= len(m.forwardDisplayOrder) {
-		return m.cursor
-	}
-	return m.forwardDisplayOrder[m.cursor]
+	return m.cursor
 }
 
 func (m *ProfileViewModel) currentEnv() *config.Environment {
@@ -1660,17 +1599,13 @@ func forwardCardHeight(h *portforward.PortForwardHandle) int {
 }
 
 func (m *ProfileViewModel) renderServices(env *config.Environment) string {
-	order := m.serviceDisplayOrder
-	if len(order) != len(env.Services) {
-		m.rebuildDisplayOrders()
-		order = m.serviceDisplayOrder
-	}
+	// Identity mapping: items appear in config order
 
 	// Build heights: service cards + local process cards
 	totalItems := len(env.Services) + len(env.LocalProcesses)
 	heights := make([]int, totalItems)
-	for i, dataIdx := range order {
-		heights[i] = serviceCardHeight(len(env.Services[dataIdx].Ports))
+	for i := range env.Services {
+		heights[i] = serviceCardHeight(len(env.Services[i].Ports))
 	}
 	for i := range env.LocalProcesses {
 		h := 4 // border(2) + name(1) + command(1)
@@ -1700,8 +1635,7 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 	for i := win.start; i < win.end; i++ {
 		if i < len(env.Services) {
 			// Docker service card
-			dataIdx := order[i]
-			svc := env.Services[dataIdx]
+			svc := env.Services[i]
 			containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, env.Name, svc.ComposeName())
 			st := statusMap[containerName]
 
@@ -1857,15 +1791,9 @@ func (m *ProfileViewModel) renderPortForwards() string {
 		return styles.StyleSubtitle.Render("  No port-forwards configured. Press 'k' to discover K8s services.") + "\n"
 	}
 
-	order := m.forwardDisplayOrder
-	if len(order) != len(forwards) {
-		m.rebuildDisplayOrders()
-		order = m.forwardDisplayOrder
-	}
-
 	heights := make([]int, len(forwards))
-	for i, dataIdx := range order {
-		heights[i] = forwardCardHeight(forwards[dataIdx])
+	for i := range forwards {
+		heights[i] = forwardCardHeight(forwards[i])
 	}
 	win := m.serviceWindow(len(forwards), heights)
 
@@ -1879,8 +1807,7 @@ func (m *ProfileViewModel) renderPortForwards() string {
 
 	var rows []string
 	for i := win.start; i < win.end; i++ {
-		dataIdx := order[i]
-		h := forwards[dataIdx]
+		h := forwards[i]
 		fwd := h.Config
 
 		// Line 1: state dot + name
@@ -1911,7 +1838,7 @@ func (m *ProfileViewModel) renderPortForwards() string {
 
 	result := strings.Join(rows, "\n")
 	if win.hasAbove || win.hasBelow {
-		result = m.decorateScroll(result, win, len(order))
+		result = m.decorateScroll(result, win, len(forwards))
 	}
 	return result + "\n"
 }
