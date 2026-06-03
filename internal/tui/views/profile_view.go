@@ -217,6 +217,7 @@ var profileKeys = struct {
 
 func (m *ProfileViewModel) Init() tea.Cmd {
 	m.ensureValidSelection()
+	m.recoverOrphanProcesses()
 	var cmds []tea.Cmd
 	cmds = append(cmds, m.loadStatus())
 	if m.isPortForwardEnv() {
@@ -864,6 +865,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 									go func() { cmd.Process.Wait() }()
 								}
 								delete(m.localProcesses, proc.Name)
+								m.cleanPIDFile(proc.Name)
 								return m.refreshStatus()
 							},
 							m.loadStatus(),
@@ -892,6 +894,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								return m.refreshStatus()
 							}
 							m.localProcesses[proc.Name] = cmd
+							m.writePIDFile(proc.Name, cmd.Process.Pid)
 							return m.refreshStatus()
 						},
 						m.loadStatus(),
@@ -1414,7 +1417,79 @@ func (m *ProfileViewModel) StopAllLocalProcesses() {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			go func(c *exec.Cmd) { c.Process.Wait() }(cmd)
 		}
+		m.cleanPIDFile(name)
 		delete(m.localProcesses, name)
+	}
+}
+
+// ── Local process PID persistence ─────────────────────────────────────────
+// PID files allow Stackr to detect orphaned local processes that survived a
+// Ctrl+C hard shutdown, so the UI shows "running" instead of "disconnected".
+
+func (m *ProfileViewModel) procDir() string {
+	env := m.currentEnv()
+	if env == nil {
+		return ""
+	}
+	return filepath.Join(config.ProfileDir(m.profile.Name), env.Name, "procs")
+}
+
+func (m *ProfileViewModel) pidFilePath(name string) string {
+	return filepath.Join(m.procDir(), name+".pid")
+}
+
+func (m *ProfileViewModel) writePIDFile(name string, pid int) {
+	dir := m.procDir()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return
+	}
+	_ = os.WriteFile(m.pidFilePath(name), []byte(fmt.Sprintf("%d\n", pid)), 0644)
+}
+
+func (m *ProfileViewModel) cleanPIDFile(name string) {
+	_ = os.Remove(m.pidFilePath(name))
+}
+
+// recoverOrphanProcesses checks PID files and re-populates localProcesses
+// with any processes that survived a hard shutdown (Ctrl+C).
+func (m *ProfileViewModel) recoverOrphanProcesses() {
+	dir := m.procDir()
+	if dir == "" {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return // dir doesn't exist — no orphans
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".pid") {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".pid")
+		if _, ok := m.localProcesses[name]; ok {
+			continue // already tracked
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil {
+			m.cleanPIDFile(name)
+			continue
+		}
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			m.cleanPIDFile(name)
+			continue
+		}
+		// Signal 0 checks if the process exists (Unix-only, no signal sent)
+		if err := proc.Signal(syscall.Signal(0)); err != nil {
+			m.cleanPIDFile(name)
+			continue
+		}
+		// Process is alive — restore tracking so isLocalProcRunning works
+		m.localProcesses[name] = &exec.Cmd{Process: proc}
 	}
 }
 
@@ -1440,6 +1515,7 @@ func (m *ProfileViewModel) startLocalProcess(proc config.LocalProcess) bool {
 		return false
 	}
 	m.localProcesses[proc.Name] = cmd
+	m.writePIDFile(proc.Name, cmd.Process.Pid)
 	return true
 }
 
