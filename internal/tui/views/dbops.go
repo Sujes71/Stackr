@@ -1417,9 +1417,18 @@ func (m *DBOpsModel) fetchMSSQLPort() (string, error) {
 // ── Task 4.4: Wizard dispatch ─────────────────────────────────────────────────
 
 func (m *DBOpsModel) updateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg.(type) {
+	switch wm := msg.(type) {
 	case wizardSavedMsg:
-		// Wizard completed successfully
+		// Migrate dumps if sync env was renamed
+		if wm.editMode && wm.env.Name != wm.origName {
+			oldDir := filepath.Join(config.ProfileDir(m.profile.Name), m.envName, "dumps", m.serviceName, wm.origName)
+			newDir := filepath.Join(config.ProfileDir(m.profile.Name), m.envName, "dumps", m.serviceName, wm.env.Name)
+			if info, err := os.Stat(oldDir); err == nil && info.IsDir() {
+				if err := os.Rename(oldDir, newDir); err != nil {
+					m.lastResult = formatErrorMsg("rename dump dir: " + err.Error())
+				}
+			}
+		}
 		m.wizardModel = nil
 		m.screen = dbScreenSyncEnvList
 		return m, nil
