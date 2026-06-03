@@ -687,12 +687,18 @@ func MySqlTruncate(profileName, envName, serviceName string) error {
 	return nil
 }
 
-// MongoTruncate drops all non-system collections in the database via docker exec.
-func MongoTruncate(profileName, envName, serviceName, database string) error {
+// MongoTruncate drops all non-system collections via docker exec.
+func MongoTruncate(profileName, envName, serviceName string) error {
 	container := ContainerName(profileName, envName, serviceName)
 
 	user, _ := ContainerEnv(container, "MONGO_INITDB_ROOT_USERNAME")
 	pass, _ := ContainerEnv(container, "MONGO_INITDB_ROOT_PASSWORD")
+
+	// Read target database from container env; fall back to "test" (MongoDB default).
+	database, _ := ContainerEnv(container, "MONGO_INITDB_DATABASE")
+	if database == "" {
+		database = "test"
+	}
 
 	// Try mongosh first (MongoDB 6+), fall back to mongo (5.x and older).
 	shell := "mongosh"

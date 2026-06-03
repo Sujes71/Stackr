@@ -1389,7 +1389,7 @@ func (m *DBOpsModel) truncateTables(se *config.SyncEnv) tea.Cmd {
 				return dbOpsDoneMsg{err: fmt.Errorf("truncate postgres: %w", err)}
 			}
 		case "mongo":
-			if err := docker.MongoTruncate(m.profile.Name, m.envName, m.serviceName, se.Database); err != nil {
+			if err := docker.MongoTruncate(m.profile.Name, m.envName, m.serviceName); err != nil {
 				return dbOpsDoneMsg{err: fmt.Errorf("truncate mongo: %w", err)}
 			}
 		case "mysql":
