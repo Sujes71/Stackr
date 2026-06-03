@@ -115,7 +115,6 @@ func (m *NewProfileModel) advance() (tea.Model, tea.Cmd) {
 	case npStepName:
 		name := strings.TrimSpace(m.name.Value())
 		if name == "" {
-			m.err = "profile name cannot be empty"
 			return m, nil
 		}
 		for _, p := range m.cfg.Profiles {

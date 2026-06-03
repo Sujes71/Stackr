@@ -241,9 +241,8 @@ func (m *AddSyncEnvModel) updateNameStep(msg tea.Msg) (*AddSyncEnvModel, tea.Cmd
 			name := strings.TrimSpace(m.nameInput.Value())
 			m.nameErr = ""
 
-			// Validate: not empty
+			// Validate: not empty — silently block
 			if name == "" {
-				m.nameErr = "Name is required"
 				return m, nil
 			}
 
@@ -304,7 +303,9 @@ func (m *AddSyncEnvModel) updateCredentialsStep(msg tea.Msg) (*AddSyncEnvModel, 
 		case key.Matches(msg, wizardNext):
 			// Always validate all fields and advance
 			if err, failIdx := m.validateCredentials(); err != "" {
-				m.credErr = err
+				if !strings.Contains(err, " is required") {
+					m.credErr = err
+				}
 				m.credFocus = failIdx
 				m.updateCredFocus()
 				return m, textinput.Blink

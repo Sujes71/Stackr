@@ -451,7 +451,6 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					// Enter on image input: set image, prefill, move to name
 					img := strings.TrimSpace(m.imageInput.Value())
 					if img == "" {
-						m.err = "image name required"
 						return m, nil
 					}
 					m.svc.Image = img
@@ -472,7 +471,6 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// Enter on service name: advance to ports
 				m.svc.Name = config.SanitizeComposeName(strings.TrimSpace(m.nameInput.Value()))
 				if m.svc.Name == "" {
-					m.err = "service name required"
 					return m, nil
 				}
 				for _, env := range m.profile.Environments {
@@ -497,7 +495,6 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if key.Matches(msg, addSvcNext) {
 				m.svc.Name = config.SanitizeComposeName(strings.TrimSpace(m.nameInput.Value()))
 				if m.svc.Name == "" {
-					m.err = "service name required"
 					return m, nil
 				}
 				for _, env := range m.profile.Environments {

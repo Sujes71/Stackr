@@ -502,6 +502,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case discoveryContextsMsg:
+		delete(m.pendingOps, "discovery")
 		m.discoveryCtxs = msg.contexts
 		m.discoveryNSs = nil
 		m.discoverySvcs = nil
@@ -518,15 +519,18 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ensureValidSelection()
 
 	case discoveryNamespacesMsg:
+		delete(m.pendingOps, "discovery")
 		m.discoveryNSs = msg.namespaces
 		m.discoverySvcs = nil
 		m.discoveryCursor = 0
 
 	case discoveryServicesMsg:
+		delete(m.pendingOps, "discovery")
 		m.discoverySvcs = msg.services
 		m.discoveryCursor = 0
 
 	case discoveryErrorMsg:
+		delete(m.pendingOps, "discovery")
 		m.inDiscovery = false
 		m.discoveryStep = 0
 		return m, nil
@@ -766,27 +770,35 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.discoverySvcs = nil
 					m.discoverySelCtx = knownCtx
 					m.discoverySelNS = ""
-					return m, func() tea.Msg {
-						nss, err := portforward.DiscoverNamespaces(knownCtx)
+					m.pendingOps["discovery"] = "loading"
+					return m, tea.Batch(
+						func() tea.Msg {
+							nss, err := portforward.DiscoverNamespaces(knownCtx)
+							if err != nil {
+								return discoveryErrorMsg{err: err.Error()}
+							}
+							if len(nss) == 0 {
+								return discoveryErrorMsg{err: "no namespaces found in context " + knownCtx}
+							}
+							return discoveryNamespacesMsg{namespaces: nss}
+						},
+						spinnerCmd(),
+					)
+				}
+				m.pendingOps["discovery"] = "loading"
+				return m, tea.Batch(
+					func() tea.Msg {
+						ctxs, err := portforward.DiscoverContexts()
 						if err != nil {
 							return discoveryErrorMsg{err: err.Error()}
 						}
-						if len(nss) == 0 {
-							return discoveryErrorMsg{err: "no namespaces found in context " + knownCtx}
+						if len(ctxs) == 0 {
+							return discoveryErrorMsg{err: "no K8s contexts found"}
 						}
-						return discoveryNamespacesMsg{namespaces: nss}
-					}
-				}
-				return m, func() tea.Msg {
-					ctxs, err := portforward.DiscoverContexts()
-					if err != nil {
-						return discoveryErrorMsg{err: err.Error()}
-					}
-					if len(ctxs) == 0 {
-						return discoveryErrorMsg{err: "no K8s contexts found"}
-					}
-					return discoveryContextsMsg{contexts: ctxs}
-				}
+						return discoveryContextsMsg{contexts: ctxs}
+					},
+					spinnerCmd(),
+				)
 			}
 
 		case key.Matches(msg, profileKeys.enter):
@@ -1984,7 +1996,7 @@ func (m *ProfileViewModel) renderDiscovery() string {
 		b.WriteString(styles.StyleHeader.Render("  Select K8s context:"))
 		b.WriteString("\n\n")
 		if dTotal == 0 {
-			b.WriteString(styles.StyleSubtitle.Render("  Loading contexts..."))
+			b.WriteString(m.renderSpinnerDot("Loading contexts..."))
 			b.WriteString("\n")
 			break
 		}
@@ -2008,7 +2020,7 @@ func (m *ProfileViewModel) renderDiscovery() string {
 		b.WriteString(styles.StyleHeader.Render("  Select namespace for '" + shortCtxName(m.discoverySelCtx) + "':"))
 		b.WriteString("\n\n")
 		if dTotal == 0 {
-			b.WriteString(styles.StyleSubtitle.Render("  Loading namespaces..."))
+			b.WriteString(m.renderSpinnerDot("Loading namespaces..."))
 			b.WriteString("\n")
 			break
 		}
@@ -2032,7 +2044,7 @@ func (m *ProfileViewModel) renderDiscovery() string {
 		b.WriteString(styles.StyleHeader.Render("  Select service in '" + shortCtxName(m.discoverySelCtx) + "/" + m.discoverySelNS + "':"))
 		b.WriteString("\n\n")
 		if dTotal == 0 {
-			b.WriteString(styles.StyleSubtitle.Render("  Loading services..."))
+			b.WriteString(m.renderSpinnerDot("Loading services..."))
 			b.WriteString("\n")
 			break
 		}
@@ -2417,16 +2429,20 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 				m.discoverySvcs = nil
 				m.discoveryStep = 1
 				m.discoveryCursor = 0
-				return m, func() tea.Msg {
-					nss, err := portforward.DiscoverNamespaces(m.discoverySelCtx)
-					if err != nil {
-						return discoveryErrorMsg{err: err.Error()}
-					}
-					if len(nss) == 0 {
-						return discoveryErrorMsg{err: "no namespaces found in context " + m.discoverySelCtx}
-					}
-					return discoveryNamespacesMsg{namespaces: nss}
-				}
+				m.pendingOps["discovery"] = "loading"
+				return m, tea.Batch(
+					func() tea.Msg {
+						nss, err := portforward.DiscoverNamespaces(m.discoverySelCtx)
+						if err != nil {
+							return discoveryErrorMsg{err: err.Error()}
+						}
+						if len(nss) == 0 {
+							return discoveryErrorMsg{err: "no namespaces found in context " + m.discoverySelCtx}
+						}
+						return discoveryNamespacesMsg{namespaces: nss}
+					},
+					spinnerCmd(),
+				)
 			}
 
 		case 1:
@@ -2437,16 +2453,20 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 				m.discoveryStep = 2
 				m.discoveryCursor = 0
 				m.discoverySvcCur = 0
-				return m, func() tea.Msg {
-					svcs, err := portforward.DiscoverServices(m.discoverySelCtx, m.discoverySelNS)
-					if err != nil {
-						return discoveryErrorMsg{err: err.Error()}
-					}
-					if len(svcs) == 0 {
-						return discoveryErrorMsg{err: "no services found in " + m.discoverySelCtx + "/" + m.discoverySelNS}
-					}
-					return discoveryServicesMsg{services: svcs}
-				}
+				m.pendingOps["discovery"] = "loading"
+				return m, tea.Batch(
+					func() tea.Msg {
+						svcs, err := portforward.DiscoverServices(m.discoverySelCtx, m.discoverySelNS)
+						if err != nil {
+							return discoveryErrorMsg{err: err.Error()}
+						}
+						if len(svcs) == 0 {
+							return discoveryErrorMsg{err: "no services found in " + m.discoverySelCtx + "/" + m.discoverySelNS}
+						}
+						return discoveryServicesMsg{services: svcs}
+					},
+					spinnerCmd(),
+				)
 			}
 
 		case 2:

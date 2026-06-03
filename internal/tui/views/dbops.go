@@ -68,15 +68,12 @@ type DBOpsModel struct {
 	actionCursor       int
 	actions            []actionItem // cached for view rendering
 	truncatedSinceData bool         // disable truncate until next import
-	lastActionLabel    string       // label of action being executed
 
 	// Prompt state (start service before import/truncate)
 	promptStartService bool
-	startingService    bool
-	pendingAction      string // action label to execute after service starts
 
-	// Running state (shared across screens)
-	running    bool
+	// Running state — per-action inline spinners
+	pendingOps   map[string]string // action label → "starting" | "running"
 	lastResult string
 
 	// Spinner
@@ -144,6 +141,7 @@ func NewDBOps(cfg *config.Config, p *config.Profile, envName, serviceName string
 		envName:     envName,
 		serviceName: serviceName,
 		screen:      dbScreenSyncEnvList,
+		pendingOps:  make(map[string]string),
 		customNameInput: textinput.New(),
 		customCmdInput:  textinput.New(),
 		paramInput:      textinput.New(),
@@ -217,7 +215,7 @@ func (m *DBOpsModel) SetSize(w, h int) {
 
 func (m *DBOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if _, ok := msg.(spinnerTickMsg); ok {
-		if m.running || m.startingService {
+		if len(m.pendingOps) > 0 {
 			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
 			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 				return spinnerTickMsg{}
@@ -291,18 +289,16 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				// Second d: confirm delete
 				m.deleteArmed = false
-				name := syncEnvs[m.listCursor].Name
 				svc.SyncEnvs = append(syncEnvs[:m.listCursor], syncEnvs[m.listCursor+1:]...)
 				m.profile.UpdatedAt = time.Now()
 				if err := m.cfg.UpdateProfile(*m.profile); err != nil {
 					m.lastResult = formatErrorMsg(err.Error())
 					return m, ClearActionAfter(5 * time.Second)
 				} else {
-					m.lastResult = styles.StyleSuccess.Render("✓ Deleted " + name)
 					if m.listCursor >= len(svc.SyncEnvs) && m.listCursor > 0 {
 						m.listCursor--
 					}
-					return m, ClearActionAfter(3 * time.Second)
+					return m, nil
 				}
 			}
 
@@ -408,25 +404,22 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "y", "Y":
 				m.promptStartService = false
-				m.startingService = true
 				svc := m.currentService()
 				if svc == nil {
-					m.promptStartService = false
-					m.startingService = false
-					m.pendingAction = ""
-			m.lastResult = styles.StyleError.Render("Service not found.")
-			return m, ClearActionAfter(5 * time.Second)
+					m.pendingOps = make(map[string]string)
+					m.lastResult = styles.StyleError.Render("Service not found.")
+					return m, ClearActionAfter(5 * time.Second)
 				}
-			return m, tea.Batch(
-				func() tea.Msg {
-					err := docker.UpService(m.profile.Name, m.envName, svc.ComposeName())
-					return serviceStartedMsg{err: err}
-				},
-				spinnerCmd(),
-			)
+				return m, tea.Batch(
+					func() tea.Msg {
+						err := docker.UpService(m.profile.Name, m.envName, svc.ComposeName())
+						return serviceStartedMsg{err: err}
+					},
+					spinnerCmd(),
+				)
 			case "n", "N", "esc":
 				m.promptStartService = false
-				m.pendingAction = ""
+				m.pendingOps = make(map[string]string)
 				return m, nil
 			}
 		}
@@ -457,18 +450,16 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, dbOpsBack):
-			if m.running || m.startingService {
-				m.running = false
-				m.startingService = false
+			if len(m.pendingOps) > 0 {
+				m.pendingOps = make(map[string]string)
 				m.promptStartService = false
-				m.pendingAction = ""
 				return m, nil
 			}
 			m.screen = dbScreenSyncEnvList
 			m.selectedEnv = ""
 			m.actions = nil
 
-		case key.Matches(msg, dbOpsUp) && !m.running && !m.promptStartService && !m.startingService:
+		case key.Matches(msg, dbOpsUp) && len(m.pendingOps) == 0 && !m.promptStartService:
 			for i := m.actionCursor - 1; i >= 0; i-- {
 				if m.actions[i].enabled {
 					m.actionCursor = i
@@ -476,7 +467,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, dbOpsDown) && !m.running && !m.promptStartService && !m.startingService:
+		case key.Matches(msg, dbOpsDown) && len(m.pendingOps) == 0 && !m.promptStartService:
 			for i := m.actionCursor + 1; i < len(m.actions); i++ {
 				if m.actions[i].enabled {
 					m.actionCursor = i
@@ -484,7 +475,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, dbOpsEnter) && !m.running && !m.promptStartService && !m.startingService:
+		case key.Matches(msg, dbOpsEnter) && len(m.pendingOps) == 0 && !m.promptStartService:
 			if m.actionCursor < len(m.actions) {
 				act := m.actions[m.actionCursor]
 				if act.enabled {
@@ -530,7 +521,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, dbOpsEdit) && !m.running && !m.promptStartService && !m.startingService:
+		case key.Matches(msg, dbOpsEdit) && len(m.pendingOps) == 0 && !m.promptStartService:
 			if m.actionCursor < len(m.actions) {
 				act := m.actions[m.actionCursor]
 				if act.isCustom {
@@ -550,7 +541,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, dbOpsDelete) && !m.running && !m.promptStartService && !m.startingService:
+		case key.Matches(msg, dbOpsDelete) && len(m.pendingOps) == 0 && !m.promptStartService:
 			if m.actionCursor < len(m.actions) {
 				act := m.actions[m.actionCursor]
 				if act.isCustom {
@@ -572,14 +563,12 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if err := m.cfg.UpdateProfile(*m.profile); err != nil {
 							m.lastResult = formatErrorMsg(err.Error())
 							return m, ClearActionAfter(5 * time.Second)
-						} else {
-							m.lastResult = styles.StyleSuccess.Render("✓ Deleted custom action")
 						}
 						m.actions = m.buildActionsList(se)
 						if m.actionCursor >= len(m.actions) {
 							m.actionCursor = len(m.actions) - 1
 						}
-						return m, ClearActionAfter(3 * time.Second)
+						return m, nil
 					}
 				} else {
 					m.deleteActionArmed = false
@@ -593,64 +582,70 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case dbOpsDoneMsg:
-		m.running = false
+		// Get label of completing action before clearing
+		var completedLabel string
+		for label := range m.pendingOps {
+			completedLabel = label
+		}
+		m.pendingOps = make(map[string]string)
+
 		if msg.err != nil {
 			m.lastResult = formatErrorMsg(msg.err.Error())
 			return m, ClearActionAfter(5 * time.Second)
-		} else {
-			m.lastResult = styles.StyleSuccess.Render("\u2713 " + msg.result)
-			// Track truncate vs import to toggle truncate availability (must happen before rebuild)
-			if m.lastActionLabel == "Truncate tables" {
-				m.truncatedSinceData = true
-			} else if hasImportPrefix(m.lastActionLabel) {
-				m.truncatedSinceData = false
-			}
-			// Re-scan dump states — imports/exports affect dump availability
-			svc := m.currentService()
-			if svc != nil {
-				if se := svc.FindSyncEnv(m.selectedEnv); se != nil {
-			m.actions = m.buildActionsList(se)
-			if m.actionCursor >= len(m.actions) || !m.actions[m.actionCursor].enabled {
-				m.actionCursor = m.firstEnabledAction()
-			}
-				}
-			}
-			return m, ClearActionAfter(3 * time.Second)
 		}
+
+		// Track truncate vs import (must happen before rebuild)
+		if completedLabel == "Truncate tables" {
+			m.truncatedSinceData = true
+		} else if hasImportPrefix(completedLabel) {
+			m.truncatedSinceData = false
+		}
+
+		// Re-scan dump states — imports/exports affect dump availability
+		svc := m.currentService()
+		if svc != nil {
+			if se := svc.FindSyncEnv(m.selectedEnv); se != nil {
+				m.actions = m.buildActionsList(se)
+			}
+		}
+		if m.actionCursor >= len(m.actions) || !m.actions[m.actionCursor].enabled {
+			m.actionCursor = m.firstEnabledAction()
+		}
+		return m, nil
 
 	case ClearActionMsg:
 		m.lastResult = ""
 
 	case serviceStartedMsg:
-		m.startingService = false
 		if msg.err != nil {
+			m.pendingOps = make(map[string]string)
 			m.lastResult = formatErrorMsg("start service: " + msg.err.Error())
 			return m, ClearActionAfter(5 * time.Second)
 		}
-		// Execute the pending action
-		m.running = true
-		m.lastResult = ""
-		m.lastActionLabel = m.pendingAction
+		// Execute pending actions that were waiting for service start
 		m.spinnerFrame = 0
 		svc := m.currentService()
 		if svc != nil {
 			if se := svc.FindSyncEnv(m.selectedEnv); se != nil {
 				m.actions = m.buildActionsList(se)
-				for _, act := range m.actions {
-					if act.label == m.pendingAction && act.enabled {
-						if act.isCustom {
-							m.running = true
-							m.lastResult = ""
-							m.lastActionLabel = act.label
-							return m, tea.Batch(m.customActionExecCmd(m.pendingCustomCmd), spinnerCmd())
+				for pendingLabel, state := range m.pendingOps {
+					if state == "starting" {
+						for _, act := range m.actions {
+							if act.label == pendingLabel && act.enabled {
+								m.pendingOps[pendingLabel] = "running"
+								if act.isCustom {
+									return m, tea.Batch(m.customActionExecCmd(m.pendingCustomCmd), spinnerCmd())
+								}
+								return m, tea.Batch(act.execute(), spinnerCmd())
+							}
 						}
-						return m, tea.Batch(act.execute(), spinnerCmd())
 					}
+					break
 				}
 			}
 		}
-		m.running = false
-		m.lastResult = styles.StyleError.Render("Could not find action '" + m.pendingAction + "'")
+		m.pendingOps = make(map[string]string)
+		m.lastResult = styles.StyleError.Render("Could not find pending action")
 		return m, ClearActionAfter(5 * time.Second)
 	}
 	return m, nil
@@ -699,18 +694,17 @@ func (m *DBOpsModel) updateCustomConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
 			if !m.isContainerRunning(container) {
 				m.confirmCustomAction = false
-			m.promptStartService = true
-			m.pendingAction = m.actions[m.actionCursor].label
-			return m, nil
+				m.promptStartService = true
+				m.pendingOps[m.actions[m.actionCursor].label] = "starting"
+				return m, nil
 			}
 			m.confirmCustomAction = false
-			m.running = true
 			m.lastResult = ""
+			label := "Custom action"
 			if m.actionCursor < len(m.actions) {
-				m.lastActionLabel = m.actions[m.actionCursor].label
-			} else {
-				m.lastActionLabel = "Custom action"
+				label = m.actions[m.actionCursor].label
 			}
+			m.pendingOps[label] = "running"
 			return m, tea.Batch(m.customActionExecCmd(m.pendingCustomCmd), spinnerCmd())
 		case key.Matches(msg, dbOpsBack):
 			m.confirmCustomAction = false
@@ -734,13 +728,12 @@ func (m *DBOpsModel) updateCoreConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 				container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
 				if !m.isContainerRunning(container) {
 					m.promptStartService = true
-					m.pendingAction = act.label
+					m.pendingOps[act.label] = "starting"
 					return m, nil
 				}
 			}
-			m.running = true
+			m.pendingOps[act.label] = "running"
 			m.lastResult = ""
-			m.lastActionLabel = act.label
 			return m, tea.Batch(act.execute(), spinnerCmd())
 		default:
 			m.confirmAction = false
@@ -800,15 +793,13 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if err := m.cfg.UpdateProfile(*m.profile); err != nil {
 				m.lastResult = formatErrorMsg(err.Error())
 				return m, ClearActionAfter(5 * time.Second)
-			} else {
-				m.lastResult = styles.StyleSuccess.Render("✓ Custom action saved")
 			}
 			m.addingCustomAction = false
 			m.actions = m.buildActionsList(se)
 			if m.actionCursor >= len(m.actions) {
 				m.actionCursor = len(m.actions) - 1
 			}
-			return m, ClearActionAfter(3 * time.Second)
+			return m, nil
 		}
 
 	default:
@@ -892,7 +883,7 @@ func (m *DBOpsModel) customActionExecCmd(cmd string) tea.Cmd {
 		if err != nil {
 			return dbOpsDoneMsg{err: fmt.Errorf("custom action: %s: %w", strings.TrimSpace(string(out)), err)}
 		}
-		return dbOpsDoneMsg{result: m.lastActionLabel + " completed"}
+		return dbOpsDoneMsg{}
 	}
 }
 
@@ -957,10 +948,6 @@ func (m *DBOpsModel) viewActions() string {
 		b.WriteString("  " + promptStyle.Render("Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
 	}
 
-	if m.startingService {
-		b.WriteString(styles.StyleSubtitle.Render("  Starting " + m.serviceName + "\u2026") + "\n\n")
-	}
-
 	// ── Custom action form ────────────────────────────────────────────────────
 	if m.addingCustomAction {
 		b.WriteString(m.viewCustomForm())
@@ -1017,7 +1004,11 @@ func (m *DBOpsModel) viewActions() string {
 			continue
 		}
 
-		if m.running || m.startingService {
+		if state, pending := m.pendingOps[act.label]; pending {
+			b.WriteString("    " + m.renderSpinnerDot(state) + "\n")
+			continue
+		}
+		if len(m.pendingOps) > 0 {
 			b.WriteString("      " + act.label + "\n")
 			continue
 		}
@@ -1037,15 +1028,6 @@ func (m *DBOpsModel) viewActions() string {
 
 	b.WriteString("\n")
 
-	if m.running {
-		spinner := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
-		b.WriteString("  " + spinner + " Running " + m.lastActionLabel + "\n\n")
-	}
-	if m.startingService && !m.running {
-		spinner := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
-		b.WriteString("  " + spinner + " Starting " + m.serviceName + "\n\n")
-	}
-
 	if m.lastResult != "" {
 		b.WriteString("  " + m.lastResult + "\n\n")
 	}
@@ -1054,9 +1036,7 @@ func (m *DBOpsModel) viewActions() string {
 		b.WriteString(styles.StyleError.Render("  Press d again to delete this custom action") + "\n")
 	}
 
-	if (m.running || m.startingService) && !m.promptStartService {
-		b.WriteString(styles.StyleSubtitle.Render("  Please wait…"))
-	} else if m.confirmAction || m.confirmCustomAction {
+	if m.confirmAction || m.confirmCustomAction {
 		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n\n")
 		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "execute")))
 	} else {
@@ -1427,17 +1407,12 @@ func (m *DBOpsModel) fetchMSSQLPort() (string, error) {
 // ── Task 4.4: Wizard dispatch ─────────────────────────────────────────────────
 
 func (m *DBOpsModel) updateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
+	switch msg.(type) {
 	case wizardSavedMsg:
 		// Wizard completed successfully
 		m.wizardModel = nil
 		m.screen = dbScreenSyncEnvList
-		if msg.editMode {
-			m.lastResult = styles.StyleSuccess.Render("\u2713 Updated " + msg.env.Name)
-		} else {
-			m.lastResult = styles.StyleSuccess.Render("\u2713 Sync environment '" + msg.env.Name + "' saved")
-		}
-		return m, ClearActionAfter(3 * time.Second)
+		return m, nil
 	}
 
 	if m.wizardModel == nil {
@@ -1509,6 +1484,11 @@ func (m *DBOpsModel) hasMongoDump(dumpDir string) bool {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+func (m *DBOpsModel) renderSpinnerDot(op string) string {
+	frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+	return lipgloss.NewStyle().Foreground(styles.ColorAccent).Render(fmt.Sprintf("%s %s", frame, op))
+}
 
 func ts() string {
 	return time.Now().Format("20060102-150405")

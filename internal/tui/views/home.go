@@ -32,6 +32,10 @@ type HomeModel struct {
 	importCursor int
 	importErr   string
 	importing   bool
+
+	// ── Pending Ops / Spinner ──
+	pendingOps   map[string]string // key → "importing"
+	spinnerFrame int
 }
 
 type importResultMsg struct {
@@ -48,6 +52,7 @@ func NewHome(cfg *config.Config) *HomeModel {
 		cfg:          cfg,
 		profiles:     cfg.Profiles,
 		confirmInput: ti,
+		pendingOps:   make(map[string]string),
 	}
 }
 
@@ -75,11 +80,23 @@ func (m *HomeModel) SetSize(w, h int) {
 }
 
 func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Spinner tick — handle at the top
+	if _, ok := msg.(spinnerTickMsg); ok {
+		if len(m.pendingOps) > 0 {
+			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
+			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+				return spinnerTickMsg{}
+			})
+		}
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.height = max(0, msg.Height-5) // App chrome
 
 	case importResultMsg:
+		delete(m.pendingOps, "import")
 		m.importing = false
 		if msg.err != "" {
 			m.importErr = msg.err
@@ -118,26 +135,30 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				path := filepath.Join(config.StackrDir(), "exports", name+".yaml")
 				m.importing = true
 				m.importErr = ""
-				return m, func() tea.Msg {
-					data, err := os.ReadFile(path)
-					if err != nil {
-						return importResultMsg{err: err.Error()}
-					}
-					var p config.Profile
-					if err := yaml.Unmarshal(data, &p); err != nil {
-						return importResultMsg{err: "Invalid profile YAML: " + err.Error()}
-					}
-					if err := m.cfg.AddProfile(p); err != nil {
-						return importResultMsg{err: err.Error()}
-					}
-					// Regenerate compose files for imported profile
-					for _, env := range p.Environments {
-						if len(env.Services) > 0 {
-							config.GenerateCompose(p, env.Name)
+				m.pendingOps["import"] = "importing"
+				return m, tea.Batch(
+					func() tea.Msg {
+						data, err := os.ReadFile(path)
+						if err != nil {
+							return importResultMsg{err: err.Error()}
 						}
-					}
-					return importResultMsg{profiles: m.cfg.Profiles}
-				}
+						var p config.Profile
+						if err := yaml.Unmarshal(data, &p); err != nil {
+							return importResultMsg{err: "Invalid profile YAML: " + err.Error()}
+						}
+						if err := m.cfg.AddProfile(p); err != nil {
+							return importResultMsg{err: err.Error()}
+						}
+						// Regenerate compose files for imported profile
+						for _, env := range p.Environments {
+							if len(env.Services) > 0 {
+								config.GenerateCompose(p, env.Name)
+							}
+						}
+						return importResultMsg{profiles: m.cfg.Profiles}
+					},
+					spinnerCmd(),
+				)
 			}
 		}
 		// If typed confirmation is active, handle in its own mode.
@@ -255,6 +276,13 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// ── Spinner ──
+
+func (m *HomeModel) renderSpinnerDot(op string) string {
+	frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+	return lipgloss.NewStyle().Foreground(styles.ColorAccent).Render(fmt.Sprintf("%s %s", frame, op))
+}
+
 func (m *HomeModel) View() string {
 	var b strings.Builder
 
@@ -279,7 +307,7 @@ func (m *HomeModel) View() string {
 		))
 		b.WriteString("\n")
 		if m.importing {
-			b.WriteString(styles.StyleSubtitle.Render("  Importing…") + "\n")
+			b.WriteString(m.renderSpinnerDot("Importing") + "\n")
 		}
 		if m.importErr != "" {
 			b.WriteString(styles.StyleError.Render("  ✗ " + m.importErr) + "\n")
