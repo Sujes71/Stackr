@@ -1331,7 +1331,7 @@ func (m *DBOpsModel) importData(se *config.SyncEnv) tea.Cmd {
 			if err != nil {
 				return dbOpsDoneMsg{err: err}
 			}
-			if err := docker.SqlPackageImport(m.profile.Name, m.envName, m.serviceName, latest, hostPort); err != nil {
+			if err := docker.SqlPackageImport(m.profile.Name, m.envName, m.serviceName, latest, hostPort, docker.ToolImage(se)); err != nil {
 				return dbOpsDoneMsg{err: fmt.Errorf("import mssql: %w", err)}
 			}
 			return dbOpsDoneMsg{result: "Data imported from " + filepath.Base(latest)}

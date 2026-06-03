@@ -25,15 +25,17 @@ func composeArgs(profileName, envName string, args ...string) []string {
 	return append(base, args...)
 }
 
-// DefaultToolImage returns the default Docker image for the given DB type.
+// DefaultToolImage returns a sensible default Docker image for the given DB type.
+// This is only a fallback — the actual ToolImage comes from the SyncEnv config
+// (pre-filled from the service image in the Wizard), and the user can override it.
 func DefaultToolImage(dbType string) string {
 	switch dbType {
 	case "postgres":
-		return "postgres:16"
+		return "postgres:17"
 	case "mongo":
-		return "mongo:4.4"
+		return "mongo:7.0"
 	case "mysql":
-		return "mysql:8.0"
+		return "mysql:9.0"
 	case "mssql":
 		return "mcr.microsoft.com/mssql-tools:latest"
 	default:
@@ -555,8 +557,12 @@ func ExecMySqlRestore(profileName, envName, serviceName, dumpPath string) error 
 		return fmt.Errorf("docker cp: %w", err)
 	}
 
-	_, err = ContainerExec(container, "sh", "-c",
-		fmt.Sprintf("mysql -u %s -p'%s' %s < %s", user, pass, db, tmpPath))
+	env := []string{}
+	if pass != "" {
+		env = append(env, "MYSQL_PWD="+pass)
+	}
+	_, err = ContainerExecWithEnv(container, env,
+		"sh", "-c", fmt.Sprintf("mysql -u %s %s < %s", user, db, tmpPath))
 	return err
 }
 
@@ -616,13 +622,17 @@ func MySqlTruncate(profileName, envName, serviceName string) error {
 		return fmt.Errorf("read MYSQL_DATABASE: %w", err)
 	}
 
-	_, err = ContainerExec(container, "sh", "-c",
-		fmt.Sprintf(`mysql -u %s -p'%s' %s -e "
+	env := []string{}
+	if pass != "" {
+		env = append(env, "MYSQL_PWD="+pass)
+	}
+	_, err = ContainerExecWithEnv(container, env, "sh", "-c",
+		fmt.Sprintf(`mysql -u %s %s -e "
 			SET FOREIGN_KEY_CHECKS=0;
 			SELECT GROUP_CONCAT(CONCAT('TRUNCATE TABLE ', table_name, ';') SEPARATOR ' ')
 			INTO @sql FROM information_schema.tables WHERE table_schema = '%s';
 			PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
-		"`, user, pass, db, db),
+		"`, user, db, db),
 	)
 	if err != nil {
 		return fmt.Errorf("truncate tables: %w", err)
@@ -726,11 +736,15 @@ func SqlPackageExport(syncEnv *config.SyncEnv, outPath string) error {
 }
 
 // SqlPackageImport imports a .bacpac file into the MSSQL container using sqlpackage CLI.
-func SqlPackageImport(profileName, envName, serviceName string, inPath string, hostPort string) error {
+func SqlPackageImport(profileName, envName, serviceName, inPath, hostPort, toolImage string) error {
 	container := ContainerName(profileName, envName, serviceName)
 	saPass, err := ContainerEnv(container, "MSSQL_SA_PASSWORD")
 	if err != nil {
 		return fmt.Errorf("read MSSQL_SA_PASSWORD from container: %w", err)
+	}
+
+	if toolImage == "" {
+		toolImage = DefaultToolImage("mssql")
 	}
 
 	inDir := filepath.Dir(inPath)
@@ -740,7 +754,7 @@ func SqlPackageImport(profileName, envName, serviceName string, inPath string, h
 		"run", "--rm",
 		"--add-host", "host.docker.internal:host-gateway",
 		"-v", inDir + ":/tmp",
-		DefaultToolImage("mssql"),
+		toolImage,
 		"sqlpackage",
 		"/Action:Import",
 		"/TargetServerName:host.docker.internal," + hostPort,
