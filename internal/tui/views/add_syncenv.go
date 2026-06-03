@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stackr/stackr/internal/config"
+	"github.com/stackr/stackr/internal/docker"
 	"github.com/stackr/stackr/internal/tui/styles"
 )
 
@@ -33,6 +34,7 @@ const (
 	credFocusPass          // 3
 	credFocusDB            // 4
 	credFocusAuthDB        // 5 — mongo only
+	credFocusToolImage     // 6
 )
 
 // ── Messages ──────────────────────────────────────────────────────────────────
@@ -70,10 +72,11 @@ type AddSyncEnvModel struct {
 	userInput   textinput.Model
 	passInput   textinput.Model
 	dbInput     textinput.Model
-	authDBInput textinput.Model // mongo only
-	credFocus   int
-	credErr     string
-	maxFocus    int // 4 (postgres/mysql/mssql) or 5 (mongo)
+	authDBInput    textinput.Model // mongo only
+	toolImageInput textinput.Model
+	credFocus      int
+	credErr        string
+	maxFocus       int // 5 (postgres/mysql/mssql) or 6 (mongo)
 
 	// Step 3: review
 	confirmed bool
@@ -101,11 +104,13 @@ func NewAddSyncEnv(
 	// Resolve service and DB type from the profile
 	var dbType string
 	var serviceIdx int
+	var serviceImage string
 	for i := range p.Environments {
 		if p.Environments[i].Name == envName {
 			for j := range p.Environments[i].Services {
 				if p.Environments[i].Services[j].Name == serviceName {
 					dbType = p.Environments[i].Services[j].DBType()
+					serviceImage = p.Environments[i].Services[j].FullImage()
 					serviceIdx = j
 					break
 				}
@@ -177,16 +182,25 @@ func NewAddSyncEnv(
 	m.passInput = pai
 	m.dbInput = di
 
-	// Max focus: 4 for non-mongo, 5 for mongo (includes AuthDB)
-	m.maxFocus = 4
+	// Max focus: 5 for non-mongo, 6 for mongo
+	m.maxFocus = 5
 	if dbType == "mongo" {
-		m.maxFocus = 5
+		m.maxFocus = 6
 		ai := textinput.New()
 		ai.Placeholder = "admin (auth db)"
 		ai.CharLimit = 128
 		ai.Width = 24
 		m.authDBInput = ai
 	}
+
+	ti := textinput.New()
+	ti.Placeholder = docker.DefaultToolImage(dbType)
+	ti.CharLimit = 128
+	ti.Width = 30
+	if serviceImage != "" {
+		ti.SetValue(serviceImage)
+	}
+	m.toolImageInput = ti
 
 	// Pre-fill in edit mode
 	if existing != nil && !addMode {
@@ -201,6 +215,9 @@ func NewAddSyncEnv(
 		m.dbInput.SetValue(existing.Database)
 		if dbType == "mongo" {
 			m.authDBInput.SetValue(existing.AuthDB)
+		}
+		if existing.ToolImage != "" {
+			m.toolImageInput.SetValue(existing.ToolImage)
 		}
 	}
 
@@ -333,6 +350,8 @@ func (m *AddSyncEnvModel) updateCredentialsStep(msg tea.Msg) (*AddSyncEnvModel, 
 		if m.dbType == "mongo" {
 			m.authDBInput, cmd = m.authDBInput.Update(msg)
 		}
+	case credFocusToolImage:
+		m.toolImageInput, cmd = m.toolImageInput.Update(msg)
 	}
 	return m, cmd
 }
@@ -375,6 +394,9 @@ func (m *AddSyncEnvModel) save() tea.Cmd {
 		}
 		if m.dbType == "mongo" {
 			syncEnv.AuthDB = strings.TrimSpace(m.authDBInput.Value())
+		}
+		if toolImage := strings.TrimSpace(m.toolImageInput.Value()); toolImage != "" {
+			syncEnv.ToolImage = toolImage
 		}
 
 		svc := m.findService()
@@ -420,6 +442,7 @@ func (m *AddSyncEnvModel) updateCredFocus() {
 	if m.dbType == "mongo" {
 		m.authDBInput.Blur()
 	}
+	m.toolImageInput.Blur()
 
 	switch m.credFocus {
 	case credFocusHost:
@@ -436,6 +459,8 @@ func (m *AddSyncEnvModel) updateCredFocus() {
 		if m.dbType == "mongo" {
 			m.authDBInput.Focus()
 		}
+	case credFocusToolImage:
+		m.toolImageInput.Focus()
 	}
 }
 
@@ -554,7 +579,7 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 	normalStyle := lipgloss.NewStyle()
 
-	hostLabel, portLabel, userLabel, passLabel, dbLabel, authLabel := normalStyle, normalStyle, normalStyle, normalStyle, normalStyle, normalStyle
+	hostLabel, portLabel, userLabel, passLabel, dbLabel, authLabel, toolLabel := normalStyle, normalStyle, normalStyle, normalStyle, normalStyle, normalStyle, normalStyle
 	switch m.credFocus {
 	case credFocusHost:
 		hostLabel = focusStyle
@@ -568,6 +593,8 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 		dbLabel = focusStyle
 	case credFocusAuthDB:
 		authLabel = focusStyle
+	case credFocusToolImage:
+		toolLabel = focusStyle
 	}
 
 	b.WriteString("  " + hostLabel.Render("Host:     ") + m.hostInput.View() + "\n")
@@ -578,6 +605,7 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 	if m.dbType == "mongo" {
 		b.WriteString("  " + authLabel.Render("Auth DB:  ") + styles.StyleSubtitle.Render("(optional) ") + m.authDBInput.View() + "\n")
 	}
+	b.WriteString("  " + toolLabel.Render("Tool img: ") + styles.StyleSubtitle.Render("(optional) ") + m.toolImageInput.View() + "\n")
 
 	if m.credErr != "" {
 		b.WriteString("\n  " + styles.StyleError.Render("✗ "+m.credErr))
@@ -609,6 +637,7 @@ func (m *AddSyncEnvModel) viewReviewStep() string {
 		styles.StyleInputLabel.Render("Password")+"  "+maskedPass,
 		styles.StyleInputLabel.Render("Database")+"  "+styles.StyleCode.Render(m.dbInput.Value()),
 		m.authDBIfMongo(),
+		m.toolImageIfSet(),
 	)
 	panelW := lipgloss.Width(panelContent) + 4
 	if panelW < 60 {
@@ -632,4 +661,13 @@ func (m *AddSyncEnvModel) authDBIfMongo() string {
 		return styles.StyleInputLabel.Render("Auth DB") + "  " + styles.StyleCode.Render(m.authDBInput.Value())
 	}
 	return ""
+}
+
+func (m *AddSyncEnvModel) toolImageIfSet() string {
+	val := m.toolImageInput.Value()
+	display := val
+	if display == "" {
+		display = docker.DefaultToolImage(m.dbType)
+	}
+	return styles.StyleInputLabel.Render("Tool image") + "  " + styles.StyleCode.Render(display)
 }

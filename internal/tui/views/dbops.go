@@ -1140,41 +1140,37 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 	var actions []actionItem
 	switch se.DBType {
 	case "postgres":
-		pgDumpAvailable := docker.ToolAvailable("pg_dump")
 		hasSchema := docker.HasDumpFile(dDir, "schema-*.sql")
 		hasData := docker.HasDumpFile(dDir, "data-*.sql")
 		actions = []actionItem{
-			{label: "Export schema", group: "Export", enabled: pgDumpAvailable, disabledReason: disabledIf(!pgDumpAvailable, "pg_dump not found in PATH"), execute: func() tea.Cmd { return m.exportSchema(se) }},
-			{label: "Export data", group: "Export", enabled: pgDumpAvailable, disabledReason: disabledIf(!pgDumpAvailable, "pg_dump not found in PATH"), execute: func() tea.Cmd { return m.exportData(se) }},
+			{label: "Export schema", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportSchema(se) }},
+			{label: "Export data", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
 			{label: "Import schema", group: "Import", enabled: hasSchema, disabledReason: disabledIf(!hasSchema, "no schema dump"), execute: func() tea.Cmd { return m.importSchema(se) }},
 			{label: "Import data", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no data dump"), execute: func() tea.Cmd { return m.importData(se) }},
 			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: disabledIf(!m.truncateEnabled(hasData), "import data first"), execute: truncate},
 		}
 
 	case "mongo":
-		mongodumpAvailable := docker.ToolAvailable("mongodump")
 		hasData := m.hasMongoDump(dDir)
 		actions = []actionItem{
-			{label: "Export", group: "Export", enabled: mongodumpAvailable, disabledReason: disabledIf(!mongodumpAvailable, "mongodump not found in PATH"), execute: func() tea.Cmd { return m.exportData(se) }},
+			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
 			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump"), execute: func() tea.Cmd { return m.importData(se) }},
 			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: disabledIf(!m.truncateEnabled(hasData), "import data first"), execute: truncate},
 		}
 
 	case "mysql":
-		mysqldumpAvailable := docker.ToolAvailable("mysqldump")
 		hasData := docker.HasDumpFile(dDir, "data-*.sql")
 		actions = []actionItem{
-			{label: "Export", group: "Export", enabled: mysqldumpAvailable, disabledReason: disabledIf(!mysqldumpAvailable, "mysqldump not found in PATH"), execute: func() tea.Cmd { return m.exportData(se) }},
+			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
 			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump file"), execute: func() tea.Cmd { return m.importData(se) }},
 			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: disabledIf(!m.truncateEnabled(hasData), "import data first"), execute: truncate},
 		}
 
 	case "mssql":
-		sqlpackageAvailable := docker.ToolAvailable("sqlpackage")
 		hasData := docker.HasDumpFile(dDir, "data-*.bacpac")
 		actions = []actionItem{
-			{label: "Export", group: "Export", enabled: sqlpackageAvailable, disabledReason: disabledIf(!sqlpackageAvailable, "sqlpackage not found in PATH"), execute: func() tea.Cmd { return m.exportData(se) }},
-			{label: "Import", group: "Import", enabled: hasData && sqlpackageAvailable, disabledReason: disabledIf(!hasData, "no .bacpac file"), execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
+			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no .bacpac file"), execute: func() tea.Cmd { return m.importData(se) }},
 			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: disabledIf(!m.truncateEnabled(hasData), "import data first"), execute: truncate},
 		}
 	}
@@ -1240,6 +1236,7 @@ func (m *DBOpsModel) exportData(se *config.SyncEnv) tea.Cmd {
 		case "mongo":
 			outDir := filepath.Join(dDir, ts())
 			if err := docker.MongoDump(se, outDir); err != nil {
+				os.RemoveAll(outDir) // clean up empty dir created by failed mount
 				return dbOpsDoneMsg{err: fmt.Errorf("export mongo: %w", err)}
 			}
 			return dbOpsDoneMsg{result: "Data exported to " + filepath.Base(outDir)}
@@ -1252,9 +1249,6 @@ func (m *DBOpsModel) exportData(se *config.SyncEnv) tea.Cmd {
 			return dbOpsDoneMsg{result: "Data exported to " + filepath.Base(outPath)}
 
 		case "mssql":
-			if !docker.ToolAvailable("sqlpackage") {
-				return dbOpsDoneMsg{err: fmt.Errorf("sqlpackage CLI not found. Install via: dotnet tool install -g microsoft.sqlpackage")}
-			}
 			outPath := filepath.Join(dDir, "data-"+ts()+".bacpac")
 			if err := docker.SqlPackageExport(se, outPath); err != nil {
 				return dbOpsDoneMsg{err: fmt.Errorf("export mssql: %w", err)}
@@ -1328,9 +1322,6 @@ func (m *DBOpsModel) importData(se *config.SyncEnv) tea.Cmd {
 			return dbOpsDoneMsg{result: "Data imported from " + filepath.Base(latest)}
 
 		case "mssql":
-			if !docker.ToolAvailable("sqlpackage") {
-				return dbOpsDoneMsg{err: fmt.Errorf("sqlpackage CLI not found. Install via: dotnet tool install -g microsoft.sqlpackage")}
-			}
 			latest, err := docker.FindLatestDump(dDir, "data-*.bacpac")
 			if err != nil {
 				return dbOpsDoneMsg{err: fmt.Errorf("no .bacpac file: %w", err)}

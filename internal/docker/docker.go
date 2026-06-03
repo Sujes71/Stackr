@@ -12,6 +12,10 @@ import (
 	"github.com/stackr/stackr/internal/config"
 )
 
+// dockerRunUserID is no longer needed — Docker only chowns mount sources
+// when it CREATES them. If the directory exists beforehand, no chown occurs.
+// (Colima's sshfs and Docker Desktop's osxfs both reject container-user chowns.)
+
 func composePath(profileName, envName string) string {
 	return filepath.Join(config.ProfileDir(profileName), envName, "docker-compose.yml")
 }
@@ -19,6 +23,30 @@ func composePath(profileName, envName string) string {
 func composeArgs(profileName, envName string, args ...string) []string {
 	base := []string{"compose", "-f", composePath(profileName, envName)}
 	return append(base, args...)
+}
+
+// DefaultToolImage returns the default Docker image for the given DB type.
+func DefaultToolImage(dbType string) string {
+	switch dbType {
+	case "postgres":
+		return "postgres:16"
+	case "mongo":
+		return "mongo:4.4"
+	case "mysql":
+		return "mysql:8.0"
+	case "mssql":
+		return "mcr.microsoft.com/mssql-tools:latest"
+	default:
+		return ""
+	}
+}
+
+// ToolImage returns the tool image for a SyncEnv, or the default if not set.
+func ToolImage(se *config.SyncEnv) string {
+	if se.ToolImage != "" {
+		return se.ToolImage
+	}
+	return DefaultToolImage(se.DBType)
 }
 
 // runDocker executes a docker command and returns a friendly error on failure.
@@ -204,71 +232,102 @@ func LocalImages() ([]LocalImage, error) {
 
 // PgDump runs pg_dump. flag: "-s" schema, "-a" data, "" full.
 func PgDump(syncEnv *config.SyncEnv, outPath, flag string) error {
-	if !ToolAvailable("pg_dump") {
-		return fmt.Errorf("pg_dump not found in PATH. Install PostgreSQL client tools: brew install libpq")
-	}
-	args := []string{"-h", syncEnv.Host, "-p", syncEnv.Port, "-U", syncEnv.User}
-	if flag != "" {
-		args = append(args, flag)
-	}
-	args = append(args, syncEnv.Database)
 	pass, err := syncEnv.GetPassword()
 	if err != nil {
 		return fmt.Errorf("decrypt password: %w", err)
 	}
-	cmd := exec.Command("pg_dump", args...)
-	cmd.Env = append(os.Environ(), "PGPASSWORD="+pass)
-	out, err := cmd.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("pg_dump: %s: %w", strings.TrimSpace(string(exitErr.Stderr)), err)
-		}
-		return fmt.Errorf("pg_dump: %w", err)
+
+	outDir := filepath.Dir(outPath)
+	outFile := filepath.Base(outPath)
+
+	dockerArgs := []string{
+		"run", "--rm",
+		"-v", outDir + ":/dump",
+		"-e", "PGPASSWORD=" + pass,
+		ToolImage(syncEnv),
+		"pg_dump",
+		"-h", syncEnv.Host,
+		"-p", syncEnv.Port,
+		"-U", syncEnv.User,
+		"-f", "/dump/" + outFile,
 	}
-	return os.WriteFile(outPath, out, 0644)
+	if flag != "" {
+		dockerArgs = append(dockerArgs, flag)
+	}
+	dockerArgs = append(dockerArgs, syncEnv.Database)
+
+	out, err := exec.Command("docker", dockerArgs...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("pg_dump via docker: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
 }
 
 // MongoDump runs mongodump.
 func MongoDump(syncEnv *config.SyncEnv, outDir string) error {
-	if !ToolAvailable("mongodump") {
-		return fmt.Errorf("mongodump not found in PATH. Install MongoDB Database Tools: brew install mongodb-database-tools")
-	}
 	pass, err := syncEnv.GetPassword()
 	if err != nil {
 		return fmt.Errorf("decrypt password: %w", err)
 	}
-	cmd := exec.Command("mongodump",
-		"--host", syncEnv.Host+":"+syncEnv.Port,
+
+	// Pre-create the output dir so Docker doesn't try to chown it.
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return fmt.Errorf("create dump dir: %w", err)
+	}
+
+	dockerArgs := []string{
+		"run", "--rm",
+		"-v", outDir + ":/dump",
+		ToolImage(syncEnv),
+		"mongodump",
+		"--host", syncEnv.Host,
+		"--port", syncEnv.Port,
 		"--username", syncEnv.User,
 		"--password", pass,
-		"--authenticationDatabase", syncEnv.AuthDB,
+	}
+	if syncEnv.AuthDB != "" {
+		dockerArgs = append(dockerArgs, "--authenticationDatabase", syncEnv.AuthDB)
+	}
+	dockerArgs = append(dockerArgs,
 		"--db", syncEnv.Database,
-		"--out", outDir,
+		"--out", "/dump",
 	)
-	out, err := cmd.CombinedOutput()
+
+	out, err := exec.Command("docker", dockerArgs...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("mongodump: %s: %w", strings.TrimSpace(string(out)), err)
+		return fmt.Errorf("mongodump via docker: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }
 
 // MySqlDump runs mysqldump.
 func MySqlDump(syncEnv *config.SyncEnv, outPath string) error {
-	if !ToolAvailable("mysqldump") {
-		return fmt.Errorf("mysqldump not found in PATH. Install MySQL client tools: brew install mysql-client")
-	}
-	args := []string{"-h", syncEnv.Host, "-P", syncEnv.Port, "-u", syncEnv.User, syncEnv.Database}
 	pass, err := syncEnv.GetPassword()
 	if err != nil {
 		return fmt.Errorf("decrypt password: %w", err)
 	}
-	cmd := exec.Command("mysqldump", args...)
-	cmd.Env = append(os.Environ(), "MYSQL_PWD="+pass)
-	out, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("mysqldump: %w", err)
+
+	outDir := filepath.Dir(outPath)
+	outFile := filepath.Base(outPath)
+
+	dockerArgs := []string{
+		"run", "--rm",
+		"-v", outDir + ":/dump",
+		"-e", "MYSQL_PWD=" + pass,
+		ToolImage(syncEnv),
+		"mysqldump",
+		"-h", syncEnv.Host,
+		"-P", syncEnv.Port,
+		"-u", syncEnv.User,
+		"-r", "/dump/" + outFile,
+		syncEnv.Database,
 	}
-	return os.WriteFile(outPath, out, 0644)
+
+	out, err := exec.Command("docker", dockerArgs...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mysqldump via docker: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
 }
 
 // ================================================================
@@ -297,9 +356,9 @@ func ContainerCopy(container, srcPath, destPath string) error {
 // ContainerExec runs an arbitrary command inside the container.
 func ContainerExec(container string, args ...string) (string, error) {
 	cmd := exec.Command("docker", append([]string{"exec", container}, args...)...)
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("docker exec: %w", err)
+		return "", fmt.Errorf("docker exec: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return string(out), nil
 }
@@ -339,12 +398,6 @@ func ContainerExecWithEnv(container string, env []string, args ...string) (strin
 		return "", fmt.Errorf("docker exec: %w", err)
 	}
 	return string(out), nil
-}
-
-// ToolAvailable checks if a CLI tool is in PATH.
-func ToolAvailable(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
 }
 
 // HasDumpFile returns true if any file matching the given glob pattern exists in the directory.
@@ -553,11 +606,34 @@ func MySqlTruncate(profileName, envName, serviceName string) error {
 // MongoTruncate drops all non-system collections in the database via docker exec.
 func MongoTruncate(profileName, envName, serviceName string) error {
 	container := ContainerName(profileName, envName, serviceName)
-	_, err := ContainerExec(container, "mongosh", "--eval",
+
+	user, _ := ContainerEnv(container, "MONGO_INITDB_ROOT_USERNAME")
+	pass, _ := ContainerEnv(container, "MONGO_INITDB_ROOT_PASSWORD")
+
+	// Try mongosh first (MongoDB 6+), fall back to mongo (5.x and older).
+	shell := "mongosh"
+	if _, err := ContainerExec(container, "which", "mongosh"); err != nil {
+		if _, err2 := ContainerExec(container, "which", "mongo"); err2 != nil {
+			return fmt.Errorf("neither mongosh nor mongo found in container")
+		}
+		shell = "mongo"
+	}
+
+	mongoArgs := []string{shell}
+	if user != "" {
+		mongoArgs = append(mongoArgs, "--username", user)
+		if pass != "" {
+			mongoArgs = append(mongoArgs, "--password", pass)
+		}
+		mongoArgs = append(mongoArgs, "--authenticationDatabase", "admin")
+	}
+	mongoArgs = append(mongoArgs, "--eval",
 		`db.getCollectionNames().forEach(function(c) {
 			if (c.indexOf("system.") == -1) db.getCollection(c).deleteMany({});
 		})`,
 	)
+
+	_, err := ContainerExec(container, mongoArgs...)
 	if err != nil {
 		return fmt.Errorf("truncate collections: %w", err)
 	}
@@ -584,43 +660,62 @@ func MsSqlTruncate(profileName, envName, serviceName string) error {
 
 // SqlPackageExport exports an MSSQL database to a .bacpac file using sqlpackage CLI.
 func SqlPackageExport(syncEnv *config.SyncEnv, outPath string) error {
-	if !ToolAvailable("sqlpackage") {
-		return fmt.Errorf("sqlpackage CLI not found. Install via: dotnet tool install -g microsoft.sqlpackage")
-	}
 	pass, err := syncEnv.GetPassword()
 	if err != nil {
 		return fmt.Errorf("decrypt password: %w", err)
 	}
-	args := []string{
+
+	outDir := filepath.Dir(outPath)
+	outFile := filepath.Base(outPath)
+
+	dockerArgs := []string{
+		"run", "--rm",
+		"-v", outDir + ":/tmp",
+		ToolImage(syncEnv),
+		"sqlpackage",
 		"/Action:Export",
 		"/SourceServerName:" + syncEnv.Host + "," + syncEnv.Port,
 		"/SourceDatabaseName:" + syncEnv.Database,
 		"/SourceUser:" + syncEnv.User,
 		"/SourcePassword:" + pass,
-		"/TargetFile:" + outPath,
+		"/TargetFile:/tmp/" + outFile,
 	}
-	return exec.Command("sqlpackage", args...).Run()
+
+	out, err := exec.Command("docker", dockerArgs...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("sqlpackage via docker: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
 }
 
 // SqlPackageImport imports a .bacpac file into the MSSQL container using sqlpackage CLI.
-// sqlpackage runs on the HOST targeting localhost:mapped_port.
-// The SA password is read from the running container's MSSQL_SA_PASSWORD env var.
 func SqlPackageImport(profileName, envName, serviceName string, inPath string, hostPort string) error {
-	if !ToolAvailable("sqlpackage") {
-		return fmt.Errorf("sqlpackage CLI not found. Install via: dotnet tool install -g microsoft.sqlpackage")
-	}
 	container := ContainerName(profileName, envName, serviceName)
 	saPass, err := ContainerEnv(container, "MSSQL_SA_PASSWORD")
 	if err != nil {
 		return fmt.Errorf("read MSSQL_SA_PASSWORD from container: %w", err)
 	}
-	args := []string{
+
+	inDir := filepath.Dir(inPath)
+	inFile := filepath.Base(inPath)
+
+	dockerArgs := []string{
+		"run", "--rm",
+		"--add-host", "host.docker.internal:host-gateway",
+		"-v", inDir + ":/tmp",
+		DefaultToolImage("mssql"),
+		"sqlpackage",
 		"/Action:Import",
-		"/TargetServerName:localhost," + hostPort,
+		"/TargetServerName:host.docker.internal," + hostPort,
 		"/TargetDatabaseName:master",
 		"/TargetUser:sa",
 		"/TargetPassword:" + saPass,
-		"/SourceFile:" + inPath,
+		"/SourceFile:/tmp/" + inFile,
 	}
-	return exec.Command("sqlpackage", args...).Run()
+
+	out, err := exec.Command("docker", dockerArgs...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("sqlpackage via docker: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
 }

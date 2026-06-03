@@ -170,6 +170,7 @@ type SyncEnv struct {
 	Password      string         `yaml:"password,omitempty"`
 	Database      string         `yaml:"database"`
 	AuthDB        string         `yaml:"auth_db,omitempty"`
+	ToolImage     string         `yaml:"tool_image,omitempty"`
 	CustomActions []CustomAction `yaml:"custom_actions,omitempty"`
 }
 
