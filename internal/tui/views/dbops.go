@@ -67,7 +67,7 @@ type DBOpsModel struct {
 	selectedEnv        string
 	actionCursor       int
 	actions            []actionItem // cached for view rendering
-	truncatedSinceData bool         // disable truncate until next import
+
 
 	// Prompt state (start service before import/truncate)
 	promptStartService bool
@@ -594,13 +594,6 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.lastResult = formatErrorMsg(msg.err.Error())
 			return m, nil
-		}
-
-		// Track truncate vs import (must happen before rebuild)
-		if completedLabel == "Truncate tables" {
-			m.truncatedSinceData = true
-		} else if hasImportPrefix(completedLabel) {
-			m.truncatedSinceData = false
 		}
 
 		// Re-scan dump states — imports/exports affect dump availability
@@ -1135,7 +1128,7 @@ func (m *DBOpsModel) viewParamPrompt() string {
 // checking dump file existence at render time.
 func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 	dDir := m.dumpDir(se)
-	truncate := func() tea.Cmd { return m.truncateTables(se) }
+		truncate := func() tea.Cmd { return m.truncateTables(se) }
 
 	var actions []actionItem
 	switch se.DBType {
@@ -1147,7 +1140,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 			{label: "Export data", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
 			{label: "Import schema", group: "Import", enabled: hasSchema, disabledReason: disabledIf(!hasSchema, "no schema dump"), execute: func() tea.Cmd { return m.importSchema(se) }},
 			{label: "Import data", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no data dump"), execute: func() tea.Cmd { return m.importData(se) }},
-			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: disabledIf(!m.truncateEnabled(hasData), "import data first"), execute: truncate},
+			{label: "Truncate tables", group: "Functions", enabled: true, execute: truncate},
 		}
 
 	case "mongo":
@@ -1155,7 +1148,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 		actions = []actionItem{
 			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
 			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump"), execute: func() tea.Cmd { return m.importData(se) }},
-			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: disabledIf(!m.truncateEnabled(hasData), "import data first"), execute: truncate},
+			{label: "Truncate tables", group: "Functions", enabled: true, execute: truncate},
 		}
 
 	case "mysql":
@@ -1163,7 +1156,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 		actions = []actionItem{
 			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
 			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump file"), execute: func() tea.Cmd { return m.importData(se) }},
-			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: disabledIf(!m.truncateEnabled(hasData), "import data first"), execute: truncate},
+			{label: "Truncate tables", group: "Functions", enabled: true, execute: truncate},
 		}
 
 	case "mssql":
@@ -1171,7 +1164,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 		actions = []actionItem{
 			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
 			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no .bacpac file"), execute: func() tea.Cmd { return m.importData(se) }},
-			{label: "Truncate tables", group: "Functions", enabled: m.truncateEnabled(hasData), disabledReason: disabledIf(!m.truncateEnabled(hasData), "import data first"), execute: truncate},
+			{label: "Truncate tables", group: "Functions", enabled: true, execute: truncate},
 		}
 	}
 
@@ -1502,12 +1495,6 @@ func (m *DBOpsModel) renderSpinnerDot(op string) string {
 
 func ts() string {
 	return time.Now().Format("20060102-150405")
-}
-
-// truncateEnabled returns true when data dumps exist AND truncate was not
-// already performed since the last data import.
-func (m *DBOpsModel) truncateEnabled(hasData bool) bool {
-	return hasData && !m.truncatedSinceData
 }
 
 // disabledIf returns reason when cond is true, or empty string when false.
