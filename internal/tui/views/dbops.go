@@ -871,17 +871,23 @@ func (m *DBOpsModel) customActionExecCmd(cmd string) tea.Cmd {
 	// Get local Docker credentials from service environment variables
 	localUser, localPass, localDB := getLocalDBCredentials(svc, se.DBType)
 
-	// Build auto-variables: {host} uses remote for exports, {local_host} etc for local ops
+	// Auto-variables: {database}/{db}/{user}/{password} resolve to the LOCAL
+	// container credentials because ALL custom function execution runs via
+	// docker exec inside the container. Use {se_db} / {se_user} etc. for the
+	// SyncEnv's remote credentials (for export-like operations).
 	autoVars := map[string]string{
 		"host":        se.Host,
 		"user":        se.User,
 		"password":    se.Password,
-		"database":    se.Database,
-		"db":          se.Database,
+		"database":    localDB,
+		"db":          localDB,
 		"env":         m.envName,
 		"local_user":  localUser,
 		"local_pass":  localPass,
 		"local_db":    localDB,
+		"se_db":       se.Database,
+		"se_user":     se.User,
+		"se_password": se.Password,
 	}
 
 	// Substitute all variables (auto + user params)
