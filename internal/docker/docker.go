@@ -428,12 +428,24 @@ func FindLatestDump(dumpDir, pattern string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		var dirs []string
 		for _, e := range entries {
 			if e.IsDir() {
-				return filepath.Join(dumpDir, e.Name()), nil
+				dirs = append(dirs, filepath.Join(dumpDir, e.Name()))
 			}
 		}
-		return "", fmt.Errorf("no dump directories found in %s", dumpDir)
+		if len(dirs) == 0 {
+			return "", fmt.Errorf("no dump directories found in %s", dumpDir)
+		}
+		sort.Slice(dirs, func(i, j int) bool {
+			fi, _ := os.Stat(dirs[i])
+			fj, _ := os.Stat(dirs[j])
+			if fi == nil || fj == nil {
+				return false
+			}
+			return fi.ModTime().After(fj.ModTime())
+		})
+		return dirs[0], nil
 	}
 	matches, err := filepath.Glob(filepath.Join(dumpDir, pattern))
 	if err != nil {
@@ -493,13 +505,28 @@ func ExecPgRestore(profileName, envName, serviceName, dumpPath string) error {
 func ExecMongoRestore(profileName, envName, serviceName, dumpDir string) error {
 	container := ContainerName(profileName, envName, serviceName)
 
+	user, _ := ContainerEnv(container, "MONGO_INITDB_ROOT_USERNAME")
+	pass, _ := ContainerEnv(container, "MONGO_INITDB_ROOT_PASSWORD")
+
 	tmpDir := "/tmp/" + filepath.Base(dumpDir)
 	if err := ContainerCopy(container, dumpDir, tmpDir); err != nil {
 		return fmt.Errorf("docker cp: %w", err)
 	}
 
-	_, err := ContainerExec(container, "mongorestore", "--drop", "--dir", tmpDir)
-	return err
+	args := []string{"mongorestore", "--drop", "--dir", tmpDir}
+	if user != "" {
+		args = append(args, "--username", user)
+		if pass != "" {
+			args = append(args, "--password", pass)
+		}
+		args = append(args, "--authenticationDatabase", "admin")
+	}
+
+	_, err := ContainerExec(container, args...)
+	if err != nil {
+		return fmt.Errorf("mongorestore: %w", err)
+	}
+	return nil
 }
 
 // ExecMySqlRestore restores a MySQL dump file into the container via docker exec.
@@ -604,7 +631,7 @@ func MySqlTruncate(profileName, envName, serviceName string) error {
 }
 
 // MongoTruncate drops all non-system collections in the database via docker exec.
-func MongoTruncate(profileName, envName, serviceName string) error {
+func MongoTruncate(profileName, envName, serviceName, database string) error {
 	container := ContainerName(profileName, envName, serviceName)
 
 	user, _ := ContainerEnv(container, "MONGO_INITDB_ROOT_USERNAME")
@@ -627,7 +654,7 @@ func MongoTruncate(profileName, envName, serviceName string) error {
 		}
 		mongoArgs = append(mongoArgs, "--authenticationDatabase", "admin")
 	}
-	mongoArgs = append(mongoArgs, "--eval",
+	mongoArgs = append(mongoArgs, database, "--eval",
 		`db.getCollectionNames().forEach(function(c) {
 			if (c.indexOf("system.") == -1) db.getCollection(c).deleteMany({});
 		})`,
@@ -640,8 +667,8 @@ func MongoTruncate(profileName, envName, serviceName string) error {
 	return nil
 }
 
-// MsSqlTruncate truncates all tables in the default schema via docker exec.
-func MsSqlTruncate(profileName, envName, serviceName string) error {
+// MsSqlTruncate truncates all tables in the database via docker exec.
+func MsSqlTruncate(profileName, envName, serviceName, database string) error {
 	container := ContainerName(profileName, envName, serviceName)
 
 	saPass, err := ContainerEnv(container, "MSSQL_SA_PASSWORD")
@@ -649,8 +676,18 @@ func MsSqlTruncate(profileName, envName, serviceName string) error {
 		return fmt.Errorf("read MSSQL_SA_PASSWORD: %w", err)
 	}
 
-	_, err = ContainerExec(container, "sh", "-c",
-		fmt.Sprintf(`/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P '%s' -d master -Q "EXEC sp_MSforeachtable 'TRUNCATE TABLE ?'"`, saPass),
+	// Detect sqlcmd path: mssql-tools18 (newer images) vs mssql-tools (older).
+	sqlcmd := "/opt/mssql-tools18/bin/sqlcmd"
+	if _, err := ContainerExec(container, "test", "-x", sqlcmd); err != nil {
+		sqlcmd = "/opt/mssql-tools/bin/sqlcmd"
+	}
+
+	_, err = ContainerExec(container, sqlcmd,
+		"-S", "localhost",
+		"-U", "sa",
+		"-P", saPass,
+		"-d", database,
+		"-Q", fmt.Sprintf("EXEC sp_MSforeachtable 'TRUNCATE TABLE ?'"),
 	)
 	if err != nil {
 		return fmt.Errorf("truncate tables: %w", err)
