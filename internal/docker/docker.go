@@ -402,6 +402,37 @@ func ContainerExecWithEnv(container string, env []string, args ...string) (strin
 	return string(out), nil
 }
 
+// ContainerReady checks if the database inside the container is accepting connections.
+func ContainerReady(container, dbType string) bool {
+	switch dbType {
+	case "postgres":
+		return exec.Command("docker", "exec", container, "pg_isready", "-q").Run() == nil
+	case "mongo":
+		return exec.Command("docker", "exec", container, "mongosh", "--quiet", "--eval", "1").Run() == nil
+	case "mysql":
+		return exec.Command("docker", "exec", container, "mysqladmin", "ping", "--silent").Run() == nil
+	case "mssql":
+		saPass, err := ContainerEnv(container, "MSSQL_SA_PASSWORD")
+		if err != nil {
+			return false
+		}
+		sqlcmd := "/opt/mssql-tools18/bin/sqlcmd"
+		if _, err := ContainerExec(container, "test", "-x", sqlcmd); err != nil {
+			sqlcmd = "/opt/mssql-tools/bin/sqlcmd"
+		}
+		_, err = ContainerExec(container, sqlcmd,
+			"-S", "localhost",
+			"-U", "sa",
+			"-P", saPass,
+			"-Q", "SELECT 1",
+			"-l", "2", // 2-second timeout
+		)
+		return err == nil
+	default:
+		return true // unknown type — assume ready
+	}
+}
+
 // HasDumpFile returns true if any file matching the given glob pattern exists in the directory.
 func HasDumpFile(dumpDir, pattern string) bool {
 	matches, err := filepath.Glob(filepath.Join(dumpDir, pattern))

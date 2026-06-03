@@ -42,6 +42,12 @@ type serviceStartedMsg struct {
 	err error
 }
 
+// readyRetryMsg is sent on each retry while waiting for the container to be ready.
+type readyRetryMsg struct {
+	label string
+	retry int
+}
+
 // ── Model ─────────────────────────────────────────────────────────────────────
 
 // DBOpsModel implements the 3-screen DB operations view.
@@ -71,6 +77,7 @@ type DBOpsModel struct {
 
 	// Prompt state (start service before import/truncate)
 	promptStartService bool
+	pendingStartLabel  string // action label to execute after service starts
 
 	// Running state — per-action inline spinners
 	pendingOps   map[string]string // action label → "starting" | "running"
@@ -412,6 +419,9 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.lastResult = styles.StyleError.Render("Service not found.")
 					return m, nil
 				}
+				if m.pendingStartLabel != "" {
+					m.pendingOps[m.pendingStartLabel] = "starting"
+				}
 				return m, tea.Batch(
 					func() tea.Msg {
 						err := docker.UpService(m.profile.Name, m.envName, svc.ComposeName())
@@ -422,6 +432,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "n", "N", "esc":
 				m.promptStartService = false
 				m.pendingOps = make(map[string]string)
+				m.pendingStartLabel = ""
 				return m, nil
 			}
 		}
@@ -454,6 +465,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, dbOpsBack):
 			if len(m.pendingOps) > 0 {
 				m.pendingOps = make(map[string]string)
+				m.pendingStartLabel = ""
 				m.promptStartService = false
 				return m, nil
 			}
@@ -621,31 +633,58 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastResult = formatErrorMsg("start service: " + msg.err.Error())
 			return m, nil
 		}
-		// Execute pending actions that were waiting for service start
-		m.spinnerFrame = 0
+		// Poll container readiness before executing the pending action
 		svc := m.currentService()
 		if svc != nil {
 			if se := svc.FindSyncEnv(m.selectedEnv); se != nil {
 				m.actions = m.buildActionsList(se)
 				for pendingLabel, state := range m.pendingOps {
 					if state == "starting" {
-						for _, act := range m.actions {
-							if act.label == pendingLabel && act.enabled {
-								m.pendingOps[pendingLabel] = "running"
-								if act.isCustom {
-									return m, tea.Batch(m.customActionExecCmd(m.pendingCustomCmd), spinnerCmd())
-								}
-								return m, tea.Batch(act.execute(), spinnerCmd())
-							}
+						return m, func() tea.Msg {
+							return readyRetryMsg{label: pendingLabel, retry: 0}
 						}
 					}
-					break
 				}
 			}
 		}
 		m.pendingOps = make(map[string]string)
 		m.lastResult = styles.StyleError.Render("Could not find pending action")
 		return m, nil
+
+	case readyRetryMsg:
+		container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
+		svc := m.currentService()
+		ready := false
+		if svc != nil {
+			if se := svc.FindSyncEnv(m.selectedEnv); se != nil {
+				ready = docker.ContainerReady(container, se.DBType)
+			}
+		}
+		if ready {
+			// Execute the pending action
+			m.spinnerFrame = 0
+			for _, act := range m.actions {
+				if act.label == msg.label && act.enabled {
+					m.pendingOps[msg.label] = "running"
+					if act.isCustom {
+						return m, tea.Batch(m.customActionExecCmd(m.pendingCustomCmd), spinnerCmd())
+					}
+					return m, tea.Batch(act.execute(), spinnerCmd())
+				}
+			}
+			m.pendingOps = make(map[string]string)
+			m.lastResult = styles.StyleError.Render("Could not find pending action")
+			return m, nil
+		}
+		if msg.retry >= 30 {
+			m.pendingOps = make(map[string]string)
+			m.lastResult = formatErrorMsg("container not ready after 30s")
+			return m, nil
+		}
+		return m, func() tea.Msg {
+			time.Sleep(1 * time.Second)
+			return readyRetryMsg{label: msg.label, retry: msg.retry + 1}
+		}
 	}
 	return m, nil
 }
@@ -694,7 +733,7 @@ func (m *DBOpsModel) updateCustomConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.isContainerRunning(container) {
 				m.confirmCustomAction = false
 				m.promptStartService = true
-				m.pendingOps[m.actions[m.actionCursor].label] = "starting"
+				m.pendingStartLabel = m.actions[m.actionCursor].label
 				return m, nil
 			}
 			m.confirmCustomAction = false
@@ -727,7 +766,7 @@ func (m *DBOpsModel) updateCoreConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 				container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
 				if !m.isContainerRunning(container) {
 					m.promptStartService = true
-					m.pendingOps[act.label] = "starting"
+					m.pendingStartLabel = act.label
 					return m, nil
 				}
 			}
