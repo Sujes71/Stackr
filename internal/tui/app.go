@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -89,7 +88,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case views.ErrorMsg:
 		a.err = string(msg)
-		return a, views.ClearActionAfter(3 * time.Second)
+		return a, nil
 
 	case views.ClearActionMsg:
 		a.err = ""

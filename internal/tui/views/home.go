@@ -244,7 +244,7 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.lastResult = styles.StyleSuccess.Render("✓ Exported to " + path)
 			}
-			return m, ClearActionAfter(3 * time.Second)
+			return m, nil
 
 		case key.Matches(msg, homeKeys.import_):
 			// Scan exports folder for available profiles
@@ -262,7 +262,7 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if len(m.importFiles) == 0 {
 				m.lastResult = styles.StyleSubtitle.Render("No profiles available to import. Export one first with 'x'.")
-				return m, ClearActionAfter(3 * time.Second)
+				return m, nil
 			}
 			m.showImport = true
 			m.importCursor = 0

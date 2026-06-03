@@ -292,10 +292,10 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.deleteArmed = false
 				svc.SyncEnvs = append(syncEnvs[:m.listCursor], syncEnvs[m.listCursor+1:]...)
 				m.profile.UpdatedAt = time.Now()
-				if err := m.cfg.UpdateProfile(*m.profile); err != nil {
-					m.lastResult = formatErrorMsg(err.Error())
-					return m, ClearActionAfter(5 * time.Second)
-				} else {
+			if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+				m.lastResult = formatErrorMsg(err.Error())
+				return m, nil
+			} else {
 					if m.listCursor >= len(svc.SyncEnvs) && m.listCursor > 0 {
 						m.listCursor--
 					}
@@ -410,7 +410,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if svc == nil {
 					m.pendingOps = make(map[string]string)
 					m.lastResult = styles.StyleError.Render("Service not found.")
-					return m, ClearActionAfter(5 * time.Second)
+					return m, nil
 				}
 				return m, tea.Batch(
 					func() tea.Msg {
@@ -519,7 +519,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if act.disabledReason != "" {
 					m.lastResult = styles.StyleSubtitle.Render("Unavailable: " + act.disabledReason)
-					return m, ClearActionAfter(3 * time.Second)
+					return m, nil
 				}
 			}
 
@@ -564,7 +564,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.profile.UpdatedAt = time.Now()
 						if err := m.cfg.UpdateProfile(*m.profile); err != nil {
 							m.lastResult = formatErrorMsg(err.Error())
-							return m, ClearActionAfter(5 * time.Second)
+							return m, nil
 						}
 						m.actions = m.buildActionsList(se)
 						if m.actionCursor >= len(m.actions) {
@@ -593,7 +593,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if msg.err != nil {
 			m.lastResult = formatErrorMsg(msg.err.Error())
-			return m, ClearActionAfter(5 * time.Second)
+			return m, nil
 		}
 
 		// Track truncate vs import (must happen before rebuild)
@@ -626,7 +626,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.pendingOps = make(map[string]string)
 			m.lastResult = formatErrorMsg("start service: " + msg.err.Error())
-			return m, ClearActionAfter(5 * time.Second)
+			return m, nil
 		}
 		// Execute pending actions that were waiting for service start
 		m.spinnerFrame = 0
@@ -652,7 +652,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pendingOps = make(map[string]string)
 		m.lastResult = styles.StyleError.Render("Could not find pending action")
-		return m, ClearActionAfter(5 * time.Second)
+		return m, nil
 	}
 	return m, nil
 }
@@ -795,13 +795,13 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				se.CustomActions = append(se.CustomActions, config.CustomAction{Name: name, Command: cmd})
 			}
-			m.profile.UpdatedAt = time.Now()
-			if err := m.cfg.UpdateProfile(*m.profile); err != nil {
-				m.lastResult = formatErrorMsg(err.Error())
-				return m, ClearActionAfter(5 * time.Second)
-			}
-			m.addingCustomAction = false
-			m.actions = m.buildActionsList(se)
+		m.profile.UpdatedAt = time.Now()
+		if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+			m.lastResult = formatErrorMsg(err.Error())
+			return m, nil
+		}
+		m.addingCustomAction = false
+		m.actions = m.buildActionsList(se)
 			if m.actionCursor >= len(m.actions) {
 				m.actionCursor = len(m.actions) - 1
 			}
