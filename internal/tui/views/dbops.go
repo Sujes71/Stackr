@@ -75,6 +75,7 @@ type DBOpsModel struct {
 	// Running state — per-action inline spinners
 	pendingOps   map[string]string // action label → "starting" | "running"
 	lastResult string
+	doneOp     string // briefly set to completed action label for checkmark feedback
 
 	// Spinner
 	spinnerFrame int
@@ -311,6 +312,7 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ClearActionMsg:
 		m.lastResult = ""
+		m.doneOp = ""
 	}
 
 	return m, nil
@@ -611,10 +613,14 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.actionCursor >= len(m.actions) || !m.actions[m.actionCursor].enabled {
 			m.actionCursor = m.firstEnabledAction()
 		}
-		return m, nil
+
+		// Show brief checkmark feedback
+		m.doneOp = completedLabel
+		return m, ClearActionAfter(2 * time.Second)
 
 	case ClearActionMsg:
 		m.lastResult = ""
+		m.doneOp = ""
 
 	case serviceStartedMsg:
 		if msg.err != nil {
@@ -1006,6 +1012,10 @@ func (m *DBOpsModel) viewActions() string {
 
 		if state, pending := m.pendingOps[act.label]; pending {
 			b.WriteString("    " + m.renderSpinnerDot(state) + "\n")
+			continue
+		}
+		if m.doneOp == act.label {
+			b.WriteString("    " + styles.StyleSuccess.Render("✓") + " " + act.label + "\n")
 			continue
 		}
 		if len(m.pendingOps) > 0 {

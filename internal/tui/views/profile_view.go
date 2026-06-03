@@ -164,7 +164,9 @@ func (m *ProfileViewModel) renderSpinnerDot(op string) string {
 type ClearActionMsg struct{}
 
 func ClearActionAfter(d time.Duration) tea.Cmd {
-	return func() tea.Msg { return nil }
+	return tea.Tick(d, func(t time.Time) tea.Msg {
+		return ClearActionMsg{}
+	})
 }
 
 func (m *ProfileViewModel) loadStatus() tea.Cmd {
