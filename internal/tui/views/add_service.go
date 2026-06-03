@@ -1170,10 +1170,13 @@ func (m *AddServiceModel) viewRunCommand() string {
 	b.WriteString("  " + dirLabel.Render("Workdir: ") + styles.StyleSubtitle.Render("(optional) ") + m.runCmdWorkDir.View() + "\n")
 
 	b.WriteString("\n")
-	b.WriteString("  " + styles.InlineHelp(
-		styles.HelpItem("esc", "cancel"),
+	btnW := 60
+	button := styles.StyleButton.Render(" Save service ")
+	b.WriteString(lipgloss.PlaceHorizontal(btnW, lipgloss.Center, button) + "\n")
+
+	b.WriteString("\n")
+	b.WriteString(styles.BackHelp(
 		styles.HelpItem("↑ ↓", "field"),
-		styles.HelpItem("↵", "save"),
 	) + "\n")
 	return b.String()
 }
@@ -1746,46 +1749,54 @@ func (m *AddServiceModel) viewReview() string {
 
 	var b strings.Builder
 	b.WriteString("  Review service configuration\n\n")
-	b.WriteString(styles.StylePanel.Render(
-		lipgloss.JoinVertical(lipgloss.Left,
-			styles.StyleHeader.Render(svc.Name)+"  "+styles.StyleCode.Render(svc.FullImage()),
-			"",
-			m.reviewSection("Ports", func() string {
-				if len(svc.Ports) == 0 {
-					return "(none)"
-				}
-				ps := make([]string, len(svc.Ports))
-				for i, p := range svc.Ports {
-					ps[i] = p.String()
-				}
-				return strings.Join(ps, "  ")
-			}()),
-			m.reviewSection("Env vars", func() string {
-				if len(svc.EnvVars) == 0 {
-					return "(none)"
-				}
-				evs := make([]string, len(svc.EnvVars))
-				for i, ev := range svc.EnvVars {
-					evs[i] = ev.Key + "=" + ev.Value
-				}
-				return strings.Join(evs, "  ")
-			}()),
-			m.reviewSection("Volumes", func() string {
-				if len(svc.Volumes) == 0 {
-					return "(none)"
-				}
-				vs := make([]string, len(svc.Volumes))
-				for i, v := range svc.Volumes {
-					vs[i] = v.Source + "→" + v.Target
-				}
-				return strings.Join(vs, "  ")
-			}()),
-			m.reviewSection("Environment", m.envName),
-		),
-	))
+
+	panelContent := lipgloss.JoinVertical(lipgloss.Left,
+		styles.StyleHeader.Render(svc.Name)+"  "+styles.StyleCode.Render(svc.FullImage()),
+		"",
+		m.reviewSection("Ports", func() string {
+			if len(svc.Ports) == 0 {
+				return "(none)"
+			}
+			ps := make([]string, len(svc.Ports))
+			for i, p := range svc.Ports {
+				ps[i] = p.String()
+			}
+			return strings.Join(ps, "  ")
+		}()),
+		m.reviewSection("Env vars", func() string {
+			if len(svc.EnvVars) == 0 {
+				return "(none)"
+			}
+			evs := make([]string, len(svc.EnvVars))
+			for i, ev := range svc.EnvVars {
+				evs[i] = ev.Key + "=" + ev.Value
+			}
+			return strings.Join(evs, "  ")
+		}()),
+		m.reviewSection("Volumes", func() string {
+			if len(svc.Volumes) == 0 {
+				return "(none)"
+			}
+			vs := make([]string, len(svc.Volumes))
+			for i, v := range svc.Volumes {
+				vs[i] = v.Source + "→" + v.Target
+			}
+			return strings.Join(vs, "  ")
+		}()),
+		m.reviewSection("Environment", m.envName),
+	)
+	panelW := lipgloss.Width(panelContent) + 4
+	if panelW < 60 {
+		panelW = 60
+	}
+	b.WriteString(styles.StylePanel.Width(panelW).Render(panelContent))
+
 	b.WriteString("\n\n")
-	b.WriteString(styles.StyleButton.Render(" Save service "))
-	b.WriteString("   " + styles.BackHelp(styles.HelpItem("↵", "save")))
+	button := styles.StyleButton.Render(" Save service ")
+	b.WriteString(lipgloss.PlaceHorizontal(panelW, lipgloss.Center, button) + "\n")
+
+	b.WriteString("\n")
+	b.WriteString(styles.BackHelp(styles.HelpItem("↵", "save")))
 	return b.String()
 }
 
