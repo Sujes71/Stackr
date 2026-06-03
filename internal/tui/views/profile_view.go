@@ -450,6 +450,12 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if op == "stop" && (state == "" || state == "stopped" || state == "exited") {
 					delete(m.pendingOps, key)
 				}
+				if op == "pulling" {
+					delete(m.pendingOps, key)
+				}
+				if op == "resetting volumes" {
+					delete(m.pendingOps, key)
+				}
 			}
 		}
 
@@ -620,11 +626,18 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.isPortForwardEnv() || len(m.currentEnvServices()) == 0 {
 						break
 					}
+					for i := range env.Services {
+						svc := env.Services[i]
+						cn := containerName(m.profile.Name, env.Name, svc.ComposeName())
+						m.pendingOps[cn] = "resetting volumes"
+					}
 					return m, tea.Batch(
 						func() tea.Msg {
 							_ = docker.DownVolumes(m.profile.Name, env.Name)
 							return m.refreshStatus()
 						},
+						m.loadStatus(),
+						func() tea.Msg { return spinnerTickMsg{} },
 					)
 				}
 			}
@@ -1182,17 +1195,25 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.isPortForwardEnv() {
 				break
 			}
-			svcs := m.currentEnvServices()
+			env := m.currentEnv()
+			if env == nil {
+				break
+			}
+			svcs := env.Services
+			// If cursor is on a local process, pull doesn't apply
 			if m.cursor >= len(svcs) {
 				break
 			}
 			svc := svcs[m.selectedServiceIndex()]
-			env := m.currentEnv()
+			containerName := containerName(m.profile.Name, env.Name, svc.ComposeName())
+			m.pendingOps[containerName] = "pulling"
 			return m, tea.Batch(
 				func() tea.Msg {
 					_ = docker.ComposePull(m.profile.Name, env.Name, svc.Name)
 					return m.refreshStatus()
 				},
+				m.loadStatus(),
+				func() tea.Msg { return spinnerTickMsg{} },
 			)
 
 		case key.Matches(msg, profileKeys.shell):
