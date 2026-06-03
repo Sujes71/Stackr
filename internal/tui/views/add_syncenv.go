@@ -25,8 +25,8 @@ const (
 	syncEnvStepReview
 )
 
-// Credentials focus order. Each field has a fixed index so we can cycle
-// and also skip AuthDB when the DB type is not mongo.
+// Credentials focus order. AuthDB comes before ToolImage so Mongo flows
+// DB→AuthDB→ToolImage. Non-Mongo types skip AuthDB in the navigation.
 const (
 	credFocusHost   = iota // 0
 	credFocusPort          // 1
@@ -76,7 +76,7 @@ type AddSyncEnvModel struct {
 	toolImageInput textinput.Model
 	credFocus      int
 	credErr        string
-	maxFocus       int // 5 (postgres/mysql/mssql) or 6 (mongo)
+	maxFocus       int // 6 for all DB types (AuthDB is skipped in navigation for non-mongo)
 
 	// Step 3: review
 	confirmed bool
@@ -182,10 +182,9 @@ func NewAddSyncEnv(
 	m.passInput = pai
 	m.dbInput = di
 
-	// Max focus: 5 for non-mongo, 6 for mongo
-	m.maxFocus = 5
+	// maxFocus is 6 for all DB types. Non-mongo types skip AuthDB in navigation.
+	m.maxFocus = 6
 	if dbType == "mongo" {
-		m.maxFocus = 6
 		ai := textinput.New()
 		ai.Placeholder = "admin (auth db)"
 		ai.CharLimit = 128
@@ -309,11 +308,17 @@ func (m *AddSyncEnvModel) updateCredentialsStep(msg tea.Msg) (*AddSyncEnvModel, 
 
 		case key.Matches(msg, wizardUp):
 			m.credFocus = (m.credFocus - 1 + m.maxFocus + 1) % (m.maxFocus + 1)
+			if m.dbType != "mongo" && m.credFocus == credFocusAuthDB {
+				m.credFocus = (m.credFocus - 1 + m.maxFocus + 1) % (m.maxFocus + 1)
+			}
 			m.updateCredFocus()
 			return m, textinput.Blink
 
 		case key.Matches(msg, wizardDown):
 			m.credFocus = (m.credFocus + 1) % (m.maxFocus + 1)
+			if m.dbType != "mongo" && m.credFocus == credFocusAuthDB {
+				m.credFocus = (m.credFocus + 1) % (m.maxFocus + 1)
+			}
 			m.updateCredFocus()
 			return m, textinput.Blink
 
