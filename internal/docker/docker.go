@@ -621,7 +621,7 @@ func ExecMySqlRestore(profileName, envName, serviceName, dumpPath string) error 
 // Truncate functions (docker exec based)
 // ================================================================
 
-// PgTruncate truncates all tables in the public schema of a Postgres container.
+// PgTruncate truncates all user tables across every non-system schema.
 func PgTruncate(profileName, envName, serviceName string) error {
 	container := ContainerName(profileName, envName, serviceName)
 
@@ -641,7 +641,7 @@ func PgTruncate(profileName, envName, serviceName string) error {
 	}
 	_, err = ContainerExecWithEnv(container, env,
 		"psql", "-U", user, "-d", db,
-		"-c", `DO $$ DECLARE r RECORD; BEGIN FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname='public') LOOP EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' CASCADE'; END LOOP; END $$;`,
+		"-c", `DO $$ DECLARE r RECORD; BEGIN FOR r IN (SELECT schemaname, tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema')) LOOP EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.schemaname) || '.' || quote_ident(r.tablename) || ' CASCADE'; END LOOP; END $$;`,
 	)
 	if err != nil {
 		return fmt.Errorf("truncate tables: %w", err)
