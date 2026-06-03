@@ -408,7 +408,23 @@ func ContainerReady(container, dbType string) bool {
 	case "postgres":
 		return exec.Command("docker", "exec", container, "pg_isready", "-q").Run() == nil
 	case "mongo":
-		return exec.Command("docker", "exec", container, "mongosh", "--quiet", "--eval", "1").Run() == nil
+		user, _ := ContainerEnv(container, "MONGO_INITDB_ROOT_USERNAME")
+		pass, _ := ContainerEnv(container, "MONGO_INITDB_ROOT_PASSWORD")
+		// Try mongosh first, fall back to mongo
+		shell := "mongosh"
+		if _, err := ContainerExec(container, "which", "mongosh"); err != nil {
+			shell = "mongo"
+		}
+		args := []string{shell, "--quiet"}
+		if user != "" {
+			args = append(args, "--username", user)
+			if pass != "" {
+				args = append(args, "--password", pass)
+			}
+			args = append(args, "--authenticationDatabase", "admin")
+		}
+		args = append(args, "--eval", "1")
+		return exec.Command("docker", append([]string{"exec", container}, args...)...).Run() == nil
 	case "mysql":
 		return exec.Command("docker", "exec", container, "mysqladmin", "ping", "--silent").Run() == nil
 	case "mssql":
