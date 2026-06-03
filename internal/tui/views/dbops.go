@@ -981,9 +981,9 @@ func (m *DBOpsModel) viewActions() string {
 
 	// Prompt: start service before import/truncate
 	if m.promptStartService {
-		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
-		b.WriteString(styles.StyleSubtitle.Render("  Service '" + m.serviceName + "' is not running.") + "\n")
-		b.WriteString("  " + promptStyle.Render("Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
+		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+		b.WriteString(styles.StyleError.Render("  Service '" + m.serviceName + "' is not running.") + "\n")
+		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
 	}
 
 	// ── Custom action form ────────────────────────────────────────────────────
