@@ -393,9 +393,9 @@ func ContainerExecWithEnv(container string, env []string, args ...string) (strin
 	dockerArgs = append(dockerArgs, container)
 	dockerArgs = append(dockerArgs, args...)
 	cmd := exec.Command("docker", dockerArgs...)
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("docker exec: %w", err)
+		return "", fmt.Errorf("docker exec: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return string(out), nil
 }
