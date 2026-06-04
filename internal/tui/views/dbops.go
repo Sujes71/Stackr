@@ -190,6 +190,8 @@ func (m *DBOpsModel) ReShow(cfg *config.Config) {
 	if p, ok := cfg.GetProfile(m.profile.Name); ok {
 		m.profile = p
 	}
+	m.deleteArmed = false
+	m.deleteActionArmed = false
 }
 
 // IsBusy returns true when there are pending operations.
@@ -273,6 +275,7 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, dbOpsBack):
+			m.deleteArmed = false
 			return m, func() tea.Msg {
 				return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name, EnvName: m.envName, ServiceName: m.serviceName}
 			}
@@ -299,9 +302,11 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.actions = m.buildActionsList(se)
 				m.actionCursor = m.firstEnabledAction()
 				m.screen = dbScreenSyncEnvActions
+				m.deleteArmed = false
 			}
 
 		case key.Matches(msg, dbOpsAdd):
+			m.deleteArmed = false
 			m.wizardModel = NewAddSyncEnv(m.cfg, m.profile, m.envName, m.serviceName, true, nil)
 			m.screen = dbScreenWizard
 
@@ -310,6 +315,7 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				se := &syncEnvs[m.listCursor]
 				m.wizardModel = NewAddSyncEnv(m.cfg, m.profile, m.envName, m.serviceName, false, se)
 				m.screen = dbScreenWizard
+				m.deleteArmed = false
 			}
 
 		case key.Matches(msg, dbOpsDelete):
@@ -527,6 +533,8 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				break // block navigation while ops are running
 			}
+			m.deleteArmed = false
+			m.deleteActionArmed = false
 			m.screen = dbScreenSyncEnvList
 			m.selectedEnv = ""
 			m.actions = nil

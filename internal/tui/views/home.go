@@ -28,9 +28,10 @@ type HomeModel struct {
 
 	// ── Export / Import ──
 	showImport  bool
-	importFiles []string // available export files not yet imported
-	importCursor int
-	importErr   string
+	importFiles     []string // available export files not yet imported
+	importCursor    int
+	importDeleteArmed bool
+	importErr       string
 	importing   bool
 
 	// ── Pending Ops / Spinner ──
@@ -116,6 +117,7 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch {
 			case msg.String() == "esc":
 				m.showImport = false
+				m.importDeleteArmed = false
 				return m, nil
 			case msg.String() == "up":
 				if m.importCursor > 0 {
@@ -159,6 +161,25 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					},
 					spinnerCmd(),
 				)
+			case key.Matches(msg, homeKeys.delete):
+				if !m.importDeleteArmed {
+					m.importDeleteArmed = true
+					return m, nil
+				}
+				m.importDeleteArmed = false
+				name := m.importFiles[m.importCursor]
+				path := filepath.Join(config.StackrDir(), "exports", name+".yaml")
+				if err := os.Remove(path); err != nil {
+					m.importErr = styles.StyleError.Render("✗ Failed to delete: " + err.Error())
+					return m, ClearActionAfter(3 * time.Second)
+				}
+				m.importFiles = append(m.importFiles[:m.importCursor], m.importFiles[m.importCursor+1:]...)
+				if m.importCursor >= len(m.importFiles) && m.importCursor > 0 {
+					m.importCursor--
+				}
+				return m, nil
+			default:
+				m.importDeleteArmed = false
 			}
 		}
 		// If typed confirmation is active, handle in its own mode.
@@ -207,6 +228,7 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case key.Matches(msg, homeKeys.enter):
 			if len(m.profiles) > 0 {
+				m.deleteArmed = false
 				return m, func() tea.Msg {
 					return NavigateTo{
 						Screen:      NavProfileView,
@@ -215,6 +237,7 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case key.Matches(msg, homeKeys.new):
+			m.deleteArmed = false
 			return m, func() tea.Msg {
 				return NavigateTo{Screen: NavNewProfile}
 			}
@@ -269,6 +292,7 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastResult = styles.StyleSubtitle.Render("No profiles available to import. Export one first with 'x'.")
 				return m, ClearActionAfter(3 * time.Second)
 			}
+			m.deleteArmed = false
 			m.showImport = true
 			m.importCursor = 0
 			m.importErr = ""
@@ -305,17 +329,22 @@ func (m *HomeModel) View() string {
 			}
 		}
 		b.WriteString("\n")
+		if m.importDeleteArmed {
+			b.WriteString(styles.StyleError.Render("  Press d again to confirm removal"))
+			b.WriteString("\n")
+		}
 		b.WriteString(styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("↵", "import"),
+			styles.HelpItem("d d", "delete"),
 		))
 		b.WriteString("\n")
 		if m.importing {
 			b.WriteString(m.renderSpinnerDot("Importing") + "\n")
 		}
 		if m.importErr != "" {
-			b.WriteString(styles.StyleError.Render("  ✗ " + m.importErr) + "\n")
+			b.WriteString("  " + m.importErr + "\n")
 		}
 		return b.String()
 	}

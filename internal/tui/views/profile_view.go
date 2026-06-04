@@ -357,6 +357,10 @@ func (m *ProfileViewModel) ReShow(cfg *config.Config) tea.Cmd {
 	if p, ok := cfg.GetProfile(m.profile.Name); ok {
 		m.profile = p
 	}
+	m.deleteArmed = false
+	m.deleteEnvArmed = false
+	m.resetArmed = false
+	m.keyPending = ""
 	return tea.Batch(m.loadStatus(), spinnerCmd())
 }
 
@@ -951,6 +955,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case key.Matches(msg, profileKeys.back):
 			m.persistActiveEnv()
+			m.deleteArmed = false
+			m.deleteEnvArmed = false
+			m.resetArmed = false
+			m.keyPending = ""
 			return m, func() tea.Msg { return NavigateTo{Screen: NavHome} }
 
 		case key.Matches(msg, profileKeys.switchEnvLeft):
@@ -969,6 +977,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.statuses = nil
 				}
+				m.deleteArmed = false
+				m.deleteEnvArmed = false
+				m.resetArmed = false
+				m.keyPending = ""
 				if m.isPortForwardEnv() {
 					m.buildForwardHandles()
 					m.restoreCurrentEnvSelection()
@@ -997,6 +1009,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.statuses = nil
 				}
+				m.deleteArmed = false
+				m.deleteEnvArmed = false
+				m.resetArmed = false
+				m.keyPending = ""
 				if m.isPortForwardEnv() {
 					m.buildForwardHandles()
 					m.restoreCurrentEnvSelection()
@@ -1012,6 +1028,8 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, profileKeys.addEnv):
 			// In portforward mode, 'e' edits its local port; 'n' remains add env.
 			m.keyPending = ""
+			m.deleteArmed = false
+			m.deleteEnvArmed = false
 			m.resetArmed = false
 			m.inputtingEnv = true
 			m.envInput.Focus()
@@ -1034,11 +1052,13 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, profileKeys.editPort):
 			if m.isPortForwardEnv() && len(m.currentForwards()) > 0 && m.cursor < len(m.currentForwards()) {
+				m.keyPending = ""; m.deleteArmed = false; m.deleteEnvArmed = false; m.resetArmed = false
 				return m.handlePortEditStart()
 			}
 
 		case key.Matches(msg, profileKeys.k8sDiscover):
 			if m.isPortForwardEnv() && !m.inDiscovery {
+				m.keyPending = ""; m.deleteArmed = false; m.deleteEnvArmed = false; m.resetArmed = false
 				if !portforward.CheckKubectl() {
 					return m, nil
 				}
@@ -1292,6 +1312,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if env != nil {
 				envName = env.Name
 			}
+			m.deleteArmed = false
+			m.deleteEnvArmed = false
+			m.resetArmed = false
+			m.keyPending = ""
 			return m, func() tea.Msg {
 				return NavigateTo{
 					Screen:      NavAddService,
@@ -1403,6 +1427,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < len(svcs) && m.selectedDBType() != "" {
 				env := m.currentEnv()
 				svc := svcs[m.selectedServiceIndex()]
+				m.deleteArmed = false
+				m.deleteEnvArmed = false
+				m.resetArmed = false
+				m.keyPending = ""
 				return m, func() tea.Msg {
 					return NavigateTo{
 						Screen:      NavDBOps,
@@ -1414,6 +1442,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, profileKeys.viewConfig):
+			m.keyPending = ""; m.deleteArmed = false; m.deleteEnvArmed = false; m.resetArmed = false
 			env := m.currentEnv()
 			if env != nil {
 				totalSvcs := len(env.Services)
@@ -1429,6 +1458,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, profileKeys.stats):
+			m.keyPending = ""; m.deleteArmed = false; m.deleteEnvArmed = false; m.resetArmed = false
 			if m.isPortForwardEnv() {
 				break
 			}
@@ -1515,6 +1545,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 
 		case msg.String() == "?":
+			m.keyPending = ""; m.deleteArmed = false; m.deleteEnvArmed = false; m.resetArmed = false
 			m.showingShortcuts = true
 			return m, nil
 		}

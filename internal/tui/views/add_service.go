@@ -375,8 +375,12 @@ func (m *AddServiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
-		if key.Matches(msg, addSvcBack) {
-			if m.step == svcStepSource {
+	if key.Matches(msg, addSvcBack) {
+		m.portsDeleteArmed = false
+		m.envVarsDeleteArmed = false
+		m.volumesDeleteArmed = false
+		m.resetArmed = false
+		if m.step == svcStepSource {
 				return m, func() tea.Msg {
 					return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name, EnvName: m.envName}
 				}
@@ -763,6 +767,7 @@ func (m *AddServiceModel) handlePorts(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.ports = append(m.ports, config.PortMapping{Host: h, Container: c})
 			}
 			m.portsDeleteArmed = false
+			m.resetArmed = false
 			m.portHost.SetValue("")
 			m.portContainer.SetValue("")
 			m.portHost.Focus()
@@ -770,6 +775,7 @@ func (m *AddServiceModel) handlePorts(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// Empty inputs → advance to next step
 		m.portsDeleteArmed = false
+		m.resetArmed = false
 		m.svc.Ports = m.ports
 		m.err = ""
 		m.step = svcStepEnvVars
@@ -798,6 +804,7 @@ func (m *AddServiceModel) handlePorts(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// Second d: delete last port
 		m.portsDeleteArmed = false
+		m.resetArmed = false
 		if len(m.ports) > 0 {
 			m.ports = m.ports[:len(m.ports)-1]
 		}
@@ -857,6 +864,7 @@ func (m *AddServiceModel) handleEnvVars(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.envVars = append(m.envVars, config.EnvVar{Key: k, Value: v})
 			}
 			m.envVarsDeleteArmed = false
+			m.resetArmed = false
 			m.envKey.SetValue("")
 			m.envVal.SetValue("")
 			m.envKey.Focus()
@@ -865,6 +873,7 @@ func (m *AddServiceModel) handleEnvVars(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// Empty key → advance to next step
 		m.envVarsDeleteArmed = false
+		m.resetArmed = false
 		m.svc.EnvVars = m.envVars
 		m.err = ""
 		m.step = svcStepVolumes
@@ -887,6 +896,7 @@ func (m *AddServiceModel) handleEnvVars(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// Second d: remove last env var
 		m.envVarsDeleteArmed = false
+		m.resetArmed = false
 		if len(m.envVars) > 0 {
 			last := m.envVars[len(m.envVars)-1]
 			if m.protectedEnvKeys[last.Key] {
@@ -993,12 +1003,14 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.err = ""
 			m.volumesDeleteArmed = false
+			m.resetArmed = false
 			m.volSource.SetValue("")
 			m.volSource.Focus()
 			return m, nil
 		}
 		// Empty source → advance to next step
 		m.volumesDeleteArmed = false
+		m.resetArmed = false
 		m.svc.Volumes = m.volumes
 		m.err = ""
 		m.step = svcStepReview
@@ -1017,6 +1029,7 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// Second d: remove last volume
 		m.volumesDeleteArmed = false
+		m.resetArmed = false
 		m.volumes = m.volumes[:len(m.volumes)-1]
 		return m, nil
 	case key.Matches(msg, addSvcReset):
