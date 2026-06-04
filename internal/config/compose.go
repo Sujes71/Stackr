@@ -59,13 +59,13 @@ func GenerateCompose(profile Profile, envName string) (string, error) {
 		if len(svc.Volumes) > 0 {
 			b.WriteString("    volumes:\n")
 			for _, v := range svc.Volumes {
-		if v.Named {
-				volName := v.Source
-				if volName == "" {
-					volName = fmt.Sprintf("%s_%s_%s_data", profile.Name, envName, compName)
-				}
-				b.WriteString(fmt.Sprintf("      - %s:%s\n", volName, v.Target))
-				namedVolumes[volName] = true
+				if v.Named {
+					volName := v.Source
+					if volName == "" {
+						volName = fmt.Sprintf("%s_%s_%s_data", profile.Name, envName, compName)
+					}
+					b.WriteString(fmt.Sprintf("      - %s:%s\n", volName, v.Target))
+					namedVolumes[volName] = true
 				} else {
 					b.WriteString(fmt.Sprintf("      - %s:%s\n", v.Source, v.Target))
 				}

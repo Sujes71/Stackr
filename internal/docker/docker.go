@@ -164,8 +164,8 @@ func StopService(profileName, envName, serviceName string) error {
 	return runDocker(composeArgs(profileName, envName, "stop", serviceName)...)
 }
 
-// Deprecated: Use StopService instead. DownService only stops the container,
-// it does NOT remove it despite the misleading name.
+// Deprecated: Use StopService instead (which calls docker compose stop).
+// DownService only calls docker compose stop despite the misleading name.
 func DownService(profileName, envName, serviceName string) error {
 	return StopService(profileName, envName, serviceName)
 }

@@ -213,6 +213,10 @@ func (s *SyncEnv) SetPassword(plaintext string) error {
 // Returns a map of field name → error message for invalid fields.
 func (s SyncEnv) Validate() map[string]string {
 	errs := make(map[string]string)
+	validDBTypes := map[string]bool{"postgres": true, "mongo": true, "mssql": true, "mysql": true}
+	if !validDBTypes[s.DBType] {
+		errs["db_type"] = fmt.Sprintf("invalid DBType %q; must be one of: postgres, mongo, mssql, mysql", s.DBType)
+	}
 	if strings.TrimSpace(s.Name) == "" {
 		errs["name"] = "Name is required"
 	}

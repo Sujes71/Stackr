@@ -1052,7 +1052,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							func() tea.Msg {
 								if cmd != nil && cmd.Process != nil {
 									_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-									go func() { cmd.Process.Wait() }()
+									go func() { _ = waitWithTimeout(cmd, 5*time.Second) }()
 								}
 								delete(m.localProcesses, proc.Name)
 								m.cleanPIDFile(proc.Name)
@@ -1068,7 +1068,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							if m.isLocalProcRunning(proc.Name) {
 								if cmd := m.localProcesses[proc.Name]; cmd != nil && cmd.Process != nil {
 									_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-									go func() { cmd.Process.Wait() }()
+									go func() { _ = waitWithTimeout(cmd, 5*time.Second) }()
 								}
 							}
 							cmd := exec.Command("sh", "-c", proc.Command)
@@ -1161,7 +1161,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				// Stop ALL local processes at once
 				m.StopAllLocalProcesses()
-				// Launch ALL Docker services concurrently
+				// Stop ALL Docker services concurrently
 				var cmds []tea.Cmd
 				for i := range env.Services {
 					svc := env.Services[i]
@@ -1248,7 +1248,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				proc := env.LocalProcesses[procIdx]
 				if cmd, ok := m.localProcesses[proc.Name]; ok && cmd != nil && cmd.Process != nil {
 					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-					go func() { cmd.Process.Wait() }()
+					go func() { _ = waitWithTimeout(cmd, 5*time.Second) }()
 					delete(m.localProcesses, proc.Name)
 				}
 				updated, err := m.cfg.DeleteLocalProcess(m.profile.Name, env.Name, proc.Name)
@@ -1610,7 +1610,7 @@ func (m *ProfileViewModel) StopAllLocalProcesses() {
 	for name, cmd := range m.localProcesses {
 		if cmd != nil && cmd.Process != nil {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			go func(c *exec.Cmd) { c.Process.Wait() }(cmd)
+			go func(c *exec.Cmd) { _ = waitWithTimeout(c, 5*time.Second) }(cmd)
 		}
 		m.cleanPIDFile(name)
 		delete(m.localProcesses, name)
@@ -1688,13 +1688,27 @@ func (m *ProfileViewModel) recoverOrphanProcesses() {
 	}
 }
 
+func waitWithTimeout(cmd *exec.Cmd, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() {
+		_, err := cmd.Process.Wait()
+		done <- err
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("process did not exit within %v", timeout)
+	}
+}
+
 // startLocalProcess starts a single local process and stores the handle.
 // Returns true if the process was started, false on error.
 func (m *ProfileViewModel) startLocalProcess(proc config.LocalProcess) bool {
 	if m.isLocalProcRunning(proc.Name) {
 		if cmd := m.localProcesses[proc.Name]; cmd != nil && cmd.Process != nil {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			go func(c *exec.Cmd) { c.Process.Wait() }(cmd)
+			go func(c *exec.Cmd) { _ = waitWithTimeout(c, 5*time.Second) }(cmd)
 		}
 	}
 	cmd := exec.Command("sh", "-c", proc.Command)
