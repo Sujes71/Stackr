@@ -1797,8 +1797,9 @@ func (m *ProfileViewModel) View() string {
 
 	if m.promptStartDocker {
 		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+		b.WriteString("\n")
 		b.WriteString(styles.StyleError.Render("  Docker daemon is not running.") + "\n")
-		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
+		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n")
 	}
 
 	if m.inputtingEnv {

@@ -985,13 +985,6 @@ func (m *DBOpsModel) viewActions() string {
 	}
 	b.WriteString("\n\n")
 
-	// Prompt: start service before import/truncate
-	if m.promptStartService {
-		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
-		b.WriteString(styles.StyleError.Render("  Service '" + m.serviceName + "' is not running.") + "\n")
-		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
-	}
-
 	// ── Custom action form ────────────────────────────────────────────────────
 	if m.addingCustomAction {
 		b.WriteString(m.viewCustomForm())
@@ -1082,6 +1075,12 @@ func (m *DBOpsModel) viewActions() string {
 
 	if m.deleteActionArmed {
 		b.WriteString(styles.StyleError.Render("  Press d again to delete this custom action") + "\n")
+	}
+
+	if m.promptStartService {
+		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+		b.WriteString(styles.StyleError.Render("  Service '" + m.serviceName + "' is not running.") + "\n")
+		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
 	}
 
 	if m.confirmAction || m.confirmCustomAction {
