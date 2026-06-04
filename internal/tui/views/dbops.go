@@ -180,6 +180,23 @@ func (m *DBOpsModel) ProfileName() string { return m.profile.Name }
 func (m *DBOpsModel) EnvName() string     { return m.envName }
 func (m *DBOpsModel) ServiceName() string { return m.serviceName }
 
+// ServiceKey returns a unique key to identify this service across navigation.
+func (m *DBOpsModel) ServiceKey() string {
+	return m.profile.Name + "/" + m.envName + "/" + m.serviceName
+}
+
+// ReShow refreshes the profile pointer when returning to an active model.
+func (m *DBOpsModel) ReShow(cfg *config.Config) {
+	if p, ok := cfg.GetProfile(m.profile.Name); ok {
+		m.profile = p
+	}
+}
+
+// IsBusy returns true when there are pending operations.
+func (m *DBOpsModel) IsBusy() bool {
+	return len(m.pendingOps) > 0
+}
+
 // ── Environment / Service helpers ─────────────────────────────────────────────
 
 func (m *DBOpsModel) currentEnv() *config.Environment {
@@ -229,11 +246,11 @@ func (m *DBOpsModel) SetSize(w, h int) {
 // ── Update dispatch ───────────────────────────────────────────────────────────
 
 func (m *DBOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if _, ok := msg.(spinnerTickMsg); ok {
+	if _, ok := msg.(SpinnerTickMsg); ok {
 		if len(m.pendingOps) > 0 {
 			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
 			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
-				return spinnerTickMsg{}
+				return SpinnerTickMsg{}
 			})
 		}
 		return m, nil

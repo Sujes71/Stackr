@@ -21,6 +21,11 @@ type NavigateTo struct {
 	ServiceName string // optional: used to restore selection for service-specific screens
 }
 
+// ServiceKey returns a unique key for service-level screens (DBOps).
+func (n NavigateTo) ServiceKey() string {
+	return n.ProfileName + "/" + n.EnvName + "/" + n.ServiceName
+}
+
 // ProfileSavedMsg is sent when a profile is created or updated.
 type ProfileSavedMsg struct {
 	Config *config.Config
@@ -60,6 +65,6 @@ type statsResultMsg struct {
 
 // ── Spinner Messages ──
 
-type spinnerTickMsg struct{}
+type SpinnerTickMsg struct{}
 
 

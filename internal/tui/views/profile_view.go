@@ -82,6 +82,10 @@ type ProfileViewModel struct {
 	dockerStarting         bool
 	pendingDockerAction    string          // "toggle:env/composeName" or "stack-all", executed after Docker starts
 	dockerTargetContainers map[string]bool // containers that show spinner during dockerStarting
+
+	// statusCache preserves Docker statuses per env so switching back shows
+	// the previous state immediately while loadStatus() refreshes in background.
+	statusCache map[string][]docker.ServiceStatus // envName → statuses
 }
 
 type ProfileEnvState struct {
@@ -113,11 +117,12 @@ func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
 		envInput:       ti,
 		forwardHandles: make(map[string][]*portforward.PortForwardHandle),
 		localProcesses: make(map[string]*exec.Cmd),
-		portInput:        portInput,
-		viewingService:   -1,
-		pendingOps:              make(map[string]string),
-		dockerTargetContainers:  make(map[string]bool),
-		dockerAvailable:         true,
+		portInput:         portInput,
+		viewingService:    -1,
+		pendingOps:        make(map[string]string),
+		dockerTargetContainers: make(map[string]bool),
+		dockerAvailable:        true,
+		statusCache:            make(map[string][]docker.ServiceStatus),
 	}
 	// set activeEnv to the profile's saved active env
 	for i, env := range p.Environments {
@@ -149,6 +154,7 @@ type statusLoadedMsg struct {
 	statuses       []docker.ServiceStatus
 	err            string
 	daemonAvailable bool
+	envName        string // which env these statuses belong to; "" means "current active env"
 }
 
 // ── Container name helper ───────────────────────────────────────────────
@@ -162,7 +168,7 @@ func containerName(profile, env, compose string) string {
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func spinnerCmd() tea.Cmd {
-	return func() tea.Msg { return spinnerTickMsg{} }
+	return func() tea.Msg { return SpinnerTickMsg{} }
 }
 
 func (m *ProfileViewModel) renderSpinnerDot(op string) string {
@@ -198,7 +204,7 @@ func (m *ProfileViewModel) loadStatus() tea.Cmd {
 // Used inside Cmd closures to refresh state after a docker operation completes.
 func (m *ProfileViewModel) refreshStatus() tea.Msg {
 	if len(m.profile.Environments) == 0 {
-		return statusLoadedMsg{}
+		return statusLoadedMsg{envName: ""}
 	}
 	env := m.profile.Environments[m.activeEnv]
 	ss, err := docker.Status(m.profile.Name, env.Name)
@@ -206,7 +212,23 @@ func (m *ProfileViewModel) refreshStatus() tea.Msg {
 	if err != nil {
 		errStr = err.Error()
 	}
-	return statusLoadedMsg{statuses: ss, err: errStr, daemonAvailable: docker.DaemonAvailable()}
+	return statusLoadedMsg{statuses: ss, err: errStr, daemonAvailable: docker.DaemonAvailable(), envName: env.Name}
+}
+
+// refreshStatusForEnv queries Docker status for a specific env — NOT the
+// current m.activeEnv. Operation closures MUST call this with the envName
+// captured when the operation was initiated, so the query targets the
+// correct env even if the user switched environments in the meantime.
+func (m *ProfileViewModel) refreshStatusForEnv(envName string) tea.Msg {
+	if envName == "" || len(m.profile.Environments) == 0 {
+		return statusLoadedMsg{daemonAvailable: docker.DaemonAvailable(), envName: envName}
+	}
+	ss, err := docker.Status(m.profile.Name, envName)
+	errStr := ""
+	if err != nil {
+		errStr = err.Error()
+	}
+	return statusLoadedMsg{statuses: ss, err: errStr, daemonAvailable: docker.DaemonAvailable(), envName: envName}
 }
 
 // launchDockerCmd tries to start the Docker daemon via Colima or Docker Desktop.
@@ -218,10 +240,15 @@ func (m *ProfileViewModel) launchDockerCmd() tea.Cmd {
 			exec.Command("open", "-a", "Docker").Run()
 		}
 		time.Sleep(2 * time.Second)
+		envName := ""
+		if m.activeEnv < len(m.profile.Environments) {
+			envName = m.profile.Environments[m.activeEnv].Name
+		}
 		return statusLoadedMsg{
 			statuses:        m.statuses,
 			err:             m.statusErr,
 			daemonAvailable: docker.DaemonAvailable(),
+			envName:         envName,
 		}
 	}
 }
@@ -255,9 +282,9 @@ func (m *ProfileViewModel) executeDockerAction(action string) tea.Cmd {
 						}
 					}
 				}
-				return m.refreshStatus()
+				return m.refreshStatusForEnv(envName)
 			},
-			func() tea.Msg { return spinnerTickMsg{} },
+			func() tea.Msg { return SpinnerTickMsg{} },
 		)
 	case "stack-all":
 		env := m.currentEnv()
@@ -278,10 +305,10 @@ func (m *ProfileViewModel) executeDockerAction(action string) tea.Cmd {
 			svc := env.Services[i]
 			cmds = append(cmds, func() tea.Msg {
 				_ = docker.UpService(m.profile.Name, env.Name, svc.ComposeName())
-				return m.refreshStatus()
+				return m.refreshStatusForEnv(env.Name)
 			})
 		}
-		cmds = append(cmds, func() tea.Msg { return spinnerTickMsg{} })
+		cmds = append(cmds, func() tea.Msg { return SpinnerTickMsg{} })
 		return tea.Batch(cmds...)
 	}
 	return nil
@@ -322,6 +349,20 @@ func (m *ProfileViewModel) Init() tea.Cmd {
 		cmds = append(cmds, portforward.ForwardMonitorCmd())
 	}
 	return tea.Batch(cmds...)
+}
+
+// ReShow refreshes the profile pointer when returning to an active model
+// and returns cmds to reload status and restart the spinner.
+func (m *ProfileViewModel) ReShow(cfg *config.Config) tea.Cmd {
+	if p, ok := cfg.GetProfile(m.profile.Name); ok {
+		m.profile = p
+	}
+	return tea.Batch(m.loadStatus(), spinnerCmd())
+}
+
+// IsBusy returns true when there are pending operations.
+func (m *ProfileViewModel) IsBusy() bool {
+	return len(m.pendingOps) > 0 || m.dockerStarting
 }
 
 func (m *ProfileViewModel) RestoreSelection(envName, serviceName string) {
@@ -511,6 +552,24 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case statusLoadedMsg:
+		// Determine if this status update is for the current active env
+		currentEnvName := ""
+		if m.activeEnv < len(m.profile.Environments) {
+			currentEnvName = m.profile.Environments[m.activeEnv].Name
+		}
+		isForActiveEnv := msg.envName == "" || msg.envName == currentEnvName
+
+		if !isForActiveEnv {
+			// Don't cache — the statuses were saved when the user left this
+			// env (in the switch handler). On return, the switch handler's
+			// loadStatus() will refresh. This ensures the user sees the
+			// last-known state + pendingOps spinner, then the smooth
+			// transition to the updated state.
+			m.dockerAvailable = msg.daemonAvailable
+			m.dockerStarting = false
+			break
+		}
+
 		m.statuses = msg.statuses
 		m.statusErr = msg.err
 		m.dockerAvailable = msg.daemonAvailable
@@ -546,6 +605,14 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			} else {
+				// Skip containers that don't belong to the current env
+				if currentEnvName != "" {
+					expectedPrefix := fmt.Sprintf("stackr-%s-%s-", m.profile.Name, currentEnvName)
+					if !strings.HasPrefix(key, expectedPrefix) {
+						continue
+					}
+				}
+
 				state := statusMap[key]
 				if op == "start" && (state == "running" || state == "starting") {
 					delete(m.pendingOps, key)
@@ -599,11 +666,11 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rememberCurrentEnvSelection()
 		return m, m.loadStatus()
 
-	case spinnerTickMsg:
+	case SpinnerTickMsg:
 		if len(m.pendingOps) > 0 || m.dockerStarting {
 			m.spinnerFrame++
 			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
-				return spinnerTickMsg{}
+				return SpinnerTickMsg{}
 			})
 		}
 		m.spinnerFrame = 0
@@ -803,13 +870,13 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						cn := containerName(m.profile.Name, env.Name, svc.ComposeName())
 						m.pendingOps[cn] = "resetting volumes"
 					}
-					return m, tea.Batch(
-						func() tea.Msg {
-							_ = docker.DownVolumes(m.profile.Name, env.Name)
-							return m.refreshStatus()
+				return m, tea.Batch(
+					func() tea.Msg {
+						_ = docker.DownVolumes(m.profile.Name, env.Name)
+						return m.refreshStatusForEnv(env.Name)
 						},
-						m.loadStatus(),
-						func() tea.Msg { return spinnerTickMsg{} },
+						func() tea.Msg { return m.refreshStatusForEnv(env.Name) },
+						func() tea.Msg { return SpinnerTickMsg{} },
 					)
 				}
 			}
@@ -889,31 +956,57 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, profileKeys.switchEnvLeft):
 			if m.activeEnv > 0 {
 				m.rememberCurrentEnvSelection()
+				// Cache current env's statuses before switching
+				currentName := m.profile.Environments[m.activeEnv].Name
+				m.statusCache[currentName] = m.statuses
 				m.activeEnv--
-				m.statuses = nil
-					m.persistActiveEnv()
+				m.persistActiveEnv()
 				m.restoreCurrentEnvSelection()
+				// Restore cached statuses for target env (or nil if first visit)
+				targetName := m.profile.Environments[m.activeEnv].Name
+				if cached, ok := m.statusCache[targetName]; ok {
+					m.statuses = cached
+				} else {
+					m.statuses = nil
+				}
 				if m.isPortForwardEnv() {
 					m.buildForwardHandles()
 					m.restoreCurrentEnvSelection()
-					return m, tea.Batch(m.loadStatus(), portforward.ForwardMonitorCmd())
+					return m, tea.Batch(
+						m.loadStatus(),
+						portforward.ForwardMonitorCmd(),
+						spinnerCmd(),
+					)
 				}
-				return m, m.loadStatus()
+				return m, tea.Batch(m.loadStatus(), spinnerCmd())
 			}
 
 		case key.Matches(msg, profileKeys.switchEnvRight):
 			if m.activeEnv < len(m.profile.Environments)-1 {
 				m.rememberCurrentEnvSelection()
+				// Cache current env's statuses before switching
+				currentName := m.profile.Environments[m.activeEnv].Name
+				m.statusCache[currentName] = m.statuses
 				m.activeEnv++
-				m.statuses = nil
-					m.persistActiveEnv()
+				m.persistActiveEnv()
 				m.restoreCurrentEnvSelection()
+				// Restore cached statuses for target env (or nil if first visit)
+				targetName := m.profile.Environments[m.activeEnv].Name
+				if cached, ok := m.statusCache[targetName]; ok {
+					m.statuses = cached
+				} else {
+					m.statuses = nil
+				}
 				if m.isPortForwardEnv() {
 					m.buildForwardHandles()
 					m.restoreCurrentEnvSelection()
-					return m, tea.Batch(m.loadStatus(), portforward.ForwardMonitorCmd())
+					return m, tea.Batch(
+						m.loadStatus(),
+						portforward.ForwardMonitorCmd(),
+						spinnerCmd(),
+					)
 				}
-				return m, m.loadStatus()
+				return m, tea.Batch(m.loadStatus(), spinnerCmd())
 			}
 
 		case key.Matches(msg, profileKeys.addEnv):
@@ -1024,20 +1117,20 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, tea.Batch(
 							func() tea.Msg {
 								_ = docker.StopService(m.profile.Name, envName, compName)
-								return m.refreshStatus()
+								return m.refreshStatusForEnv(envName)
 							},
-							m.loadStatus(),
-							func() tea.Msg { return spinnerTickMsg{} },
+							func() tea.Msg { return m.refreshStatusForEnv(envName) },
+							func() tea.Msg { return SpinnerTickMsg{} },
 						)
 					}
 					m.pendingOps[containerName] = "start"
 					return m, tea.Batch(
 						func() tea.Msg {
 							_ = docker.UpService(m.profile.Name, envName, compName)
-							return m.refreshStatus()
+							return m.refreshStatusForEnv(envName)
 						},
-						m.loadStatus(),
-						func() tea.Msg { return spinnerTickMsg{} },
+						func() tea.Msg { return m.refreshStatusForEnv(envName) },
+						func() tea.Msg { return SpinnerTickMsg{} },
 					)
 				}
 			} else {
@@ -1056,10 +1149,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								}
 								delete(m.localProcesses, proc.Name)
 								m.cleanPIDFile(proc.Name)
-								return m.refreshStatus()
+								return m.refreshStatusForEnv(env.Name)
 							},
-							m.loadStatus(),
-							func() tea.Msg { return spinnerTickMsg{} },
+							func() tea.Msg { return m.refreshStatusForEnv(env.Name) },
+							func() tea.Msg { return SpinnerTickMsg{} },
 						)
 					}
 					m.pendingOps["proc:"+proc.Name] = "start"
@@ -1081,14 +1174,14 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								cmd.Dir = wd
 							}
 							if err := cmd.Start(); err != nil {
-								return m.refreshStatus()
+								return m.refreshStatusForEnv(env.Name)
 							}
 							m.localProcesses[proc.Name] = cmd
 							m.writePIDFile(proc.Name, cmd.Process.Pid)
-							return m.refreshStatus()
+							return m.refreshStatusForEnv(env.Name)
 						},
-						m.loadStatus(),
-						func() tea.Msg { return spinnerTickMsg{} },
+						func() tea.Msg { return m.refreshStatusForEnv(env.Name) },
+						func() tea.Msg { return SpinnerTickMsg{} },
 					)
 				}
 			}
@@ -1109,7 +1202,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 					cmds := m.startEnvForwards(envName)
-					cmds = append(cmds, m.loadStatus(), func() tea.Msg { return spinnerTickMsg{} })
+					cmds = append(cmds, func() tea.Msg { return m.refreshStatusForEnv(envName) }, func() tea.Msg { return SpinnerTickMsg{} })
 					return m, tea.Batch(cmds...)
 				}
 				// Populate pending ops for spinner
@@ -1129,10 +1222,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					svc := env.Services[i]
 					cmds = append(cmds, func() tea.Msg {
 						_ = docker.UpService(m.profile.Name, env.Name, svc.ComposeName())
-						return m.refreshStatus()
+						return m.refreshStatusForEnv(env.Name)
 					})
 				}
-				cmds = append(cmds, m.loadStatus(), func() tea.Msg { return spinnerTickMsg{} })
+				cmds = append(cmds, func() tea.Msg { return m.refreshStatusForEnv(env.Name) }, func() tea.Msg { return SpinnerTickMsg{} })
 				return m, tea.Batch(cmds...)
 			}
 
@@ -1147,7 +1240,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 					cmds := m.stopEnvForwards(envName)
-					cmds = append(cmds, m.loadStatus(), func() tea.Msg { return spinnerTickMsg{} })
+					cmds = append(cmds, func() tea.Msg { return m.refreshStatusForEnv(envName) }, func() tea.Msg { return SpinnerTickMsg{} })
 					return m, tea.Batch(cmds...)
 				}
 				// Populate pending ops for spinner
@@ -1167,10 +1260,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					svc := env.Services[i]
 					cmds = append(cmds, func() tea.Msg {
 						_ = docker.StopService(m.profile.Name, env.Name, svc.ComposeName())
-						return m.refreshStatus()
+						return m.refreshStatusForEnv(env.Name)
 					})
 				}
-				cmds = append(cmds, m.loadStatus(), func() tea.Msg { return spinnerTickMsg{} })
+				cmds = append(cmds, func() tea.Msg { return m.refreshStatusForEnv(env.Name) }, func() tea.Msg { return SpinnerTickMsg{} })
 				return m, tea.Batch(cmds...)
 			}
 
@@ -1381,13 +1474,13 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			svc := svcs[m.selectedServiceIndex()]
 			containerName := containerName(m.profile.Name, env.Name, svc.ComposeName())
 			m.pendingOps[containerName] = "pulling"
-			return m, tea.Batch(
-				func() tea.Msg {
-					_ = docker.ComposePull(m.profile.Name, env.Name, svc.Name)
-					return m.refreshStatus()
+		return m, tea.Batch(
+			func() tea.Msg {
+				_ = docker.ComposePull(m.profile.Name, env.Name, svc.Name)
+				return m.refreshStatusForEnv(env.Name)
 				},
-				m.loadStatus(),
-				func() tea.Msg { return spinnerTickMsg{} },
+				func() tea.Msg { return m.refreshStatusForEnv(env.Name) },
+				func() tea.Msg { return SpinnerTickMsg{} },
 			)
 
 		case key.Matches(msg, profileKeys.shell):
@@ -1573,7 +1666,7 @@ func (m *ProfileViewModel) startEnvForwards(envName string) []tea.Cmd {
 			h := h // capture
 			cmds = append(cmds, func() tea.Msg {
 				h.Start()
-				return m.refreshStatus()
+				return m.refreshStatusForEnv(envName)
 			})
 		}
 	}
@@ -1587,7 +1680,7 @@ func (m *ProfileViewModel) stopEnvForwards(envName string) []tea.Cmd {
 			h := h // capture
 			cmds = append(cmds, func() tea.Msg {
 				h.Stop()
-				return m.refreshStatus()
+				return m.refreshStatusForEnv(envName)
 			})
 		}
 	}
@@ -2793,16 +2886,17 @@ func (m *ProfileViewModel) handleForwardToggle() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	h := forwards[m.selectedForwardIndex()]
+	envName := m.profile.Environments[m.activeEnv].Name
 
 	if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
 		m.pendingOps["pf:"+h.Config.Name] = "stop"
 		return m, tea.Batch(
 			func() tea.Msg {
 				h.Stop()
-				return m.refreshStatus()
+				return m.refreshStatusForEnv(envName)
 			},
-			m.loadStatus(),
-			func() tea.Msg { return spinnerTickMsg{} },
+			func() tea.Msg { return m.refreshStatusForEnv(envName) },
+			func() tea.Msg { return SpinnerTickMsg{} },
 		)
 	}
 
@@ -2811,10 +2905,10 @@ func (m *ProfileViewModel) handleForwardToggle() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(
 		func() tea.Msg {
 			h.Start()
-			return m.refreshStatus()
+			return m.refreshStatusForEnv(envName)
 		},
-		m.loadStatus(),
-		func() tea.Msg { return spinnerTickMsg{} },
+		func() tea.Msg { return m.refreshStatusForEnv(envName) },
+		func() tea.Msg { return SpinnerTickMsg{} },
 	)
 }
 

@@ -81,11 +81,11 @@ func (m *HomeModel) SetSize(w, h int) {
 
 func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Spinner tick — handle at the top
-	if _, ok := msg.(spinnerTickMsg); ok {
+	if _, ok := msg.(SpinnerTickMsg); ok {
 		if len(m.pendingOps) > 0 {
 			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
 			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
-				return spinnerTickMsg{}
+				return SpinnerTickMsg{}
 			})
 		}
 		return m, nil

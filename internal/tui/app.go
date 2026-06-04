@@ -92,6 +92,23 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case views.ClearActionMsg:
 		a.err = ""
+
+	case views.SpinnerTickMsg:
+		// Route spinner to active screen AND to non-active models that are busy
+		m, cmd := a.updateActive(msg)
+		var extra []tea.Cmd
+		if a.screen != ScreenProfileView && a.profileView != nil && a.profileView.IsBusy() {
+			_, c := a.profileView.Update(msg)
+			extra = append(extra, c)
+		}
+		if a.screen != ScreenDBOps && a.dbOps != nil && a.dbOps.IsBusy() {
+			_, c := a.dbOps.Update(msg)
+			extra = append(extra, c)
+		}
+		if len(extra) > 0 {
+			return m, tea.Batch(append([]tea.Cmd{cmd}, extra...)...)
+		}
+		return m, cmd
 	}
 
 	// Delegate to active screen
@@ -122,13 +139,20 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 	case views.NavProfileView:
 		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
 			a.screen = ScreenProfileView
-			a.profileView = views.NewProfileView(a.cfg, p)
-			if state, ok := a.profileNavState[nav.ProfileName]; ok {
-				a.profileView.RestoreNavState(state)
+			if a.profileView == nil || a.profileView.ProfileName() != nav.ProfileName {
+				// Different profile or first time — save old state, create new
+				a.captureProfileNavState(nav)
+				a.profileView = views.NewProfileView(a.cfg, p)
+				if state, ok := a.profileNavState[nav.ProfileName]; ok {
+					a.profileView.RestoreNavState(state)
+				}
+				a.profileView.SetSize(a.width, a.height)
+				return a, a.profileView.Init()
 			}
+			// Same profile — keep model alive (pending ops survive)
 			a.profileView.RestoreSelection(nav.EnvName, nav.ServiceName)
 			a.profileView.SetSize(a.width, a.height)
-			return a, a.profileView.Init()
+			return a, a.profileView.ReShow(a.cfg)
 		}
 
 	case views.NavAddService:
@@ -142,9 +166,15 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 	case views.NavDBOps:
 		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
 			a.screen = ScreenDBOps
-			a.dbOps = views.NewDBOps(a.cfg, p, nav.EnvName, nav.ServiceName)
+			if a.dbOps == nil || a.dbOps.ServiceKey() != nav.ServiceKey() {
+				a.dbOps = views.NewDBOps(a.cfg, p, nav.EnvName, nav.ServiceName)
+				a.dbOps.SetSize(a.width, a.height-5)
+				return a, a.dbOps.Init()
+			}
+			// Same service — keep model alive
+			a.dbOps.ReShow(a.cfg)
 			a.dbOps.SetSize(a.width, a.height-5)
-			return a, a.dbOps.Init()
+			return a, nil
 		}
 
 	}
