@@ -77,10 +77,11 @@ type ProfileViewModel struct {
 	spinnerFrame int
 
 	// ── Docker Daemon Detection ──
-	dockerAvailable      bool
-	promptStartDocker    bool
-	dockerStarting       bool
-	pendingDockerAction  string // "toggle:env/composeName" or "stack-all", executed after Docker starts
+	dockerAvailable        bool
+	promptStartDocker      bool
+	dockerStarting         bool
+	pendingDockerAction    string          // "toggle:env/composeName" or "stack-all", executed after Docker starts
+	dockerTargetContainers map[string]bool // containers that show spinner during dockerStarting
 }
 
 type ProfileEnvState struct {
@@ -114,8 +115,9 @@ func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
 		localProcesses: make(map[string]*exec.Cmd),
 		portInput:        portInput,
 		viewingService:   -1,
-		pendingOps:       make(map[string]string),
-		dockerAvailable:  true,
+		pendingOps:              make(map[string]string),
+		dockerTargetContainers:  make(map[string]bool),
+		dockerAvailable:         true,
 	}
 	// set activeEnv to the profile's saved active env
 	for i, env := range p.Environments {
@@ -495,6 +497,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusErr = msg.err
 		m.dockerAvailable = msg.daemonAvailable
 		m.dockerStarting = false
+		m.dockerTargetContainers = make(map[string]bool)
+		if !msg.daemonAvailable {
+			m.pendingDockerAction = ""
+		}
 		m.ensureValidSelection()
 		m.rebuildDisplayOrders()
 
@@ -662,12 +668,32 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "y", "Y":
 				m.promptStartDocker = false
 				m.dockerStarting = true
+				// Populate target containers for spinner feedback
+				if strings.HasPrefix(m.pendingDockerAction, "toggle:") {
+					parts := strings.SplitN(m.pendingDockerAction, ":", 2)
+					if len(parts) >= 2 {
+						ec := strings.SplitN(parts[1], "/", 2)
+						if len(ec) >= 2 {
+							cn := containerName(m.profile.Name, ec[0], ec[1])
+							m.dockerTargetContainers[cn] = true
+						}
+					}
+				} else if m.pendingDockerAction == "stack-all" {
+					env := m.currentEnv()
+					if env != nil {
+						for _, svc := range env.Services {
+							cn := containerName(m.profile.Name, env.Name, svc.ComposeName())
+							m.dockerTargetContainers[cn] = true
+						}
+					}
+				}
 				return m, tea.Batch(
 					m.launchDockerCmd(),
 					spinnerCmd(),
 				)
 			case "n", "N", "esc":
 				m.promptStartDocker = false
+				m.pendingDockerAction = ""
 				return m, nil
 			}
 			return m, nil
@@ -1769,10 +1795,7 @@ func (m *ProfileViewModel) View() string {
 		b.WriteString("\n")
 	}
 
-	if m.dockerStarting {
-		b.WriteString(m.renderSpinnerDot("launching Docker..."))
-		b.WriteString("\n\n")
-	} else if m.promptStartDocker {
+	if m.promptStartDocker {
 		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 		b.WriteString(styles.StyleError.Render("  Docker daemon is not running.") + "\n")
 		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
@@ -1936,6 +1959,8 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 			var dot string
 			if op, pending := m.pendingOps[containerName]; pending {
 				dot = m.renderSpinnerDot(op)
+			} else if !m.dockerAvailable && m.dockerTargetContainers[containerName] {
+				dot = m.renderSpinnerDot("starting")
 			} else if !m.dockerAvailable {
 				dot = styles.DockerOffDot()
 			} else if st.State == "" {
