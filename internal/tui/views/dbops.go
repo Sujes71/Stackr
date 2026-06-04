@@ -926,7 +926,7 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(keyMsg, dbOpsEnter):
-		if m.customFormFocus == 1 && m.customNameInput.Value() != "" && m.customCmdInput.Value() != "" {
+		if m.customNameInput.Value() != "" && m.customCmdInput.Value() != "" {
 			svc := m.currentService()
 			if svc == nil {
 				return m, nil
