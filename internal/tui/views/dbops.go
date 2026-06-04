@@ -874,7 +874,7 @@ func (m *DBOpsModel) updateCoreConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, dbOpsEnter):
 			m.confirmAction = false
 			act := m.actions[m.actionCursor]
-			if act.group == "Import" || strings.Contains(act.label, "Truncate") {
+			if act.group == "Import" || act.group == "Export" || strings.Contains(act.label, "Truncate") {
 				container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
 				if !m.isContainerRunning(container) {
 					if !docker.DaemonAvailable() {
