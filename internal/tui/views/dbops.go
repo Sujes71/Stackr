@@ -692,14 +692,14 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if err != nil {
 					return serviceStartedMsg{err: err}
 				}
-				// Docker auto-starts containers with restart: unless-stopped
-				// when the daemon comes back up. Stop everything except the
-				// service we need for the pending action.
+				// `docker compose up` creates ALL services in the compose file
+				// even though it only starts the target one. Stop the others to
+				// avoid leaving them in "Created" state.
 				env := m.currentEnv()
 				if env != nil {
 					for _, s := range env.Services {
 						if s.ComposeName() != svc.ComposeName() {
-							_ = docker.DownService(m.profile.Name, m.envName, s.ComposeName())
+							_ = docker.RmService(m.profile.Name, m.envName, s.ComposeName())
 						}
 					}
 				}

@@ -164,6 +164,10 @@ func DownService(profileName, envName, serviceName string) error {
 	return runDocker(composeArgs(profileName, envName, "stop", serviceName)...)
 }
 
+func RmService(profileName, envName, serviceName string) error {
+	return runDocker(composeArgs(profileName, envName, "rm", "-fs", serviceName)...)
+}
+
 func DownVolumes(profileName, envName string) error {
 	return runDocker(composeArgs(profileName, envName, "down", "-v")...)
 }

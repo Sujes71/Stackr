@@ -173,6 +173,11 @@ func (m *ProfileViewModel) renderSpinnerDot(op string) string {
 
 type ClearActionMsg struct{}
 
+type svcRmDoneMsg struct {
+	envName string
+	svcName string
+}
+
 func ClearActionAfter(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(t time.Time) tea.Msg {
 		return ClearActionMsg{}
@@ -242,13 +247,12 @@ func (m *ProfileViewModel) executeDockerAction(action string) tea.Cmd {
 				if env != nil {
 					for _, svc := range env.Services {
 						if svc.ComposeName() != compName {
-							_ = docker.DownService(m.profile.Name, envName, svc.ComposeName())
+							_ = docker.RmService(m.profile.Name, envName, svc.ComposeName())
 						}
 					}
 				}
 				return m.refreshStatus()
 			},
-			m.loadStatus(),
 			func() tea.Msg { return spinnerTickMsg{} },
 		)
 	case "stack-all":
@@ -273,7 +277,7 @@ func (m *ProfileViewModel) executeDockerAction(action string) tea.Cmd {
 				return m.refreshStatus()
 			})
 		}
-		cmds = append(cmds, m.loadStatus(), func() tea.Msg { return spinnerTickMsg{} })
+		cmds = append(cmds, func() tea.Msg { return spinnerTickMsg{} })
 		return tea.Batch(cmds...)
 	}
 	return nil
@@ -560,6 +564,22 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingDockerAction = ""
 			return m, m.executeDockerAction(action)
 		}
+
+	case svcRmDoneMsg:
+		updated, err := m.cfg.DeleteService(m.profile.Name, msg.envName, msg.svcName)
+		if err != nil {
+			return m, m.loadStatus()
+		}
+		m.profile = updated
+		if _, err := config.GenerateCompose(*m.profile, msg.envName); err != nil {
+			return m, m.loadStatus()
+		}
+		remaining := m.totalServiceItems()
+		if m.cursor >= remaining && m.cursor > 0 {
+			m.cursor--
+		}
+		m.rememberCurrentEnvSelection()
+		return m, m.loadStatus()
 
 	case spinnerTickMsg:
 		if len(m.pendingOps) > 0 || m.dockerStarting {
@@ -1197,23 +1217,15 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.deleteArmed = false
 				svc := svcs[m.selectedServiceIndex()]
-				go func() {
-					_ = docker.Down(m.profile.Name, env.Name)
-				}()
-				updated, err := m.cfg.DeleteService(m.profile.Name, env.Name, svc.Name)
-				if err != nil {
-					return m, m.loadStatus()
+				svcName := svc.Name
+				composeName := svc.ComposeName()
+				return m, func() tea.Msg {
+					_ = docker.RmService(m.profile.Name, env.Name, composeName)
+					return svcRmDoneMsg{
+						envName: env.Name,
+						svcName: svcName,
+					}
 				}
-				m.profile = updated
-				if _, err := config.GenerateCompose(*m.profile, env.Name); err != nil {
-					return m, m.loadStatus()
-				}
-				remaining := m.totalServiceItems()
-				if m.cursor >= remaining && m.cursor > 0 {
-					m.cursor--
-				}
-				m.rememberCurrentEnvSelection()
-				return m, m.loadStatus()
 			} else {
 				// Local process delete
 				procIdx := m.cursor - len(svcs)
