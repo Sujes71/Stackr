@@ -75,6 +75,12 @@ type ProfileViewModel struct {
 	// ── Batch Spinner ──
 	pendingOps   map[string]string // containerName → "start" | "stop"
 	spinnerFrame int
+
+	// ── Docker Daemon Detection ──
+	dockerAvailable      bool
+	promptStartDocker    bool
+	dockerStarting       bool
+	pendingDockerAction  string // "toggle:env/composeName" or "stack-all", executed after Docker starts
 }
 
 type ProfileEnvState struct {
@@ -106,9 +112,10 @@ func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
 		envInput:       ti,
 		forwardHandles: make(map[string][]*portforward.PortForwardHandle),
 		localProcesses: make(map[string]*exec.Cmd),
-		portInput:      portInput,
-		viewingService: -1,
-		pendingOps:  make(map[string]string),
+		portInput:        portInput,
+		viewingService:   -1,
+		pendingOps:       make(map[string]string),
+		dockerAvailable:  true,
 	}
 	// set activeEnv to the profile's saved active env
 	for i, env := range p.Environments {
@@ -137,8 +144,9 @@ func (m *ProfileViewModel) SetSize(w, h int) {
 }
 
 type statusLoadedMsg struct {
-	statuses []docker.ServiceStatus
-	err      string
+	statuses       []docker.ServiceStatus
+	err            string
+	daemonAvailable bool
 }
 
 // ── Container name helper ───────────────────────────────────────────────
@@ -187,7 +195,76 @@ func (m *ProfileViewModel) refreshStatus() tea.Msg {
 	if err != nil {
 		errStr = err.Error()
 	}
-	return statusLoadedMsg{statuses: ss, err: errStr}
+	return statusLoadedMsg{statuses: ss, err: errStr, daemonAvailable: docker.DaemonAvailable()}
+}
+
+// launchDockerCmd tries to start the Docker daemon via Colima or Docker Desktop.
+func (m *ProfileViewModel) launchDockerCmd() tea.Cmd {
+	return func() tea.Msg {
+		if _, err := exec.LookPath("colima"); err == nil {
+			exec.Command("colima", "start").Run()
+		} else {
+			exec.Command("open", "-a", "Docker").Run()
+		}
+		time.Sleep(2 * time.Second)
+		return statusLoadedMsg{
+			statuses:        m.statuses,
+			err:             m.statusErr,
+			daemonAvailable: docker.DaemonAvailable(),
+		}
+	}
+}
+
+// executeDockerAction executes a pending action after Docker daemon comes online.
+// Supported actions: "toggle:envName/composeName" or "stack-all".
+func (m *ProfileViewModel) executeDockerAction(action string) tea.Cmd {
+	parts := strings.SplitN(action, ":", 2)
+	switch parts[0] {
+	case "toggle":
+		if len(parts) < 2 {
+			return nil
+		}
+		envComp := strings.SplitN(parts[1], "/", 2)
+		if len(envComp) < 2 {
+			return nil
+		}
+		envName, compName := envComp[0], envComp[1]
+		cn := containerName(m.profile.Name, envName, compName)
+		m.pendingOps[cn] = "start"
+		return tea.Batch(
+			func() tea.Msg {
+				_ = docker.UpService(m.profile.Name, envName, compName)
+				return m.refreshStatus()
+			},
+			m.loadStatus(),
+			func() tea.Msg { return spinnerTickMsg{} },
+		)
+	case "stack-all":
+		env := m.currentEnv()
+		if env == nil {
+			return nil
+		}
+		for i := range env.Services {
+			svc := env.Services[i]
+			cn := containerName(m.profile.Name, env.Name, svc.ComposeName())
+			m.pendingOps[cn] = "start"
+		}
+		for i := range env.LocalProcesses {
+			m.pendingOps["proc:"+env.LocalProcesses[i].Name] = "start"
+		}
+		m.startAllLocalProcesses(env)
+		var cmds []tea.Cmd
+		for i := range env.Services {
+			svc := env.Services[i]
+			cmds = append(cmds, func() tea.Msg {
+				_ = docker.UpService(m.profile.Name, env.Name, svc.ComposeName())
+				return m.refreshStatus()
+			})
+		}
+		cmds = append(cmds, m.loadStatus(), func() tea.Msg { return spinnerTickMsg{} })
+		return tea.Batch(cmds...)
+	}
+	return nil
 }
 
 var profileKeys = struct {
@@ -416,6 +493,8 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statusLoadedMsg:
 		m.statuses = msg.statuses
 		m.statusErr = msg.err
+		m.dockerAvailable = msg.daemonAvailable
+		m.dockerStarting = false
 		m.ensureValidSelection()
 		m.rebuildDisplayOrders()
 
@@ -459,8 +538,15 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// Execute pending Docker action (toggle or stack-all) when Docker just came online
+		if m.pendingDockerAction != "" && m.dockerAvailable {
+			action := m.pendingDockerAction
+			m.pendingDockerAction = ""
+			return m, m.executeDockerAction(action)
+		}
+
 	case spinnerTickMsg:
-		if len(m.pendingOps) > 0 {
+		if len(m.pendingOps) > 0 || m.dockerStarting {
 			m.spinnerFrame++
 			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 				return spinnerTickMsg{}
@@ -568,6 +654,28 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statsContainer = ""
 			m.statsData = ""
 			return m, nil
+		}
+
+		// ── Docker daemon prompt ───────────────────────────────
+		if m.promptStartDocker {
+			switch msg.String() {
+			case "y", "Y":
+				m.promptStartDocker = false
+				m.dockerStarting = true
+				return m, tea.Batch(
+					m.launchDockerCmd(),
+					spinnerCmd(),
+				)
+			case "n", "N", "esc":
+				m.promptStartDocker = false
+				return m, nil
+			}
+			return m, nil
+		}
+
+		// ── Block ALL keys while Docker daemon is starting ────
+		if m.dockerStarting {
+			break
 		}
 
 		// ── Pending key sequence ────────────────────────────────
@@ -826,6 +934,11 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 			totalSvcs := len(env.Services)
+			if m.cursor < totalSvcs && !m.dockerAvailable {
+				m.promptStartDocker = true
+				m.pendingDockerAction = "toggle:" + env.Name + "/" + m.currentEnvServices()[m.selectedServiceIndex()].ComposeName()
+				break
+			}
 			if m.cursor < totalSvcs {
 				// Docker service toggle
 				svcs := m.currentEnvServices()
@@ -919,6 +1032,11 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, profileKeys.start):
 			env := m.currentEnv()
 			if env != nil {
+				if !m.dockerAvailable {
+					m.promptStartDocker = true
+					m.pendingDockerAction = "stack-all"
+					break
+				}
 				if m.isPortForwardEnv() {
 					envName := m.profile.Environments[m.activeEnv].Name
 					for _, h := range m.forwardHandles[envName] {
@@ -1651,6 +1769,15 @@ func (m *ProfileViewModel) View() string {
 		b.WriteString("\n")
 	}
 
+	if m.dockerStarting {
+		b.WriteString(m.renderSpinnerDot("launching Docker..."))
+		b.WriteString("\n\n")
+	} else if m.promptStartDocker {
+		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+		b.WriteString(styles.StyleError.Render("  Docker daemon is not running.") + "\n")
+		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
+	}
+
 	if m.inputtingEnv {
 		b.WriteString("\n")
 		focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
@@ -1809,6 +1936,8 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 			var dot string
 			if op, pending := m.pendingOps[containerName]; pending {
 				dot = m.renderSpinnerDot(op)
+			} else if !m.dockerAvailable {
+				dot = styles.DockerOffDot()
 			} else if st.State == "" {
 				dot = styles.Dot("stopped")
 			} else {

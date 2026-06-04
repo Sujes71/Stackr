@@ -2,12 +2,14 @@ package docker
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/stackr/stackr/internal/config"
 )
@@ -49,6 +51,18 @@ func ToolImage(se *config.SyncEnv) string {
 		return se.ToolImage
 	}
 	return DefaultToolImage(se.DBType)
+}
+
+// DaemonAvailable checks if the Docker daemon is reachable by running
+// `docker version --format '{{.Server.Version}}'` with a timeout.
+func DaemonAvailable() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "version", "--format", "{{.Server.Version}}")
+	if err := cmd.Run(); err != nil {
+		return false
+	}
+	return true
 }
 
 // runDocker executes a docker command and returns a friendly error on failure.

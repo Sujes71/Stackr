@@ -271,6 +271,13 @@ func ForwardDot(state portforward.ForwardState) string {
 		Render(fmt.Sprintf("● %s", state))
 }
 
+// DockerOffDot returns a dimmed dot for "docker off" state.
+func DockerOffDot() string {
+	return lipgloss.NewStyle().
+		Foreground(ColorMuted).
+		Render("⚫ docker off")
+}
+
 // LocalProcessDot returns a colored state indicator for local processes.
 // Uses the same colors as Dot() for running/stopped, but a different glyph (▶)
 // so users can distinguish Docker services from host/local processes at a glance.
