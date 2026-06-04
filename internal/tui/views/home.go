@@ -191,6 +191,11 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// ── Block keys while an operation is in progress ──
+		if len(m.pendingOps) > 0 {
+			break
+		}
+
 		switch {
 		case key.Matches(msg, homeKeys.up):
 			if m.cursor > 0 {

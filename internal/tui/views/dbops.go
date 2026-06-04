@@ -504,11 +504,11 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case key.Matches(msg, dbOpsBack):
 			if m.promptStartDaemon || len(m.pendingOps) > 0 {
-				m.promptStartDaemon = false
-				m.pendingOps = make(map[string]string)
-				m.pendingStartLabel = ""
-				m.promptStartService = false
-				return m, nil
+				if m.promptStartDaemon {
+					m.promptStartDaemon = false
+					m.promptStartService = false
+				}
+				break // block navigation while ops are running
 			}
 			m.screen = dbScreenSyncEnvList
 			m.selectedEnv = ""
