@@ -828,6 +828,8 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			pending := m.keyPending
 			m.keyPending = ""
 			m.resetArmed = false
+			m.deleteArmed = false
+			m.deleteEnvArmed = false
 			switch pending {
 			case "r":
 				env := m.currentEnv()
@@ -1103,6 +1105,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, profileKeys.enter):
+			m.deleteArmed = false
+			m.deleteEnvArmed = false
+			m.resetArmed = false
+			m.keyPending = ""
 			if m.isPortForwardEnv() {
 				return m.handleForwardToggle()
 			}
@@ -1207,6 +1213,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, profileKeys.start):
+			m.deleteArmed = false
+			m.deleteEnvArmed = false
+			m.resetArmed = false
+			m.keyPending = ""
 			env := m.currentEnv()
 			if env != nil {
 				if !m.dockerAvailable {
@@ -1250,6 +1260,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, profileKeys.stop):
+			m.deleteArmed = false
+			m.deleteEnvArmed = false
+			m.resetArmed = false
+			m.keyPending = ""
 			env := m.currentEnv()
 			if env != nil {
 				if m.isPortForwardEnv() {
@@ -1288,6 +1302,8 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, profileKeys.resetVol):
+			m.deleteArmed = false
+			m.deleteEnvArmed = false
 			env := m.currentEnv()
 			if env == nil {
 				break
@@ -1489,6 +1505,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 
 		case key.Matches(msg, profileKeys.pull):
+			m.deleteArmed = false
+			m.deleteEnvArmed = false
+			m.resetArmed = false
+			m.keyPending = ""
 			if m.isPortForwardEnv() {
 				break
 			}
@@ -1514,6 +1534,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 
 		case key.Matches(msg, profileKeys.shell):
+			m.deleteArmed = false
+			m.deleteEnvArmed = false
+			m.resetArmed = false
+			m.keyPending = ""
 			if m.isPortForwardEnv() {
 				break
 			}

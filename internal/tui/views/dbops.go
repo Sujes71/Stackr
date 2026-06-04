@@ -556,6 +556,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, dbOpsEnter) && len(m.pendingOps) == 0 && !m.promptStartService:
+			m.deleteActionArmed = false
 			if m.actionCursor < len(m.actions) {
 				act := m.actions[m.actionCursor]
 				if act.enabled {
@@ -602,6 +603,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, dbOpsEdit) && len(m.pendingOps) == 0 && !m.promptStartService:
+			m.deleteActionArmed = false
 			if m.actionCursor < len(m.actions) {
 				act := m.actions[m.actionCursor]
 				if act.isCustom {

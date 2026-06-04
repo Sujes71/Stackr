@@ -261,6 +261,8 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, textinput.Blink
 
 		case key.Matches(msg, homeKeys.export):
+			m.deleteArmed = false
+			m.importDeleteArmed = false
 			if len(m.profiles) == 0 || m.cursor >= len(m.profiles) {
 				break
 			}

@@ -743,6 +743,8 @@ func (m *AddServiceModel) handleTagSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *AddServiceModel) handlePorts(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, addSvcUpField), key.Matches(msg, addSvcDownField):
+		m.portsDeleteArmed = false
+		m.resetArmed = false
 		if m.portHost.Focused() {
 			m.portHost.Blur()
 			m.portContainer.Focus()
@@ -837,6 +839,7 @@ func (m *AddServiceModel) handleEnvVars(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, addSvcUpField), key.Matches(msg, addSvcDownField):
 		m.envVarsDeleteArmed = false
+		m.resetArmed = false
 		if m.envFocus == 0 {
 			m.envFocus = 1
 			m.envKey.Blur()
@@ -948,6 +951,8 @@ func (m *AddServiceModel) resolveVolumeTarget() string {
 func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, addSvcUpField), key.Matches(msg, addSvcDownField):
+		m.volumesDeleteArmed = false
+		m.resetArmed = false
 		// Only one input now — tab just focuses source
 		return m, nil
 	case key.Matches(msg, addSvcToggle):
@@ -957,6 +962,7 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.updateActiveInput(msg)
 		}
 		m.volumesDeleteArmed = false
+		m.resetArmed = false
 		m.volNamed = !m.volNamed
 		if m.volNamed && m.volSource.Value() == "" {
 			// Auto-generate a name when toggling to named volume
