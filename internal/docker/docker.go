@@ -3,6 +3,7 @@ package docker
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -115,7 +116,7 @@ func Status(profileName, envName string) ([]ServiceStatus, error) {
 	args := composeArgs(profileName, envName, "ps", "--format", "json")
 	out, err := exec.Command("docker", args...).Output()
 	if err != nil {
-		return []ServiceStatus{}, nil
+		return []ServiceStatus{}, friendlyError(err, string(out))
 	}
 	var statuses []ServiceStatus
 	scanner := bufio.NewScanner(strings.NewReader(string(out)))
@@ -124,28 +125,27 @@ func Status(profileName, envName string) ([]ServiceStatus, error) {
 		if line == "" {
 			continue
 		}
+		var raw map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			continue
+		}
 		statuses = append(statuses, ServiceStatus{
-			Name:   extractJSON(line, "Name"),
-			State:  extractJSON(line, "State"),
-			Ports:  extractJSON(line, "Publishers"),
-			Health: extractJSON(line, "Health"),
+			Name:   jsonString(raw, "Name"),
+			State:  jsonString(raw, "State"),
+			Ports:  jsonString(raw, "Publishers"),
+			Health: jsonString(raw, "Health"),
 		})
 	}
 	return statuses, nil
 }
 
-func extractJSON(s, key string) string {
-	search := fmt.Sprintf(`"%s":"`, key)
-	idx := strings.Index(s, search)
-	if idx < 0 {
-		return ""
+func jsonString(m map[string]interface{}, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
 	}
-	start := idx + len(search)
-	end := strings.Index(s[start:], `"`)
-	if end < 0 {
-		return ""
-	}
-	return s[start : start+end]
+	return ""
 }
 
 func Up(profileName, envName string) error {
@@ -160,8 +160,14 @@ func Down(profileName, envName string) error {
 	return runDocker(composeArgs(profileName, envName, "down")...)
 }
 
-func DownService(profileName, envName, serviceName string) error {
+func StopService(profileName, envName, serviceName string) error {
 	return runDocker(composeArgs(profileName, envName, "stop", serviceName)...)
+}
+
+// Deprecated: Use StopService instead. DownService only stops the container,
+// it does NOT remove it despite the misleading name.
+func DownService(profileName, envName, serviceName string) error {
+	return StopService(profileName, envName, serviceName)
 }
 
 func RmService(profileName, envName, serviceName string) error {
@@ -426,8 +432,19 @@ func ContainerReady(container, dbType string) bool {
 	case "postgres":
 		return exec.Command("docker", "exec", container, "pg_isready", "-q").Run() == nil
 	case "mongo":
-		user, _ := ContainerEnv(container, "MONGO_INITDB_ROOT_USERNAME")
-		pass, _ := ContainerEnv(container, "MONGO_INITDB_ROOT_PASSWORD")
+		// Read env vars using `sh -c 'echo $VAR'` instead of `printenv`
+		// so that undefined variables return empty string without error.
+		readEnv := func(envVar string) string {
+			out, err := exec.Command("docker", "exec", container, "sh", "-c",
+				fmt.Sprintf("echo ${%s:-}", envVar)).Output()
+			if err != nil {
+				return ""
+			}
+			return strings.TrimSpace(string(out))
+		}
+		user := readEnv("MONGO_INITDB_ROOT_USERNAME")
+		pass := readEnv("MONGO_INITDB_ROOT_PASSWORD")
+
 		// Try mongosh first, fall back to mongo
 		shell := "mongosh"
 		if _, err := ContainerExec(container, "which", "mongosh"); err != nil {

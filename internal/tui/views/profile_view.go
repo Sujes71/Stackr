@@ -178,6 +178,10 @@ type svcRmDoneMsg struct {
 	svcName string
 }
 
+type resetAllDoneMsg struct {
+	envName string
+}
+
 func ClearActionAfter(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(t time.Time) tea.Msg {
 		return ClearActionMsg{}
@@ -581,6 +585,20 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rememberCurrentEnvSelection()
 		return m, m.loadStatus()
 
+	case resetAllDoneMsg:
+		m.StopAllLocalProcesses()
+		updated, err := m.cfg.ClearServices(m.profile.Name, msg.envName)
+		if err != nil {
+			return m, m.loadStatus()
+		}
+		m.profile = updated
+		if _, err := config.GenerateCompose(*m.profile, msg.envName); err != nil {
+			return m, m.loadStatus()
+		}
+		m.cursor = 0
+		m.rememberCurrentEnvSelection()
+		return m, m.loadStatus()
+
 	case spinnerTickMsg:
 		if len(m.pendingOps) > 0 || m.dockerStarting {
 			m.spinnerFrame++
@@ -769,21 +787,11 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.keyPending = ""
 						return m, nil
 					}
-					go func() {
-						_ = docker.Down(m.profile.Name, env.Name)
-					}()
-					m.StopAllLocalProcesses()
-					updated, err := m.cfg.ClearServices(m.profile.Name, env.Name)
-					if err != nil {
-						return m, m.loadStatus()
+					envName := env.Name
+					return m, func() tea.Msg {
+						_ = docker.Down(m.profile.Name, envName)
+						return resetAllDoneMsg{envName: envName}
 					}
-					m.profile = updated
-					if _, err := config.GenerateCompose(*m.profile, env.Name); err != nil {
-						return m, m.loadStatus()
-					}
-					m.cursor = 0
-					m.rememberCurrentEnvSelection()
-					return m, m.loadStatus()
 
 				case "v":
 					// rv → reset volumes (Docker only)
@@ -1015,7 +1023,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.pendingOps[containerName] = "stop"
 						return m, tea.Batch(
 							func() tea.Msg {
-								_ = docker.DownService(m.profile.Name, envName, compName)
+								_ = docker.StopService(m.profile.Name, envName, compName)
 								return m.refreshStatus()
 							},
 							m.loadStatus(),
@@ -1158,7 +1166,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				for i := range env.Services {
 					svc := env.Services[i]
 					cmds = append(cmds, func() tea.Msg {
-						_ = docker.DownService(m.profile.Name, env.Name, svc.ComposeName())
+						_ = docker.StopService(m.profile.Name, env.Name, svc.ComposeName())
 						return m.refreshStatus()
 					})
 				}
