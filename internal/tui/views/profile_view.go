@@ -236,6 +236,16 @@ func (m *ProfileViewModel) executeDockerAction(action string) tea.Cmd {
 		return tea.Batch(
 			func() tea.Msg {
 				_ = docker.UpService(m.profile.Name, envName, compName)
+				// Stop every other service in the environment so only the
+				// toggled one stays running after Docker daemon comes up.
+				env := m.currentEnv()
+				if env != nil {
+					for _, svc := range env.Services {
+						if svc.ComposeName() != compName {
+							_ = docker.DownService(m.profile.Name, envName, svc.ComposeName())
+						}
+					}
+				}
 				return m.refreshStatus()
 			},
 			m.loadStatus(),

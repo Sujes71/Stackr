@@ -42,6 +42,11 @@ type serviceStartedMsg struct {
 	err error
 }
 
+// daemonStartedMsg is sent when Docker daemon launch completes.
+type daemonStartedMsg struct {
+	available bool
+}
+
 // readyRetryMsg is sent on each retry while waiting for the container to be ready.
 type readyRetryMsg struct {
 	label string
@@ -77,7 +82,9 @@ type DBOpsModel struct {
 
 	// Prompt state (start service before import/truncate)
 	promptStartService bool
-	pendingStartLabel  string // action label to execute after service starts
+	promptStartDaemon  bool   // Docker daemon needs to start before service
+	daemonStarting     bool   // true while Docker daemon is being launched
+	pendingStartLabel  string // action label to execute after service/service starts
 
 	// Running state — per-action inline spinners
 	pendingOps   map[string]string // action label → "starting" | "running"
@@ -406,6 +413,39 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 // ── Task 4.3: SyncEnv Actions screen ─────────────────────────────────────────
 
 func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Handle Docker daemon prompt (takes priority over service prompt)
+	if m.promptStartDaemon {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "y", "Y":
+				m.promptStartDaemon = false
+				m.daemonStarting = true
+				m.lastResult = ""
+				if m.pendingStartLabel != "" {
+					m.pendingOps[m.pendingStartLabel] = "starting"
+				}
+				return m, tea.Batch(
+					m.launchDockerCmd(),
+					spinnerCmd(),
+				)
+			case "n", "N", "esc":
+				m.promptStartDaemon = false
+				m.pendingOps = make(map[string]string)
+				m.pendingStartLabel = ""
+				return m, nil
+			}
+		}
+		return m, nil
+	}
+
+	// Block keys while Docker daemon is starting (system msgs still pass through)
+	if m.daemonStarting {
+		if _, ok := msg.(tea.KeyMsg); ok {
+			return m, nil
+		}
+	}
+
 	// Handle start-service prompt inline
 	if m.promptStartService {
 		switch msg := msg.(type) {
@@ -463,7 +503,8 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, dbOpsBack):
-			if len(m.pendingOps) > 0 {
+			if m.promptStartDaemon || len(m.pendingOps) > 0 {
+				m.promptStartDaemon = false
 				m.pendingOps = make(map[string]string)
 				m.pendingStartLabel = ""
 				m.promptStartService = false
@@ -627,6 +668,46 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastResult = ""
 		m.doneOp = ""
 
+	case daemonStartedMsg:
+		m.daemonStarting = false
+		if !msg.available {
+			m.pendingOps = make(map[string]string)
+			m.pendingStartLabel = ""
+			m.lastResult = formatErrorMsg("Docker daemon failed to start")
+			return m, nil
+		}
+		// Daemon is up — now start the service
+		svc := m.currentService()
+		if svc == nil {
+			m.pendingOps = make(map[string]string)
+			m.lastResult = styles.StyleError.Render("Service not found.")
+			return m, nil
+		}
+		if m.pendingStartLabel != "" {
+			m.pendingOps[m.pendingStartLabel] = "starting"
+		}
+		return m, tea.Batch(
+			func() tea.Msg {
+				err := docker.UpService(m.profile.Name, m.envName, svc.ComposeName())
+				if err != nil {
+					return serviceStartedMsg{err: err}
+				}
+				// Docker auto-starts containers with restart: unless-stopped
+				// when the daemon comes back up. Stop everything except the
+				// service we need for the pending action.
+				env := m.currentEnv()
+				if env != nil {
+					for _, s := range env.Services {
+						if s.ComposeName() != svc.ComposeName() {
+							_ = docker.DownService(m.profile.Name, m.envName, s.ComposeName())
+						}
+					}
+				}
+				return serviceStartedMsg{}
+			},
+			spinnerCmd(),
+		)
+
 	case serviceStartedMsg:
 		if msg.err != nil {
 			m.pendingOps = make(map[string]string)
@@ -732,7 +813,11 @@ func (m *DBOpsModel) updateCustomConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
 			if !m.isContainerRunning(container) {
 				m.confirmCustomAction = false
-				m.promptStartService = true
+				if !docker.DaemonAvailable() {
+					m.promptStartDaemon = true
+				} else {
+					m.promptStartService = true
+				}
 				m.pendingStartLabel = m.actions[m.actionCursor].label
 				return m, nil
 			}
@@ -765,7 +850,11 @@ func (m *DBOpsModel) updateCoreConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if act.group == "Import" || strings.Contains(act.label, "Truncate") {
 				container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
 				if !m.isContainerRunning(container) {
-					m.promptStartService = true
+					if !docker.DaemonAvailable() {
+						m.promptStartDaemon = true
+					} else {
+						m.promptStartService = true
+					}
 					m.pendingStartLabel = act.label
 					return m, nil
 				}
@@ -1077,7 +1166,11 @@ func (m *DBOpsModel) viewActions() string {
 		b.WriteString(styles.StyleError.Render("  Press d again to delete this custom action") + "\n")
 	}
 
-	if m.promptStartService {
+	if m.promptStartDaemon {
+		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+		b.WriteString(styles.StyleError.Render("  Docker daemon is not running.") + "\n")
+		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
+	} else if m.promptStartService {
 		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 		b.WriteString(styles.StyleError.Render("  Service '" + m.serviceName + "' is not running.") + "\n")
 		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
@@ -1413,6 +1506,19 @@ func (m *DBOpsModel) truncateTables(se *config.SyncEnv) tea.Cmd {
 }
 
 // isContainerRunning checks if the given container is running via docker status.
+// launchDockerCmd tries to start the Docker daemon via Colima or Docker Desktop.
+func (m *DBOpsModel) launchDockerCmd() tea.Cmd {
+	return func() tea.Msg {
+		if _, err := exec.LookPath("colima"); err == nil {
+			_ = exec.Command("colima", "start").Run()
+		} else {
+			_ = exec.Command("open", "-a", "Docker").Run()
+		}
+		time.Sleep(2 * time.Second)
+		return daemonStartedMsg{available: docker.DaemonAvailable()}
+	}
+}
+
 func (m *DBOpsModel) isContainerRunning(container string) bool {
 	statuses, err := docker.Status(m.profile.Name, m.envName)
 	if err != nil {
