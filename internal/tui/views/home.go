@@ -177,6 +177,10 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.importCursor >= len(m.importFiles) && m.importCursor > 0 {
 					m.importCursor--
 				}
+				if len(m.importFiles) == 0 {
+					m.showImport = false
+					return m, nil
+				}
 				return m, nil
 			default:
 				m.importDeleteArmed = false
