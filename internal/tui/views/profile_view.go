@@ -317,9 +317,9 @@ func (m *ProfileViewModel) executeDockerAction(action string) tea.Cmd {
 var profileKeys = struct {
 	back, up, down, enter, start, stop, addSvc, svcDelete, dbOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort, viewConfig, stats, pull, shell key.Binding
 }{
-	back:           key.NewBinding(key.WithKeys("esc", "backspace")),
+	back:           key.NewBinding(key.WithKeys("esc")),
 	up:             key.NewBinding(key.WithKeys("up")),
-	down:           key.NewBinding(key.WithKeys("down", "j")),
+	down:           key.NewBinding(key.WithKeys("down")),
 	enter:          key.NewBinding(key.WithKeys("enter")),
 	start:          key.NewBinding(key.WithKeys("s")),
 	stop:           key.NewBinding(key.WithKeys("x")),

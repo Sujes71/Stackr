@@ -62,7 +62,7 @@ func GenerateCompose(profile Profile, envName string) (string, error) {
 				if v.Named {
 					volName := v.Source
 					if volName == "" {
-						volName = fmt.Sprintf("%s_%s_%s_data", profile.Name, envName, compName)
+						volName = fmt.Sprintf("%s_%s_%s_data", profile.Name, envName, strings.ReplaceAll(compName, "-", "_"))
 					}
 					b.WriteString(fmt.Sprintf("      - %s:%s\n", volName, v.Target))
 					namedVolumes[volName] = true

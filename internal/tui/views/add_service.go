@@ -81,9 +81,8 @@ type AddServiceModel struct {
 	// volumes editor
 	volSource          textinput.Model
 	volNamed           bool
-	volumes            []config.VolumeMapping
-	volumesDeleteArmed bool
-	defaultVolumes     []config.VolumeMapping // snapshot for reset on re-entry
+	volumes        []config.VolumeMapping
+	defaultVolumes []config.VolumeMapping // snapshot for reset on re-entry
 
 	// run command
 	runCmdName    textinput.Model
@@ -91,7 +90,9 @@ type AddServiceModel struct {
 	runCmdWorkDir textinput.Model
 	runCmdFocus   int // 0=name, 1=command, 2=workdir
 
-	err    string
+	// error shown inline by the step view
+	errInline bool
+	err     string
 	height int // terminal height, set via WindowSizeMsg
 }
 
@@ -334,7 +335,7 @@ var addSvcUp = key.NewBinding(key.WithKeys("up"))
 var addSvcDown = key.NewBinding(key.WithKeys("down"))
 var addSvcUpField = key.NewBinding(key.WithKeys("up"))
 var addSvcDownField = key.NewBinding(key.WithKeys("down"))
-var addSvcToggle = key.NewBinding(key.WithKeys("ctrl+t"))
+var addSvcToggle = key.NewBinding(key.WithKeys("tab"))
 var addSvcDelete = key.NewBinding(key.WithKeys("ctrl+d"))
 var addSvcReset = key.NewBinding(key.WithKeys("ctrl+r"))
 var addSvcTab = key.NewBinding(key.WithKeys("tab"))
@@ -378,7 +379,6 @@ func (m *AddServiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key.Matches(msg, addSvcBack) {
 		m.portsDeleteArmed = false
 		m.envVarsDeleteArmed = false
-		m.volumesDeleteArmed = false
 		m.resetArmed = false
 		if m.step == svcStepSource {
 				return m, func() tea.Msg {
@@ -951,37 +951,20 @@ func (m *AddServiceModel) resolveVolumeTarget() string {
 func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, addSvcUpField), key.Matches(msg, addSvcDownField):
-		m.volumesDeleteArmed = false
 		m.resetArmed = false
 		// Only one input now — tab just focuses source
 		return m, nil
 	case key.Matches(msg, addSvcToggle):
-		src := strings.TrimSpace(m.volSource.Value())
-		if src != "" {
-			// Typing in Source → let t through
-			return m.updateActiveInput(msg)
-		}
-		m.volumesDeleteArmed = false
 		m.resetArmed = false
 		m.volNamed = !m.volNamed
-		if m.volNamed && m.volSource.Value() == "" {
-			// Auto-generate a name when toggling to named volume
-			gen := m.profile.Name + "_" + strings.ReplaceAll(m.svc.Name, "-", "_") + "_data"
-			m.volSource.SetValue(gen)
-		} else if !m.volNamed && m.volSource.Value() != "" {
-			// Toggle back to bind mount — clear auto-generated name
-			src := strings.TrimSpace(m.volSource.Value())
-			if !strings.HasPrefix(src, "./") && !strings.HasPrefix(src, "/") {
-				m.volSource.SetValue("")
-			}
-		}
+		m.volSource.SetValue("")
 		return m, nil
 	case key.Matches(msg, addSvcNext):
 		src := strings.TrimSpace(m.volSource.Value())
 		if src != "" {
 			// Validate: bind mount needs a path-like source
 			if !m.volNamed && !strings.HasPrefix(src, "./") && !strings.HasPrefix(src, "/") && !strings.HasPrefix(src, "~") {
-				m.err = "bind mount source should start with ./ or / — use t to switch to named volume"
+				m.err = "bind mount source should start with ./ or / — press tab to switch to named volume"
 				return m, nil
 			}
 			// Resolve target automatically from image
@@ -1008,41 +991,23 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				})
 			}
 			m.err = ""
-			m.volumesDeleteArmed = false
 			m.resetArmed = false
 			m.volSource.SetValue("")
 			m.volSource.Focus()
 			return m, nil
 		}
 		// Empty source → advance to next step
-		m.volumesDeleteArmed = false
 		m.resetArmed = false
 		m.svc.Volumes = m.volumes
 		m.err = ""
 		m.step = svcStepReview
-	case key.Matches(msg, addSvcDelete):
-		src := strings.TrimSpace(m.volSource.Value())
-		if src != "" {
-			m.volumesDeleteArmed = false
-			return m.updateActiveInput(msg)
-		}
-		if len(m.volumes) <= 1 {
-			return m, nil
-		}
-		if !m.volumesDeleteArmed {
-			m.volumesDeleteArmed = true
-			return m, nil
-		}
-		// Second d: remove last volume
-		m.volumesDeleteArmed = false
-		m.resetArmed = false
-		m.volumes = m.volumes[:len(m.volumes)-1]
-		return m, nil
 	case key.Matches(msg, addSvcReset):
-		src := strings.TrimSpace(m.volSource.Value())
-		if src != "" {
-			m.resetArmed = false
-			return m.updateActiveInput(msg)
+		if !m.volNamed {
+			src := strings.TrimSpace(m.volSource.Value())
+			if src != "" {
+				m.resetArmed = false
+				return m.updateActiveInput(msg)
+			}
 		}
 		if len(m.defaultVolumes) == 0 {
 			return m, nil
@@ -1056,7 +1021,6 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.volumes = append([]config.VolumeMapping{}, m.defaultVolumes...)
 		return m, nil
 	}
-	m.volumesDeleteArmed = false
 	m.resetArmed = false
 	return m.updateActiveInput(msg)
 }
@@ -1196,6 +1160,7 @@ func (m *AddServiceModel) viewRunCommand() string {
 	b.WriteString("\n")
 	b.WriteString(styles.BackHelp(
 		styles.HelpItem("↑ ↓", "field"),
+		styles.HelpItem("↵", "save"),
 	) + "\n")
 	return b.String()
 }
@@ -1303,6 +1268,7 @@ func (m *AddServiceModel) updateActiveInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 // ── View ─────────────────────────────────────────────────────────────────────
 
 func (m *AddServiceModel) View() string {
+	m.errInline = false
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(styles.StyleTitle.Render(fmt.Sprintf(" Add Service → %s / %s ", m.profile.Name, m.envName)))
@@ -1331,7 +1297,7 @@ func (m *AddServiceModel) View() string {
 		b.WriteString(m.viewReview())
 	}
 
-	if m.err != "" {
+	if m.err != "" && !m.errInline {
 		b.WriteString("\n" + styles.StyleError.Render("  ✗ "+m.err) + "\n")
 	}
 	return b.String()
@@ -1726,7 +1692,8 @@ func (m *AddServiceModel) viewVolumes() string {
 	for _, v := range m.volumes[win.start:win.end] {
 		source := v.Source
 		if v.Named && source == "" {
-			source = fmt.Sprintf("%s_%s_%s_data", m.profile.Name, m.envName, m.svc.Name)
+			srcName := m.svc.ComposeName()
+			source = fmt.Sprintf("%s_%s_%s_data", m.profile.Name, m.envName, srcName)
 		}
 		b.WriteString(fmt.Sprintf("    %s → %s\n", source, v.Target))
 	}
@@ -1734,29 +1701,23 @@ func (m *AddServiceModel) viewVolumes() string {
 		b.WriteString(styles.StyleSubtitle.Render("  Press ↵ on an empty source to continue."))
 		b.WriteString("\n")
 	}
-	if m.volumesDeleteArmed {
-		b.WriteString(styles.StyleError.Render("  Press ctrl+d again to confirm removal"))
-		b.WriteString("\n")
-	}
 	if m.resetArmed {
 		b.WriteString(styles.StyleError.Render("  Press ctrl+r again to reset to defaults"))
 		b.WriteString("\n")
 	}
-	var actItems []styles.HelpItemResult
-	if len(m.volumes) > 1 {
-		actItems = append(actItems, styles.HelpItem("ctrl+d ctrl+d", "remove last"))
-	}
-	if m.volumesCanReset() {
-		actItems = append(actItems, styles.HelpItem("ctrl+r ctrl+r", "reset"))
+	if m.err != "" {
+		b.WriteString(styles.StyleError.Render("  ✗ "+m.err) + "\n")
+		m.errInline = true
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Manage", Items: actItems},
-	))
-	if len(actItems) > 0 {
-		b.WriteString("\n")
+	helpItems := []styles.HelpItemResult{
+		styles.HelpItem("tab", "change type"),
 	}
-	b.WriteString(styles.BackHelp(styles.HelpItem("↵", "select")))
+	if m.volumesCanReset() {
+		helpItems = append(helpItems, styles.HelpItem("ctrl+r ctrl+r", "reset"))
+	}
+	helpItems = append(helpItems, styles.HelpItem("↵", "continue"))
+	b.WriteString(styles.BackHelp(helpItems...))
 	return b.String()
 }
 
