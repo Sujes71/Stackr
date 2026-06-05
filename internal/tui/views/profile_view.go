@@ -623,6 +623,9 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if op == "starting" && (state == "running" || state == "starting") {
 					delete(m.pendingOps, key)
 				}
+				if op == "starting" && state == "exited" {
+					delete(m.pendingOps, key)
+				}
 				if op == "stopping" && (state == "" || state == "stopped" || state == "exited") {
 					delete(m.pendingOps, key)
 				}
@@ -1142,14 +1145,14 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					envName := env.Name
 					compName := svc.ComposeName()
 					containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, envName, compName)
-					isRunning := false
+					isActive := false
 					for _, st := range m.statuses {
-						if st.Name == containerName && st.State == "running" {
-							isRunning = true
+						if st.Name == containerName && (st.State == "running" || st.State == "starting" || st.State == "restarting") {
+							isActive = true
 							break
 						}
 					}
-					if isRunning {
+					if isActive {
 						m.pendingOps[containerName] = "stopping"
 						return m, tea.Batch(
 							func() tea.Msg {
