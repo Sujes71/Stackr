@@ -73,7 +73,7 @@ type ProfileViewModel struct {
 	statsData      string
 
 	// ── Batch Spinner ──
-	pendingOps   map[string]string // containerName → "start" | "stop"
+	pendingOps   map[string]string // containerName → op label ("starting"|"stopping"|etc)
 	spinnerFrame int
 
 	// ── Docker Daemon Detection ──
@@ -151,10 +151,11 @@ func (m *ProfileViewModel) SetSize(w, h int) {
 }
 
 type statusLoadedMsg struct {
-	statuses       []docker.ServiceStatus
-	err            string
-	daemonAvailable bool
-	envName        string // which env these statuses belong to; "" means "current active env"
+	statuses         []docker.ServiceStatus
+	err              string
+	daemonAvailable  bool
+	envName          string // which env these statuses belong to; "" means "current active env"
+	fromLaunch       bool   // true when this result is from launchDockerCmd() completion
 }
 
 // ── Container name helper ───────────────────────────────────────────────
@@ -249,6 +250,7 @@ func (m *ProfileViewModel) launchDockerCmd() tea.Cmd {
 			err:             m.statusErr,
 			daemonAvailable: docker.DaemonAvailable(),
 			envName:         envName,
+			fromLaunch:      true,
 		}
 	}
 }
@@ -268,7 +270,7 @@ func (m *ProfileViewModel) executeDockerAction(action string) tea.Cmd {
 		}
 		envName, compName := envComp[0], envComp[1]
 		cn := containerName(m.profile.Name, envName, compName)
-		m.pendingOps[cn] = "start"
+		m.pendingOps[cn] = "starting"
 		return tea.Batch(
 			func() tea.Msg {
 				_ = docker.UpService(m.profile.Name, envName, compName)
@@ -294,10 +296,10 @@ func (m *ProfileViewModel) executeDockerAction(action string) tea.Cmd {
 		for i := range env.Services {
 			svc := env.Services[i]
 			cn := containerName(m.profile.Name, env.Name, svc.ComposeName())
-			m.pendingOps[cn] = "start"
+			m.pendingOps[cn] = "starting"
 		}
 		for i := range env.LocalProcesses {
-			m.pendingOps["proc:"+env.LocalProcesses[i].Name] = "start"
+			m.pendingOps["proc:"+env.LocalProcesses[i].Name] = "starting"
 		}
 		m.startAllLocalProcesses(env)
 		var cmds []tea.Cmd
@@ -563,23 +565,23 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		isForActiveEnv := msg.envName == "" || msg.envName == currentEnvName
 
-		if !isForActiveEnv {
-			// Don't cache — the statuses were saved when the user left this
-			// env (in the switch handler). On return, the switch handler's
-			// loadStatus() will refresh. This ensures the user sees the
-			// last-known state + pendingOps spinner, then the smooth
-			// transition to the updated state.
-			m.dockerAvailable = msg.daemonAvailable
+		// Only clear dockerStarting when the launch command itself completes
+		// or when Docker is already available (e.g. user left and came back)
+		if msg.fromLaunch || (m.dockerStarting && msg.daemonAvailable) {
 			m.dockerStarting = false
+			m.dockerTargetContainers = make(map[string]bool)
+		}
+
+		if !isForActiveEnv {
+			m.dockerAvailable = msg.daemonAvailable
 			break
 		}
 
 		m.statuses = msg.statuses
 		m.statusErr = msg.err
 		m.dockerAvailable = msg.daemonAvailable
-		m.dockerStarting = false
-		m.dockerTargetContainers = make(map[string]bool)
-		if !msg.daemonAvailable {
+		if !msg.daemonAvailable && msg.fromLaunch {
+			// Docker start failed — clear the pending action
 			m.pendingDockerAction = ""
 		}
 		m.ensureValidSelection()
@@ -594,15 +596,15 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if strings.HasPrefix(key, "proc:") {
 				procName := strings.TrimPrefix(key, "proc:")
 				running := m.isLocalProcRunning(procName)
-				if (op == "start" && running) || (op == "stop" && !running) {
+				if (op == "starting" && running) || (op == "stopping" && !running) {
 					delete(m.pendingOps, key)
 				}
 			} else if strings.HasPrefix(key, "pf:") {
 				fwdName := strings.TrimPrefix(key, "pf:")
 				for _, h := range m.currentForwards() {
 					if h.Config.Name == fwdName {
-						if (op == "start" && (h.State == portforward.ForwardRunning || h.State == portforward.ForwardFailed)) ||
-							(op == "stop" && (h.State == portforward.ForwardStopped || h.State == portforward.ForwardFailed)) {
+						if (op == "starting" && (h.State == portforward.ForwardRunning || h.State == portforward.ForwardFailed)) ||
+							(op == "stopping" && (h.State == portforward.ForwardStopped || h.State == portforward.ForwardFailed)) {
 							delete(m.pendingOps, key)
 						}
 						break
@@ -618,10 +620,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				state := statusMap[key]
-				if op == "start" && (state == "running" || state == "starting") {
+				if op == "starting" && (state == "running" || state == "starting") {
 					delete(m.pendingOps, key)
 				}
-				if op == "stop" && (state == "" || state == "stopped" || state == "exited") {
+				if op == "stopping" && (state == "" || state == "stopped" || state == "exited") {
 					delete(m.pendingOps, key)
 				}
 				if op == "pulling" {
@@ -818,9 +820,18 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// ── Block ALL keys while Docker daemon is starting ────
+		// ── Allow navigation while Docker daemon is starting ──
 		if m.dockerStarting {
-			break
+			switch {
+			case key.Matches(msg, profileKeys.up),
+				key.Matches(msg, profileKeys.down),
+				key.Matches(msg, profileKeys.switchEnvLeft),
+				key.Matches(msg, profileKeys.switchEnvRight),
+				msg.String() == "?":
+				// safe — navigation and help pass through
+			default:
+				break
+			}
 		}
 
 		// ── Pending key sequence ────────────────────────────────
@@ -1139,7 +1150,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 					if isRunning {
-						m.pendingOps[containerName] = "stop"
+						m.pendingOps[containerName] = "stopping"
 						return m, tea.Batch(
 							func() tea.Msg {
 								_ = docker.StopService(m.profile.Name, envName, compName)
@@ -1149,7 +1160,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							func() tea.Msg { return SpinnerTickMsg{} },
 						)
 					}
-					m.pendingOps[containerName] = "start"
+					m.pendingOps[containerName] = "starting"
 					return m, tea.Batch(
 						func() tea.Msg {
 							_ = docker.UpService(m.profile.Name, envName, compName)
@@ -1165,7 +1176,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if procIdx < len(env.LocalProcesses) {
 					proc := env.LocalProcesses[procIdx]
 					if m.isLocalProcRunning(proc.Name) {
-						m.pendingOps["proc:"+proc.Name] = "stop"
+						m.pendingOps["proc:"+proc.Name] = "stopping"
 						cmd := m.localProcesses[proc.Name]
 						return m, tea.Batch(
 							func() tea.Msg {
@@ -1181,7 +1192,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							func() tea.Msg { return SpinnerTickMsg{} },
 						)
 					}
-					m.pendingOps["proc:"+proc.Name] = "start"
+					m.pendingOps["proc:"+proc.Name] = "starting"
 					return m, tea.Batch(
 						func() tea.Msg {
 							if m.isLocalProcRunning(proc.Name) {
@@ -1228,7 +1239,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					envName := m.profile.Environments[m.activeEnv].Name
 					for _, h := range m.forwardHandles[envName] {
 						if h.State != portforward.ForwardRunning && h.State != portforward.ForwardStarting {
-							m.pendingOps["pf:"+h.Config.Name] = "start"
+							m.pendingOps["pf:"+h.Config.Name] = "starting"
 						}
 					}
 					cmds := m.startEnvForwards(envName)
@@ -1239,10 +1250,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				for i := range env.Services {
 					svc := env.Services[i]
 					cn := containerName(m.profile.Name, env.Name, svc.ComposeName())
-					m.pendingOps[cn] = "start"
+					m.pendingOps[cn] = "starting"
 				}
 				for i := range env.LocalProcesses {
-					m.pendingOps["proc:"+env.LocalProcesses[i].Name] = "start"
+					m.pendingOps["proc:"+env.LocalProcesses[i].Name] = "starting"
 				}
 				// Start ALL local processes at once (non-blocking)
 				m.startAllLocalProcesses(env)
@@ -1270,7 +1281,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					envName := m.profile.Environments[m.activeEnv].Name
 					for _, h := range m.forwardHandles[envName] {
 						if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
-							m.pendingOps["pf:"+h.Config.Name] = "stop"
+							m.pendingOps["pf:"+h.Config.Name] = "stopping"
 						}
 					}
 					cmds := m.stopEnvForwards(envName)
@@ -1281,10 +1292,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				for i := range env.Services {
 					svc := env.Services[i]
 					cn := containerName(m.profile.Name, env.Name, svc.ComposeName())
-					m.pendingOps[cn] = "stop"
+					m.pendingOps[cn] = "stopping"
 				}
 				for i := range env.LocalProcesses {
-					m.pendingOps["proc:"+env.LocalProcesses[i].Name] = "stop"
+					m.pendingOps["proc:"+env.LocalProcesses[i].Name] = "stopping"
 				}
 				// Stop ALL local processes at once
 				m.StopAllLocalProcesses()
@@ -2944,7 +2955,7 @@ func (m *ProfileViewModel) handleForwardToggle() (tea.Model, tea.Cmd) {
 	envName := m.profile.Environments[m.activeEnv].Name
 
 	if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
-		m.pendingOps["pf:"+h.Config.Name] = "stop"
+		m.pendingOps["pf:"+h.Config.Name] = "stopping"
 		return m, tea.Batch(
 			func() tea.Msg {
 				h.Stop()
@@ -2956,7 +2967,7 @@ func (m *ProfileViewModel) handleForwardToggle() (tea.Model, tea.Cmd) {
 	}
 
 	// Start (Stopped or Failed)
-	m.pendingOps["pf:"+h.Config.Name] = "start"
+	m.pendingOps["pf:"+h.Config.Name] = "starting"
 	return m, tea.Batch(
 		func() tea.Msg {
 			h.Start()
