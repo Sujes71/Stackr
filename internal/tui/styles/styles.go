@@ -234,6 +234,12 @@ func Dot(state string) string {
 		c = ColorError // red
 	case "paused":
 		c = ColorAccent // orange
+	case "restarting":
+		c = ColorAccent // orange — visible alert that something is wrong
+	case "failed":
+		return lipgloss.NewStyle().
+			Foreground(ColorError).
+			Render("● Failed")
 	default:
 		c = ColorMuted // gray
 	}

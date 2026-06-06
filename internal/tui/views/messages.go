@@ -63,8 +63,12 @@ type statsResultMsg struct {
 	err  string
 }
 
+// ── Status Refresh Messages ──
+
+// statusRefreshTickMsg is sent periodically (every 3s) to refresh Docker
+// service status for the current environment while the profile view is active.
+type statusRefreshTickMsg struct{}
+
 // ── Spinner Messages ──
 
 type SpinnerTickMsg struct{}
-
-

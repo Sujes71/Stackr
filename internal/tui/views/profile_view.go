@@ -86,6 +86,13 @@ type ProfileViewModel struct {
 	// statusCache preserves Docker statuses per env so switching back shows
 	// the previous state immediately while loadStatus() refreshes in background.
 	statusCache map[string][]docker.ServiceStatus // envName → statuses
+
+	// ── Crash-loop Tracking ──
+	// unstableSince is set when a container is first seen in "restarting" state.
+	// After 15 continuous seconds of instability, the container is stopped and
+	// marked as failedContainers so the user can manually restart it.
+	unstableSince    map[string]time.Time // containerName → first restart detection
+	failedContainers map[string]bool      // containerName → stopped due to crash-loop
 }
 
 type ProfileEnvState struct {
@@ -123,6 +130,8 @@ func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
 		dockerTargetContainers: make(map[string]bool),
 		dockerAvailable:        true,
 		statusCache:            make(map[string][]docker.ServiceStatus),
+		unstableSince:          make(map[string]time.Time),
+		failedContainers:       make(map[string]bool),
 	}
 	// set activeEnv to the profile's saved active env
 	for i, env := range p.Environments {
@@ -176,6 +185,17 @@ func (m *ProfileViewModel) renderSpinnerDot(op string) string {
 	c := styles.ColorAccent
 	frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
 	return lipgloss.NewStyle().Foreground(c).Render(fmt.Sprintf("%s %s", frame, op))
+}
+
+// ── Periodic Status Refresh ──
+
+// statusRefreshTick returns a tea.Cmd that fires statusRefreshTickMsg every 3s.
+// It is started from Init() and ReShow() and re-scheduled on each tick, so the
+// status is continuously refreshed while the profile view is active.
+func statusRefreshTick() tea.Cmd {
+	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+		return statusRefreshTickMsg{}
+	})
 }
 
 type ClearActionMsg struct{}
@@ -233,7 +253,9 @@ func (m *ProfileViewModel) refreshStatusForEnv(envName string) tea.Msg {
 }
 
 // launchDockerCmd tries to start the Docker daemon via Colima or Docker Desktop.
-func (m *ProfileViewModel) launchDockerCmd() tea.Cmd {
+// envName is captured at creation time so fromLaunch carries the correct env
+// regardless of env switches during the 2-second startup delay.
+func (m *ProfileViewModel) launchDockerCmd(envName string) tea.Cmd {
 	return func() tea.Msg {
 		if _, err := exec.LookPath("colima"); err == nil {
 			exec.Command("colima", "start").Run()
@@ -241,10 +263,6 @@ func (m *ProfileViewModel) launchDockerCmd() tea.Cmd {
 			exec.Command("open", "-a", "Docker").Run()
 		}
 		time.Sleep(2 * time.Second)
-		envName := ""
-		if m.activeEnv < len(m.profile.Environments) {
-			envName = m.profile.Environments[m.activeEnv].Name
-		}
 		return statusLoadedMsg{
 			statuses:        m.statuses,
 			err:             m.statusErr,
@@ -289,7 +307,22 @@ func (m *ProfileViewModel) executeDockerAction(action string) tea.Cmd {
 			func() tea.Msg { return SpinnerTickMsg{} },
 		)
 	case "stack-all":
-		env := m.currentEnv()
+		envName := ""
+		if len(parts) > 1 {
+			envName = parts[1]
+		}
+		var env *config.Environment
+		if envName != "" {
+			for i := range m.profile.Environments {
+				if m.profile.Environments[i].Name == envName {
+					env = &m.profile.Environments[i]
+					break
+				}
+			}
+		}
+		if env == nil {
+			env = m.currentEnv()
+		}
 		if env == nil {
 			return nil
 		}
@@ -345,7 +378,7 @@ func (m *ProfileViewModel) Init() tea.Cmd {
 	m.ensureValidSelection()
 	m.recoverOrphanProcesses()
 	var cmds []tea.Cmd
-	cmds = append(cmds, m.loadStatus())
+	cmds = append(cmds, m.loadStatus(), statusRefreshTick())
 	if m.isPortForwardEnv() {
 		m.buildForwardHandles()
 		cmds = append(cmds, portforward.ForwardMonitorCmd())
@@ -363,7 +396,7 @@ func (m *ProfileViewModel) ReShow(cfg *config.Config) tea.Cmd {
 	m.deleteEnvArmed = false
 	m.resetArmed = false
 	m.keyPending = ""
-	return tea.Batch(m.loadStatus(), spinnerCmd())
+	return tea.Batch(m.loadStatus(), spinnerCmd(), statusRefreshTick())
 }
 
 // IsBusy returns true when there are pending operations.
@@ -557,6 +590,21 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	defer m.rememberCurrentEnvSelection()
 
 	switch msg := msg.(type) {
+	case statusRefreshTickMsg:
+		// Periodic status refresh — keeps crash-loop detection running
+		// even when the user is idle on the profile view.
+		envName := ""
+		if m.activeEnv < len(m.profile.Environments) {
+			envName = m.profile.Environments[m.activeEnv].Name
+		}
+		if envName == "" {
+			return m, statusRefreshTick()
+		}
+		return m, tea.Batch(
+			func() tea.Msg { return m.refreshStatusForEnv(envName) },
+			statusRefreshTick(),
+		)
+
 	case statusLoadedMsg:
 		// Determine if this status update is for the current active env
 		currentEnvName := ""
@@ -572,8 +620,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.dockerTargetContainers = make(map[string]bool)
 		}
 
-		if !isForActiveEnv {
-			m.dockerAvailable = msg.daemonAvailable
+		// Non-active env messages are stale — ignore completely.
+		// fromLaunch bypasses: it is the authoritative Docker state signal
+		// and must reach the pendingDockerAction executor below.
+		if !isForActiveEnv && !msg.fromLaunch {
 			break
 		}
 
@@ -586,6 +636,49 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.ensureValidSelection()
 		m.rebuildDisplayOrders()
+
+		// ── Crash-loop detection ──
+		// Tracks containers that are restarting or oscillating between
+		// running/restarting. After 15s of instability, stop the container
+		// and mark it as failed so the user can manually restart it.
+		var stopCmds []tea.Cmd
+		if currentEnvName != "" {
+			envPrefix := fmt.Sprintf("stackr-%s-%s-", m.profile.Name, currentEnvName)
+			for _, st := range m.statuses {
+				if !strings.HasPrefix(st.Name, envPrefix) {
+					continue
+				}
+				switch st.State {
+				case "restarting":
+					if _, ok := m.unstableSince[st.Name]; !ok {
+						m.unstableSince[st.Name] = time.Now()
+					} else if time.Since(m.unstableSince[st.Name]) >= 15*time.Second {
+						// 15s of instability → stop and mark failed
+						m.failedContainers[st.Name] = true
+						delete(m.unstableSince, st.Name)
+						delete(m.pendingOps, st.Name)
+						compName := strings.TrimPrefix(st.Name, envPrefix)
+						stopCmds = append(stopCmds, func() tea.Msg {
+							_ = docker.StopService(m.profile.Name, currentEnvName, compName)
+							return m.refreshStatusForEnv(currentEnvName)
+						})
+					}
+				case "running":
+					if t, ok := m.unstableSince[st.Name]; ok {
+						if time.Since(t) >= 15*time.Second {
+							delete(m.unstableSince, st.Name) // stable now
+						}
+						// else: within 15s window — view will override to "restarting"
+					}
+				case "exited":
+					// Container crashed — keep unstableSince tracking active.
+					// "exited" is part of the crash-loop cycle (running → exited → restarting)
+					// and must NOT clear the instability timer.
+				case "", "stopped":
+					delete(m.unstableSince, st.Name)
+				}
+			}
+		}
 
 		// Resolve pending ops against actual status
 		statusMap := map[string]string{}
@@ -642,7 +735,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pendingDockerAction != "" && m.dockerAvailable {
 			action := m.pendingDockerAction
 			m.pendingDockerAction = ""
-			return m, m.executeDockerAction(action)
+			stopCmds = append(stopCmds, m.executeDockerAction(action))
+		}
+		if len(stopCmds) > 0 {
+			return m, tea.Batch(stopCmds...)
 		}
 
 	case svcRmDoneMsg:
@@ -792,6 +888,23 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "y", "Y":
 				m.promptStartDocker = false
 				m.dockerStarting = true
+				// Extract envName from the pending action so launchDockerCmd
+				// carries the original env even if user switches during startup.
+				launchEnv := ""
+				if strings.HasPrefix(m.pendingDockerAction, "toggle:") {
+					parts := strings.SplitN(m.pendingDockerAction, ":", 2)
+					if len(parts) >= 2 {
+						ec := strings.SplitN(parts[1], "/", 2)
+						if len(ec) >= 2 {
+							launchEnv = ec[0]
+						}
+					}
+				} else if strings.HasPrefix(m.pendingDockerAction, "stack-all:") {
+					parts := strings.SplitN(m.pendingDockerAction, ":", 2)
+					if len(parts) >= 2 {
+						launchEnv = parts[1]
+					}
+				}
 				// Populate target containers for spinner feedback
 				if strings.HasPrefix(m.pendingDockerAction, "toggle:") {
 					parts := strings.SplitN(m.pendingDockerAction, ":", 2)
@@ -802,17 +915,22 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.dockerTargetContainers[cn] = true
 						}
 					}
-				} else if m.pendingDockerAction == "stack-all" {
-					env := m.currentEnv()
-					if env != nil {
-						for _, svc := range env.Services {
-							cn := containerName(m.profile.Name, env.Name, svc.ComposeName())
-							m.dockerTargetContainers[cn] = true
+				} else if strings.HasPrefix(m.pendingDockerAction, "stack-all:") {
+					parts := strings.SplitN(m.pendingDockerAction, ":", 2)
+					if len(parts) >= 2 {
+						for _, e := range m.profile.Environments {
+							if e.Name == parts[1] {
+								for _, svc := range e.Services {
+									cn := containerName(m.profile.Name, e.Name, svc.ComposeName())
+									m.dockerTargetContainers[cn] = true
+								}
+								break
+							}
 						}
 					}
 				}
 				return m, tea.Batch(
-					m.launchDockerCmd(),
+					m.launchDockerCmd(launchEnv),
 					spinnerCmd(),
 				)
 			case "n", "N", "esc":
@@ -1145,6 +1263,22 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					envName := env.Name
 					compName := svc.ComposeName()
 					containerName := fmt.Sprintf("stackr-%s-%s-%s", m.profile.Name, envName, compName)
+
+					// If marked as failed, restart fresh
+					if m.failedContainers[containerName] {
+						delete(m.failedContainers, containerName)
+						delete(m.unstableSince, containerName)
+						m.pendingOps[containerName] = "starting"
+						return m, tea.Batch(
+							func() tea.Msg {
+								_ = docker.UpService(m.profile.Name, envName, compName)
+								return m.refreshStatusForEnv(envName)
+							},
+							func() tea.Msg { return m.refreshStatusForEnv(envName) },
+							func() tea.Msg { return SpinnerTickMsg{} },
+						)
+					}
+
 					isActive := false
 					for _, st := range m.statuses {
 						if st.Name == containerName && (st.State == "running" || st.State == "starting" || st.State == "restarting") {
@@ -1153,6 +1287,8 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 					if isActive {
+						delete(m.failedContainers, containerName)
+						delete(m.unstableSince, containerName)
 						m.pendingOps[containerName] = "stopping"
 						return m, tea.Batch(
 							func() tea.Msg {
@@ -1163,6 +1299,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							func() tea.Msg { return SpinnerTickMsg{} },
 						)
 					}
+					delete(m.unstableSince, containerName)
 					m.pendingOps[containerName] = "starting"
 					return m, tea.Batch(
 						func() tea.Msg {
@@ -1235,7 +1372,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if env != nil {
 				if !m.dockerAvailable {
 					m.promptStartDocker = true
-					m.pendingDockerAction = "stack-all"
+					m.pendingDockerAction = "stack-all:" + env.Name
 					break
 				}
 				if m.isPortForwardEnv() {
@@ -2166,6 +2303,11 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 			var dot string
 			if op, pending := m.pendingOps[containerName]; pending {
 				dot = m.renderSpinnerDot(op)
+			} else if m.failedContainers[containerName] {
+				dot = styles.Dot("failed")
+			} else if _, unstable := m.unstableSince[containerName]; unstable && st.State == "running" {
+				// Container is crash-looping — override Docker's "running" blip
+				dot = styles.Dot("restarting")
 			} else if !m.dockerAvailable && m.dockerTargetContainers[containerName] {
 				dot = m.renderSpinnerDot("starting")
 			} else if !m.dockerAvailable {
