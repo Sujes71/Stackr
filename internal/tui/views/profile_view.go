@@ -2077,6 +2077,12 @@ func (m *ProfileViewModel) View() string {
 			countStr := fmt.Sprintf("%d/%d running", running, total)
 			tabsLine = tabsLine + "  " + styles.StyleSubtitle.Render(countStr)
 		}
+		// Show K8s context inline with env tabs + counter for port-forward envs
+		if m.isPortForwardEnv() {
+			if ctx := m.knownForwardCtx(); ctx != "" {
+				tabsLine = tabsLine + "  " + styles.StyleSubtitle.Render("context: "+shortCtxName(ctx))
+			}
+		}
 	}
 	b.WriteString(tabsLine)
 	b.WriteString("\n\n")
@@ -2085,11 +2091,6 @@ func (m *ProfileViewModel) View() string {
 	if env == nil {
 		b.WriteString(styles.StyleSubtitle.Render("  No environments configured."))
 	} else if m.isPortForwardEnv() {
-		if ctx := m.knownForwardCtx(); ctx != "" {
-			b.WriteString("\n")
-			b.WriteString(styles.StyleSubtitle.Render("  context: " + shortCtxName(ctx)))
-			b.WriteString("\n\n")
-		}
 		if m.inDiscovery {
 			b.WriteString(m.renderDiscovery())
 		} else if m.editingPort {
