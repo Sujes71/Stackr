@@ -109,7 +109,7 @@ type ProfileNavState struct {
 func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
 	ti := textinput.New()
 	ti.Placeholder = "env name"
-	ti.CharLimit = 20
+	ti.CharLimit = 5
 	ti.Width = 12
 
 	portInput := textinput.New()
@@ -1057,6 +1057,11 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 
+				// Max 3 extra environments (beyond "local")
+				if m.extraEnvCount() >= 3 {
+					return m, nil
+				}
+
 				m.profile.Environments = append(m.profile.Environments, config.Environment{Name: name})
 				if err := m.cfg.UpdateProfile(*m.profile); err != nil {
 					return m, nil
@@ -1160,6 +1165,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, profileKeys.addEnv):
+			// Max 3 extra environments (beyond "local")
+			if m.extraEnvCount() >= 3 {
+				break
+			}
 			// In portforward mode, 'e' edits its local port; 'n' remains add env.
 			m.keyPending = ""
 			m.deleteArmed = false
@@ -1552,18 +1561,18 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.profile.Environments) == 0 {
 				break
 			}
+			envName := m.profile.Environments[m.activeEnv].Name
+			// "local" is the default env and cannot be deleted
+			if envName == "local" {
+				break
+			}
 			if !m.deleteEnvArmed {
 				m.deleteEnvArmed = true
 				return m, nil
 			}
 			// Second D: delete current environment
 			m.deleteEnvArmed = false
-			envName := m.profile.Environments[m.activeEnv].Name
-
-			// ⚠️ Prevent deletion of local environment
-			if envName == "local" {
-				return m, nil
-			}
+			envName = m.profile.Environments[m.activeEnv].Name
 
 			// Stop running forwards for this env
 			m.stopEnvForwardsNow(envName)
@@ -2190,13 +2199,29 @@ func (m *ProfileViewModel) View() string {
 func (m *ProfileViewModel) renderEnvTabs() string {
 	tabs := make([]string, len(m.profile.Environments))
 	for i, env := range m.profile.Environments {
+		name := env.Name
+		if len(name) > 5 {
+			name = name[:5]
+		}
 		if i == m.activeEnv {
-			tabs[i] = styles.StyleBadgeEnv.Render(" " + env.Name + " ")
+			tabs[i] = styles.StyleBadgeEnv.Render(" " + name + " ")
 		} else {
-			tabs[i] = styles.StyleBadgeEnvInactive.Render(" " + env.Name + " ")
+			tabs[i] = styles.StyleBadgeEnvInactive.Render(" " + name + " ")
 		}
 	}
 	return "  " + strings.Join(tabs, "  ")
+}
+
+// extraEnvCount returns the number of environments that are NOT "local".
+// "local" is the default env and cannot be removed.
+func (m *ProfileViewModel) extraEnvCount() int {
+	count := 0
+	for _, env := range m.profile.Environments {
+		if env.Name != "local" {
+			count++
+		}
+	}
+	return count
 }
 
 // serviceCardHeight returns the actual height (in terminal lines) of a
@@ -2697,7 +2722,9 @@ func (m *ProfileViewModel) renderDockerHelpBar() string {
 	}
 
 	var envItems, svcItems, stackItems []styles.HelpItemResult
-	envItems = append(envItems, styles.HelpItem("n", "new env"))
+	if m.extraEnvCount() < 3 {
+		envItems = append(envItems, styles.HelpItem("n", "new env"))
+	}
 	if len(m.profile.Environments) > 0 && m.currentEnv() != nil && m.currentEnv().Name != "local" {
 		envItems = append(envItems, styles.HelpItem("D D", "delete env"))
 	}
@@ -2736,7 +2763,9 @@ func (m *ProfileViewModel) renderDockerHelpBar() string {
 
 func (m *ProfileViewModel) renderPFHelpBar() string {
 	var envItems, pfItems, stackItems []styles.HelpItemResult
-	envItems = append(envItems, styles.HelpItem("n", "new env"))
+	if m.extraEnvCount() < 3 {
+		envItems = append(envItems, styles.HelpItem("n", "new env"))
+	}
 	if len(m.profile.Environments) > 0 && m.currentEnv() != nil && m.currentEnv().Name != "local" {
 		envItems = append(envItems, styles.HelpItem("D D", "delete env"))
 	}
@@ -2755,7 +2784,7 @@ func (m *ProfileViewModel) renderPFHelpBar() string {
 				break
 			}
 		}
-		stackItems = append(stackItems, styles.HelpItem("s", "start all"))
+		stackItems = append(stackItems, styles.HelpItem("s", "stack all"))
 		if hasRunning {
 			stackItems = append(stackItems, styles.HelpItem("x", "stop all"))
 		}
@@ -2884,7 +2913,7 @@ func (m *ProfileViewModel) renderShortcuts() string {
 		})
 
 		envCol := col("Env / Stack", []pair{
-			{"s", "start all"},
+			{"s", "stack all"},
 			{"x", "stop all"},
 			{"r r", "reset all"},
 			{"n", "add env"},
@@ -2909,7 +2938,7 @@ func (m *ProfileViewModel) renderShortcuts() string {
 	})
 
 	envCol := col("Env / Stack", []pair{
-		{"s", "start all"},
+		{"s", "stack all"},
 		{"x", "stop all"},
 		{"r r", "reset all"},
 		{"r v", "reset volumes"},
