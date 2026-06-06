@@ -239,7 +239,7 @@ func Dot(state string) string {
 	case "failed":
 		return lipgloss.NewStyle().
 			Foreground(ColorError).
-			Render("● Failed")
+			Render("● failed")
 	default:
 		c = ColorMuted // gray
 	}
