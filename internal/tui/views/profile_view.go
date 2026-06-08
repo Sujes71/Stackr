@@ -350,7 +350,7 @@ func (m *ProfileViewModel) executeDockerAction(action string) tea.Cmd {
 }
 
 var profileKeys = struct {
-	back, up, down, enter, start, stop, addSvc, svcDelete, dbOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort, viewConfig, stats, pull, shell key.Binding
+	back, up, down, enter, start, stop, addSvc, svcDelete, dbOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort, viewConfig, stats, pull, shell, tab key.Binding
 }{
 	back:           key.NewBinding(key.WithKeys("esc")),
 	up:             key.NewBinding(key.WithKeys("up")),
@@ -372,6 +372,7 @@ var profileKeys = struct {
 	stats:          key.NewBinding(key.WithKeys("t")),
 	pull:           key.NewBinding(key.WithKeys("p")),
 	shell:          key.NewBinding(key.WithKeys("h")),
+	tab:            key.NewBinding(key.WithKeys("tab")),
 }
 
 func (m *ProfileViewModel) Init() tea.Cmd {
@@ -872,8 +873,13 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.showingShortcuts {
+			if key.Matches(msg, profileKeys.tab) {
+				// Tab while showing → keep showing (no toggle, no timer)
+				return m, nil
+			}
+			// Any other key → dismiss overlay AND process the key normally
 			m.showingShortcuts = false
-			return m, nil
+			// fall through to the key handlers below
 		}
 		if m.showStats {
 			m.showStats = false
@@ -948,7 +954,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				key.Matches(msg, profileKeys.down),
 				key.Matches(msg, profileKeys.switchEnvLeft),
 				key.Matches(msg, profileKeys.switchEnvRight),
-				msg.String() == "?":
+				key.Matches(msg, profileKeys.tab):
 				// safe — navigation and help pass through
 			default:
 				break
@@ -1728,7 +1734,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return nil
 			})
 
-		case msg.String() == "?":
+		case key.Matches(msg, profileKeys.tab):
 			m.keyPending = ""; m.deleteArmed = false; m.deleteEnvArmed = false; m.resetArmed = false
 			m.showingShortcuts = true
 			return m, nil
@@ -2167,17 +2173,7 @@ func (m *ProfileViewModel) View() string {
 		b.WriteString("\n\n")
 	}
 
-	// ── Help bar ──
-	if m.inDiscovery || m.viewingService >= 0 || m.viewingProcess != "" || m.showStats {
-		// No help bar needed — discovery/config/stats have their own hints
-	} else if m.isPortForwardEnv() {
-		b.WriteString(m.renderPFHelpBar())
-	} else {
-		b.WriteString(m.renderDockerHelpBar())
-	}
-	if !m.inDiscovery && m.viewingService < 0 && m.viewingProcess == "" && !m.showStats {
-		b.WriteString("\n\n")
-	}
+	// ── Bottom hints ──
 	if m.inDiscovery {
 		b.WriteString("\n\n")
 		b.WriteString(styles.InlineHelp(styles.HelpItem("esc", "cancel")))
@@ -2189,7 +2185,7 @@ func (m *ProfileViewModel) View() string {
 		b.WriteString(styles.BackHelp(
 			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("← →", "envs"),
-			styles.HelpItem("?", "help"),
+			styles.HelpItem("tab", "command"),
 		))
 	}
 
@@ -2431,16 +2427,8 @@ func (m *ProfileViewModel) estimateItemOverhead() int {
 		}
 	}
 
-	// After items: newline + help bar + newline + bottom hints
-	if !m.inDiscovery {
-		oh += 2 // blank line before help bar (only when help bar is rendered)
-		if m.isPortForwardEnv() {
-			oh += 6 // renderPFHelpBar height (border 2 + label/blank 2 + max items 2)
-		} else {
-			oh += 6 // renderDockerHelpBar height (border 2 + label/blank 2 + max items 2)
-		}
-	}
-	oh += 3 // \n\n after help bar + bottom hints
+	// After items: blank line + bottom hints
+	oh += 3 // \n\n before hints + backHelp line
 
 	// Optional status lines (armed states, input mode)
 	if m.deleteArmed || m.deleteEnvArmed || m.resetArmed {
@@ -2711,93 +2699,6 @@ func (m *ProfileViewModel) renderPortEditor() string {
 		"  " + styles.InlineHelp(styles.HelpItem("↵", "save"), styles.HelpItem("esc", "cancel"))
 }
 
-func (m *ProfileViewModel) renderDockerHelpBar() string {
-	svcs := m.currentEnvServices()
-	hasRunning := false
-	for _, st := range m.statuses {
-		if st.State == "running" {
-			hasRunning = true
-			break
-		}
-	}
-
-	var envItems, svcItems, stackItems []styles.HelpItemResult
-	if m.extraEnvCount() < 3 {
-		envItems = append(envItems, styles.HelpItem("n", "new env"))
-	}
-	if len(m.profile.Environments) > 0 && m.currentEnv() != nil && m.currentEnv().Name != "local" {
-		envItems = append(envItems, styles.HelpItem("D D", "delete env"))
-	}
-	envItems = append(envItems, styles.HelpItem("a", "add service"))
-
-	if len(svcs) > 0 || len(m.currentEnv().LocalProcesses) > 0 {
-		svcItems = append(svcItems, styles.HelpItem("↵", "toggle"))
-		if m.selectedDBType() != "" {
-			svcItems = append(svcItems, styles.HelpItem("o", "db ops"))
-		}
-		if len(svcs) > 1 {
-			svcItems = append(svcItems, styles.HelpItem("d d", "delete"))
-		}
-		svcItems = append(svcItems, styles.HelpItem("v", "view"))
-		if len(svcs) > 0 && m.cursor < len(svcs) {
-			svcItems = append(svcItems, styles.HelpItem("p", "pull"))
-		}
-		if hasRunning && m.isSelectedServiceRunning() {
-			svcItems = append(svcItems, styles.HelpItem("h", "shell"))
-			svcItems = append(svcItems, styles.HelpItem("t", "stats"))
-		}
-		stackItems = append(stackItems, styles.HelpItem("s", "stack all"))
-		if hasRunning {
-			stackItems = append(stackItems, styles.HelpItem("x", "stop all"))
-		}
-		stackItems = append(stackItems, styles.HelpItem("r r", "reset all"))
-		stackItems = append(stackItems, styles.HelpItem("r v", "reset vols"))
-	}
-
-	return styles.HelpBar(
-		styles.HelpGroup{Label: "Environment", Items: envItems},
-		styles.HelpGroup{Label: "Service", Items: svcItems},
-		styles.HelpGroup{Label: "Stack", Items: stackItems},
-	)
-}
-
-func (m *ProfileViewModel) renderPFHelpBar() string {
-	var envItems, pfItems, stackItems []styles.HelpItemResult
-	if m.extraEnvCount() < 3 {
-		envItems = append(envItems, styles.HelpItem("n", "new env"))
-	}
-	if len(m.profile.Environments) > 0 && m.currentEnv() != nil && m.currentEnv().Name != "local" {
-		envItems = append(envItems, styles.HelpItem("D D", "delete env"))
-	}
-
-	pfItems = append(pfItems, styles.HelpItem("k", "k8s discover"))
-	forwards := m.currentForwards()
-	if len(forwards) > 0 {
-		pfItems = append(pfItems, styles.HelpItem("↵", "toggle"))
-		pfItems = append(pfItems, styles.HelpItem("d d", "delete"))
-		pfItems = append(pfItems, styles.HelpItem("e", "edit port"))
-
-		hasRunning := false
-		for _, h := range forwards {
-			if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
-				hasRunning = true
-				break
-			}
-		}
-		stackItems = append(stackItems, styles.HelpItem("s", "stack all"))
-		if hasRunning {
-			stackItems = append(stackItems, styles.HelpItem("x", "stop all"))
-		}
-		stackItems = append(stackItems, styles.HelpItem("r r", "reset all"))
-	}
-
-	return styles.HelpBar(
-		styles.HelpGroup{Label: "Environment", Items: envItems},
-		styles.HelpGroup{Label: "PortForward", Items: pfItems},
-		styles.HelpGroup{Label: "Stack", Items: stackItems},
-	)
-}
-
 // ── Config Panel ──────────────────────────────────────────────────────────
 
 func (m *ProfileViewModel) renderConfigPanel(svc config.Service) string {
@@ -2924,7 +2825,7 @@ func (m *ProfileViewModel) renderShortcuts() string {
 		row1 := lipgloss.JoinHorizontal(lipgloss.Top, nav, pad, pf)
 		row2 := lipgloss.JoinHorizontal(lipgloss.Top, envCol)
 		content := lipgloss.JoinVertical(lipgloss.Left, row1, "", row2)
-		return styles.StylePanelFocused.Width(cardW).Render(content) + "\n\n  press any key to return"
+		return styles.StylePanelFocused.Width(cardW).Render(content)
 	}
 
 	svc := col("Services", []pair{
@@ -2951,7 +2852,7 @@ func (m *ProfileViewModel) renderShortcuts() string {
 	row2 := lipgloss.JoinHorizontal(lipgloss.Top, envCol)
 	content := lipgloss.JoinVertical(lipgloss.Left, row1, "", row2)
 
-	return styles.StylePanelFocused.Width(cardW).Render(content) + "\n\n  press any key to return"
+	return styles.StylePanelFocused.Width(cardW).Render(content)
 }
 
 // ── Discovery Key Handler ──────────────────────────────────────────────────
