@@ -1769,12 +1769,15 @@ func padRight(s string, width int) string {
 	return s
 }
 
-// padLeft pads s on the left to at least the given width.
-func padLeft(s string, width int) string {
-	if d := width - lipgloss.Width(s); d > 0 {
-		return strings.Repeat(" ", d) + s
+// padCenter pads s equally on both sides to at least the given width.
+func padCenter(s string, width int) string {
+	d := width - lipgloss.Width(s)
+	if d <= 0 {
+		return s
 	}
-	return s
+	left := d / 2
+	right := d - left
+	return strings.Repeat(" ", left) + s + strings.Repeat(" ", right)
 }
 
 // formatActiveMQTable renders a fixed-format CLI table (like dstat) as a styled
@@ -1836,14 +1839,10 @@ func formatActiveMQTable(raw string) string {
 	// ── Header row (rows[0]) ────────────────────────────────────────────────
 
 	for i, val := range rows[0] {
-		styled := styles.StyleHeader.Render(val)
-		if i < numCols-1 {
-			styled = padRight(styled, colWidths[i])
-		}
 		if i > 0 {
 			b.WriteString("  ")
 		}
-		b.WriteString(styled)
+		b.WriteString(styles.StyleHeader.Render(padCenter(val, colWidths[i])))
 	}
 	b.WriteString("\n")
 
@@ -1855,23 +1854,22 @@ func formatActiveMQTable(raw string) string {
 	// ── Data rows (rows[1:]) ────────────────────────────────────────────────
 
 	nameStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary)
+	numStyle := styles.StyleSubtitle
 	for _, row := range rows[1:] {
 		for i, val := range row {
 			if i >= numCols {
 				break
 			}
-			var styled string
-			if i == 0 {
-				// Name column — left-aligned, primary (blue)
-				styled = nameStyle.Render(padRight(val, colWidths[i]))
-			} else {
-				// Numeric columns — right-aligned, muted
-				styled = styles.StyleSubtitle.Render(padLeft(val, colWidths[i]))
-			}
 			if i > 0 {
 				b.WriteString("  ")
 			}
-			b.WriteString(styled)
+			if i == 0 {
+				// Queue name — left-aligned, primary (blue)
+				b.WriteString(nameStyle.Render(padRight(val, colWidths[i])))
+			} else {
+				// Numeric values — centered, muted
+				b.WriteString(numStyle.Render(padCenter(val, colWidths[i])))
+			}
 		}
 		b.WriteString("\n")
 	}
