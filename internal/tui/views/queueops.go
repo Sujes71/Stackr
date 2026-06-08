@@ -927,6 +927,7 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.currentQueueType() == "activemq" {
 			cleaned = cleanActiveMQOutput(msg.result)
 			cleaned = formatActiveMQTable(cleaned)
+			cleaned = formatActiveJMSBrowse(cleaned)
 		}
 		m.viewingResult = true
 		m.resultOutput = cleaned
@@ -1037,16 +1038,36 @@ func (m *QueueOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(keyMsg, queueOpsBack):
 		m.promptingParams = false
-	case key.Matches(keyMsg, queueOpsEnter):
-		if m.paramInput.Value() != "" {
-			paramName := m.paramsToPrompt[m.currentParamIdx]
-			m.paramValues[paramName] = m.paramInput.Value()
+
+	case key.Matches(keyMsg, queueOpsUp):
+		if m.currentParamIdx > 0 {
+			m.paramValues[m.paramsToPrompt[m.currentParamIdx]] = m.paramInput.Value()
+			m.currentParamIdx--
+			m.paramInput.SetValue(m.paramValues[m.paramsToPrompt[m.currentParamIdx]])
+			m.paramInput.Placeholder = m.paramsToPrompt[m.currentParamIdx]
+		}
+
+	case key.Matches(keyMsg, queueOpsDown):
+		if m.currentParamIdx < len(m.paramsToPrompt)-1 {
+			m.paramValues[m.paramsToPrompt[m.currentParamIdx]] = m.paramInput.Value()
 			m.currentParamIdx++
-			m.paramInput.SetValue("")
-			if m.currentParamIdx < len(m.paramsToPrompt) {
-				m.paramInput.Placeholder = m.paramsToPrompt[m.currentParamIdx]
+			m.paramInput.SetValue(m.paramValues[m.paramsToPrompt[m.currentParamIdx]])
+			m.paramInput.Placeholder = m.paramsToPrompt[m.currentParamIdx]
+		}
+
+	case key.Matches(keyMsg, queueOpsEnter):
+		paramName := m.paramsToPrompt[m.currentParamIdx]
+		m.paramValues[paramName] = m.paramInput.Value()
+
+		if m.currentParamIdx == len(m.paramsToPrompt)-1 {
+			allFilled := true
+			for _, p := range m.paramsToPrompt {
+				if m.paramValues[p] == "" {
+					allFilled = false
+					break
+				}
 			}
-			if m.currentParamIdx >= len(m.paramsToPrompt) {
+			if allFilled {
 				m.promptingParams = false
 				if m.promptingForCore {
 					m.confirmAction = true
@@ -1054,7 +1075,12 @@ func (m *QueueOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.confirmCustomAction = true
 				}
 			}
+		} else {
+			m.currentParamIdx++
+			m.paramInput.SetValue(m.paramValues[m.paramsToPrompt[m.currentParamIdx]])
+			m.paramInput.Placeholder = m.paramsToPrompt[m.currentParamIdx]
 		}
+
 	default:
 		var cmd tea.Cmd
 		m.paramInput, cmd = m.paramInput.Update(msg)
@@ -1237,7 +1263,7 @@ func (m *QueueOpsModel) buildParamActionCmd(act actionItem) tea.Cmd {
 				args = []string{"purge", m.paramValues["queue"], "--jmxurl", jmxURL}
 			case "Send message":
 				program = "activemq"
-				args = []string{"producer", "--destination", m.paramValues["queue"], "--message", m.paramValues["message"]}
+				args = []string{"producer", "--destination", m.paramValues["queue"], "--message", m.paramValues["message"], "--message-count", "1"}
 				if m.targetSyncEnv {
 					svc := m.currentService()
 					if svc != nil {
@@ -1662,23 +1688,25 @@ func (m *QueueOpsModel) viewParamPrompt() string {
 	var b strings.Builder
 	b.WriteString(styles.StyleSubtitle.Render("  Enter parameter values") + "\n\n")
 
-	purpleStyle := lipgloss.NewStyle().Foreground(styles.ColorPurple).Bold(true)
-	valStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	cursorStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	filledStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	emptyStyle := lipgloss.NewStyle().Foreground(styles.ColorMuted)
 
 	for i, param := range m.paramsToPrompt {
-		if i < m.currentParamIdx {
-			b.WriteString("  " + purpleStyle.Render("{"+param+"}") + " " + valStyle.Render(m.paramValues[param]) + "\n")
-		} else if i == m.currentParamIdx {
-			b.WriteString("  " + purpleStyle.Render("{"+param+"}") + " " + m.paramInput.View() + "\n")
+		if i == m.currentParamIdx {
+			b.WriteString("  " + cursorStyle.Render("> "+param+"  ") + m.paramInput.View() + "\n")
+		} else if v, ok := m.paramValues[param]; ok && v != "" {
+			b.WriteString("    " + param + "  " + filledStyle.Render(v) + "\n")
 		} else {
-			b.WriteString("  " + purpleStyle.Render("{"+param+"}") + " \n")
+			b.WriteString("    " + param + "  " + emptyStyle.Render("-") + "\n")
 		}
 	}
 
 	b.WriteString("\n")
 	b.WriteString("  " + styles.InlineHelp(
 		styles.HelpItem("esc", "cancel"),
-		styles.HelpItem("enter", "next"),
+		styles.HelpItem("↑ ↓", "navigate"),
+		styles.HelpItem("enter", "next/submit"),
 	))
 	return b.String()
 }
@@ -1749,6 +1777,10 @@ func cleanActiveMQOutput(out string) string {
 		}
 		// Skip ActiveMQ advisory queues — they're internal system topics/queues
 		if strings.Contains(trimmed, "ActiveMQ.Advisory") {
+			continue
+		}
+		// Skip INFO | lines (internal ActiveMQ Java logging)
+		if strings.HasPrefix(trimmed, "INFO |") {
 			continue
 		}
 		result = append(result, line)
@@ -1875,4 +1907,46 @@ func formatActiveMQTable(raw string) string {
 	}
 
 	return b.String()
+}
+
+// formatActiveJMSBrowse formats ActiveMQ browse output by stripping
+// JMS_HEADER_FIELD:/JMS_BODY_FIELD: prefixes and rendering each line
+// as "  [key]  value". Returns the raw string unchanged if no JMS lines found.
+func formatActiveJMSBrowse(raw string) string {
+	lines := strings.Split(raw, "\n")
+	var hasJMS bool
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "JMS_HEADER_FIELD:") || strings.HasPrefix(trimmed, "JMS_BODY_FIELD:") {
+			hasJMS = true
+			break
+		}
+	}
+	if !hasJMS {
+		return raw
+	}
+
+	keyStyle := styles.StyleSubtitle
+	valStyle := lipgloss.NewStyle().Foreground(styles.ColorCyan)
+
+	var b strings.Builder
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		cleaned := strings.TrimPrefix(trimmed, "JMS_HEADER_FIELD:")
+		cleaned = strings.TrimPrefix(cleaned, "JMS_BODY_FIELD:")
+		parts := strings.SplitN(cleaned, " = ", 2)
+		if len(parts) == 2 {
+			b.WriteString("  ")
+			b.WriteString(keyStyle.Render(parts[0]))
+			b.WriteString("  ")
+			b.WriteString(valStyle.Render(parts[1]))
+			b.WriteString("\n")
+		} else {
+			b.WriteString(line + "\n")
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
