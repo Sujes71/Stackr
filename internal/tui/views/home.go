@@ -411,8 +411,8 @@ func (m *HomeModel) View() string {
 	contextItems = append(contextItems, styles.HelpItem("n", "new profile"))
 	contextItems = append(contextItems, styles.HelpItem("i", "import"))
 	if len(m.profiles) > 0 {
-		contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
 		contextItems = append(contextItems, styles.HelpItem("x", "export"))
+		contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
 	}
 	b.WriteString("      " + styles.InlineHelp(contextItems...))
 	b.WriteString("\n\n")
