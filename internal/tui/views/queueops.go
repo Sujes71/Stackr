@@ -457,7 +457,7 @@ func (m *QueueOpsModel) actionParams(act actionItem) []string {
 	case "Describe topic":
 		return []string{"topic"}
 	case "Create topic":
-		return []string{"name", "partitions", "replication_factor"}
+		return []string{"topic", "partitions", "replication_factor"}
 	case "Delete topic":
 		return []string{"topic"}
 	case "Send message":
@@ -941,13 +941,18 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.doneOp = completedLabel
 		m.doneOpAt = time.Now()
-		// Clean verbose output: for ActiveMQ, strip JVM startup noise
-		// and format table output for List destinations.
+		// Clean and format output per queue type.
 		cleaned := msg.result
-		if m.currentQueueType() == "activemq" {
+		switch m.currentQueueType() {
+		case "activemq":
 			cleaned = cleanActiveMQOutput(msg.result)
 			cleaned = formatActiveMQTable(cleaned)
 			cleaned = formatActiveMQBrowse(cleaned)
+		case "kafka":
+			cleaned = formatActiveMQTable(cleaned)  // consumer groups describe
+			cleaned = formatKafkaDescribe(cleaned)  // topic describe
+		case "rabbitmq":
+			cleaned = formatRabbitMQTable(cleaned)  // rabbitmqadmin list *
 		}
 		if cleaned == "" {
 			// Auto-generated success — no output, skip the result panel entirely.
@@ -1229,7 +1234,7 @@ func (m *QueueOpsModel) buildParamActionCmd(act actionItem) tea.Cmd {
 			case "Describe topic":
 				program, args = "/usr/bin/kafka-topics", []string{"--bootstrap-server", bs, "--describe", "--topic", m.paramValues["topic"]}
 			case "Create topic":
-				program, args = "/usr/bin/kafka-topics", []string{"--bootstrap-server", bs, "--create", "--topic", m.paramValues["name"], "--partitions", m.paramValues["partitions"], "--replication-factor", m.paramValues["replication_factor"]}
+				program, args = "/usr/bin/kafka-topics", []string{"--bootstrap-server", bs, "--create", "--topic", m.paramValues["topic"], "--partitions", m.paramValues["partitions"], "--replication-factor", m.paramValues["replication_factor"]}
 			case "Delete topic":
 				program, args = "/usr/bin/kafka-topics", []string{"--bootstrap-server", bs, "--delete", "--topic", m.paramValues["topic"]}
 			case "Send message":
@@ -1305,6 +1310,9 @@ INNEREOF`,
 				}
 		case "Purge queue":
 			program = "activemq"
+			// --jmxlocal avoids a NullPointerException in ActiveMQ 6.2.0
+			// that occurs with --jmxurl when running purge locally.
+			args = []string{"purge", m.paramValues["queue"], "--jmxlocal"}
 			if m.targetSyncEnv {
 				svc := m.currentService()
 				if svc != nil {
@@ -1314,11 +1322,6 @@ INNEREOF`,
 						args = []string{"purge", m.paramValues["queue"], "--jmxurl", jmxURL}
 					}
 				}
-			}
-			if args == nil {
-				// --jmxlocal avoids a NullPointerException in ActiveMQ 6.2.0
-				// that occurs with --jmxurl when running purge locally.
-				args = []string{"purge", m.paramValues["queue"], "--jmxlocal"}
 			}
 			case "Send message":
 				program = "activemq"
@@ -1361,12 +1364,14 @@ INNEREOF`,
 		var err error
 		if m.targetSyncEnv {
 			svc := m.currentService()
-			if svc != nil {
-				qse := svc.FindQueueSyncEnv(m.selectedEnv)
-				if qse != nil {
-					out, err = docker.QueueExecRemote(qse, program, args...)
-				}
+			if svc == nil {
+				return queueOpsDoneMsg{err: fmt.Errorf("service not available")}
 			}
+			qse := svc.FindQueueSyncEnv(m.selectedEnv)
+			if qse == nil {
+				return queueOpsDoneMsg{err: fmt.Errorf("sync environment %q not found", m.selectedEnv)}
+			}
+			out, err = docker.QueueExecRemote(qse, program, args...)
 		} else {
 			out, err = docker.QueueExecLocal(container, program, args...)
 		}
@@ -2059,4 +2064,170 @@ func formatActiveMQBrowse(raw string) string {
 	}
 
 	return strings.TrimRight(b.String(), " \n\r")
+}
+
+// ── Kafka & RabbitMQ Formatting ──────────────────────────────────────────────────
+
+// formatKafkaDescribe formats kafka-topics --describe output as styled key-value
+// pairs grouped by topic. Topic headers (no indentation) get primary color and
+// bold styling; partition detail lines (tab-indented) are indented with muted keys.
+func formatKafkaDescribe(raw string) string {
+	if !strings.Contains(raw, "Topic:") {
+		return raw
+	}
+
+	keyStyle := styles.StyleSubtitle
+	valStyle := lipgloss.NewStyle().Foreground(styles.ColorCyan)
+	headerStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
+
+	var b strings.Builder
+
+	for _, line := range strings.Split(raw, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+
+		isPartitionLine := strings.HasPrefix(line, "\t")
+		indent := "  "
+		style := keyStyle
+		if isPartitionLine {
+			indent = "    "
+		} else {
+			style = headerStyle
+		}
+
+		// Parse tab-separated "Key: Value" fields
+		parts := strings.Split(trimmed, "\t")
+		var fields []string
+		for i, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+
+			// Try "Key: Value" split first
+			if kv := strings.SplitN(p, ":", 2); len(kv) == 2 {
+				key := strings.TrimSpace(kv[0])
+				val := strings.TrimSpace(kv[1])
+				if val == "" {
+					continue // skip empty values like "Elr: "
+				}
+				if i == 0 || key == "Topic" {
+					fields = append(fields, style.Render(key)+": "+valStyle.Render(val))
+				} else {
+					fields = append(fields, keyStyle.Render(key)+": "+valStyle.Render(val))
+				}
+			} else if strings.Contains(p, "=") {
+				// Configs use "Key=Value" format
+				if eq := strings.SplitN(p, "=", 2); len(eq) == 2 {
+					fields = append(fields, keyStyle.Render(eq[0])+"="+valStyle.Render(eq[1]))
+				}
+			}
+		}
+
+		if len(fields) > 0 {
+			b.WriteString(indent)
+			b.WriteString(strings.Join(fields, "  "))
+			b.WriteString("\n")
+		}
+	}
+
+	return strings.TrimRight(b.String(), " \n\r")
+}
+
+// formatRabbitMQTable formats rabbitmqadmin list * output (ASCII table with
+// +---+ borders) into a styled table with colorized header and data rows.
+func formatRabbitMQTable(raw string) string {
+	if !strings.Contains(raw, "+---") {
+		return raw
+	}
+
+	// Collect data lines (skip border lines and empty lines)
+	var dataLines []string
+	for _, line := range strings.Split(raw, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "+") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "|") {
+			dataLines = append(dataLines, trimmed)
+		}
+	}
+
+	if len(dataLines) < 2 {
+		return raw
+	}
+
+	// Parse header and data rows
+	headers := parseRMQColumns(dataLines[0])
+	if len(headers) < 2 {
+		return raw
+	}
+
+	// Calculate column widths
+	colWidths := make([]int, len(headers))
+	for _, line := range dataLines {
+		cells := parseRMQColumns(line)
+		for i, cell := range cells {
+			if i < len(colWidths) && lipgloss.Width(cell) > colWidths[i] {
+				colWidths[i] = lipgloss.Width(cell)
+			}
+		}
+	}
+
+	totalWidth := 0
+	for i, w := range colWidths {
+		if i > 0 {
+			totalWidth += 2
+		}
+		totalWidth += w
+	}
+
+	var b strings.Builder
+
+	// Header
+	for i, h := range headers {
+		if i > 0 {
+			b.WriteString("  ")
+		}
+		b.WriteString(styles.StyleHeader.Render(padCenter(h, colWidths[i])))
+	}
+	b.WriteString("\n")
+	b.WriteString(styles.StyleSubtitle.Render(strings.Repeat("─", totalWidth)))
+	b.WriteString("\n")
+
+	// Data rows
+	nameStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary)
+	numStyle := styles.StyleSubtitle
+	for _, line := range dataLines[1:] {
+		cells := parseRMQColumns(line)
+		for i, cell := range cells {
+			if i >= len(colWidths) {
+				break
+			}
+			if i > 0 {
+				b.WriteString("  ")
+			}
+			if i == 0 {
+				b.WriteString(nameStyle.Render(padRight(cell, colWidths[i])))
+			} else {
+				b.WriteString(numStyle.Render(padCenter(cell, colWidths[i])))
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	return strings.TrimRight(b.String(), " \n\r")
+}
+
+// parseRMQColumns splits a rabbitmqadmin table row (delimited by |) into cells.
+func parseRMQColumns(line string) []string {
+	line = strings.TrimPrefix(line, "|")
+	line = strings.TrimSuffix(line, "|")
+	var cols []string
+	for _, part := range strings.Split(line, "|") {
+		cols = append(cols, strings.TrimSpace(part))
+	}
+	return cols
 }
