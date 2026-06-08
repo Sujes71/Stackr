@@ -414,22 +414,21 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 	}
 
 	b.WriteString("\n")
-	var actItems []styles.HelpItemResult
-	actItems = append(actItems, styles.HelpItem("a", "add"))
+	// Line 1: contextual actions (affect sync envs)
+	var contextItems []styles.HelpItemResult
+	contextItems = append(contextItems, styles.HelpItem("a", "add"))
 	svc = m.currentService()
 	if svc != nil && len(svc.SyncEnvs) > 0 {
-		actItems = append(actItems, styles.HelpItem("e", "edit"))
-		actItems = append(actItems, styles.HelpItem("d d", "delete"))
+		contextItems = append(contextItems, styles.HelpItem("e", "edit"))
+		contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
 	}
-	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Manage", Items: actItems},
-	))
+	b.WriteString("      " + styles.InlineHelp(contextItems...))
 	b.WriteString("\n\n")
-	if len(syncEnvs) > 0 {
-		b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "open actions")))
-	} else {
-		b.WriteString(styles.BackHelp())
-	}
+	// Line 2: global navigation
+	b.WriteString(styles.BackHelp(
+		styles.HelpItem("↑ ↓", "navigate"),
+		styles.HelpItem("↵", "open"),
+	))
 	return b.String()
 }
 
@@ -1207,12 +1206,19 @@ func (m *DBOpsModel) viewActions() string {
 		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n\n")
 		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "execute")))
 	} else {
-		var helpItems []styles.HelpItemResult
-		helpItems = append(helpItems, styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "run"))
+		// Line 1: contextual actions (affect selected action)
+		var contextItems []styles.HelpItemResult
 		if m.actionCursor < len(m.actions) && m.actions[m.actionCursor].isCustom {
-			helpItems = append(helpItems, styles.HelpItem("e", "edit"), styles.HelpItem("d d", "delete"))
+			contextItems = append(contextItems, styles.HelpItem("e", "edit"), styles.HelpItem("d d", "delete"))
 		}
-		b.WriteString(styles.BackHelp(helpItems...))
+		if len(contextItems) > 0 {
+			b.WriteString("      " + styles.InlineHelp(contextItems...))
+			b.WriteString("\n\n")
+		}
+		// Line 2: global navigation
+		b.WriteString(styles.BackHelp(
+			styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "run"),
+		))
 	}
 	return b.String()
 }

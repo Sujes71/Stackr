@@ -1542,20 +1542,20 @@ func (m *AddServiceModel) viewPorts() string {
 		b.WriteString(styles.StyleError.Render("  Press ctrl+r again to reset to defaults"))
 		b.WriteString("\n")
 	}
-	var actItems []styles.HelpItemResult
+	b.WriteString("\n")
+	// Line 1: contextual actions (affect port fields)
+	var contextItems []styles.HelpItemResult
 	if len(m.ports) > 1 {
-		actItems = append(actItems, styles.HelpItem("ctrl+d ctrl+d", "remove last"))
+		contextItems = append(contextItems, styles.HelpItem("ctrl+d ctrl+d", "remove last"))
 	}
 	if m.portsCanReset() {
-		actItems = append(actItems, styles.HelpItem("ctrl+r ctrl+r", "reset"))
+		contextItems = append(contextItems, styles.HelpItem("ctrl+r ctrl+r", "reset"))
 	}
-	b.WriteString("\n")
-	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Manage", Items: actItems},
-	))
-	if len(actItems) > 0 {
-		b.WriteString("\n")
+	if len(contextItems) > 0 {
+		b.WriteString("      " + styles.InlineHelp(contextItems...))
+		b.WriteString("\n\n")
 	}
+	// Line 2: global navigation
 	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "add/continue")))
 	return b.String()
 }
@@ -1649,20 +1649,20 @@ func (m *AddServiceModel) viewEnvVars() string {
 		b.WriteString(styles.StyleError.Render("  Press ctrl+r again to reset to defaults"))
 		b.WriteString("\n")
 	}
-	var actItems []styles.HelpItemResult
+	b.WriteString("\n")
+	// Line 1: contextual actions (affect env var fields)
+	var contextItems []styles.HelpItemResult
 	if m.envVarsRemovable() {
-		actItems = append(actItems, styles.HelpItem("ctrl+d ctrl+d", "remove last"))
+		contextItems = append(contextItems, styles.HelpItem("ctrl+d ctrl+d", "remove last"))
 	}
 	if m.envVarsCanReset() {
-		actItems = append(actItems, styles.HelpItem("ctrl+r ctrl+r", "reset"))
+		contextItems = append(contextItems, styles.HelpItem("ctrl+r ctrl+r", "reset"))
 	}
-	b.WriteString("\n")
-	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Manage", Items: actItems},
-	))
-	if len(actItems) > 0 {
-		b.WriteString("\n")
+	if len(contextItems) > 0 {
+		b.WriteString("      " + styles.InlineHelp(contextItems...))
+		b.WriteString("\n\n")
 	}
+	// Line 2: global navigation
 	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "add/continue")))
 	return b.String()
 }

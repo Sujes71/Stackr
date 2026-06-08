@@ -402,27 +402,25 @@ func (m *HomeModel) View() string {
 		b.WriteString(styles.StyleError.Render("  Press d again to confirm deletion"))
 		b.WriteString("\n")
 	}
-	var mgmtItems []styles.HelpItemResult
-	mgmtItems = append(mgmtItems, styles.HelpItem("n", "new profile"))
-	mgmtItems = append(mgmtItems, styles.HelpItem("i", "import"))
-	if len(m.profiles) > 0 {
-		mgmtItems = append(mgmtItems, styles.HelpItem("d d", "delete"))
-		mgmtItems = append(mgmtItems, styles.HelpItem("x", "export"))
-	}
 	if m.lastResult != "" {
 		b.WriteString("\n  " + m.lastResult + "\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.HelpBar(
-		styles.HelpGroup{Label: "Manage", Items: mgmtItems},
-	))
-	b.WriteString("\n\n")
+	// Line 1: contextual actions (affect cards) — indented
+	var contextItems []styles.HelpItemResult
+	contextItems = append(contextItems, styles.HelpItem("n", "new profile"))
+	contextItems = append(contextItems, styles.HelpItem("i", "import"))
 	if len(m.profiles) > 0 {
-		b.WriteString("  " + styles.InlineHelp(
-			styles.HelpItem("↑ ↓", "navigate"),
-			styles.HelpItem("↵", "open"),
-		))
+		contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
+		contextItems = append(contextItems, styles.HelpItem("x", "export"))
 	}
+	b.WriteString("      " + styles.InlineHelp(contextItems...))
+	b.WriteString("\n\n")
+	// Line 2: global navigation — left-aligned
+	b.WriteString("  " + styles.InlineHelp(
+		styles.HelpItem("↑ ↓", "navigate"),
+		styles.HelpItem("↵", "open"),
+	))
 
 	return b.String()
 }
@@ -433,8 +431,8 @@ func (m *HomeModel) homeWindow(total int) itemWindow {
 	if total == 0 || m.height <= 0 {
 		return w
 	}
-	// Overhead: \n + blank line + help bar + \n + hints = ~10 lines
-	oh := 10
+	// Overhead: \n + line 1 + blank line + line 2 nav = ~5 lines
+	oh := 5
 	if m.deleteArmed {
 		oh += 1
 	}

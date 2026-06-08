@@ -2789,7 +2789,7 @@ func (m *ProfileViewModel) renderShortcuts() string {
 	}
 
 	type pair struct{ k, v string }
-	col := func(title string, items []pair) string {
+	section := func(title string, items []pair) string {
 		var lines []string
 		lines = append(lines, styles.StyleInputLabel.Render(title))
 		for _, it := range items {
@@ -2798,60 +2798,119 @@ func (m *ProfileViewModel) renderShortcuts() string {
 		return lipgloss.JoinVertical(lipgloss.Left, lines...)
 	}
 
-	nav := col("Navigation", []pair{
+	var sections []string
+
+	// Navigation — always present
+	nav := section("Navigation", []pair{
 		{"← →", "switch env"},
 		{"↑ ↓", "navigate"},
-		{"enter", "open / toggle"},
 		{"esc", "back"},
 	})
+	sections = append(sections, nav, "")
 
 	if m.isPortForwardEnv() {
-		pf := col("Port-Forward", []pair{
-			{"↵", "toggle"},
-			{"d d", "delete"},
-			{"e", "edit port"},
-			{"k", "discover"},
-		})
+		forwards := m.currentForwards()
+		var pfItems []pair
+		pfItems = append(pfItems, pair{"k", "discover"})
+		if len(forwards) > 0 {
+			runLabel := "run"
+			if m.cursor < len(forwards) && (forwards[m.cursor].State == portforward.ForwardRunning || forwards[m.cursor].State == portforward.ForwardStarting) {
+				runLabel = "stop"
+			}
+			pfItems = append(pfItems, pair{"↵", runLabel})
+			pfItems = append(pfItems, pair{"d d", "delete"})
+			pfItems = append(pfItems, pair{"e", "edit port"})
+		}
+		sections = append(sections, section("Port-Forward", pfItems), "")
 
-		envCol := col("Env / Stack", []pair{
-			{"s", "stack all"},
-			{"x", "stop all"},
-			{"r r", "reset all"},
-			{"n", "add env"},
-			{"D D", "delete env"},
-		})
+		// Stack
+		var stackItems []pair
+		if len(forwards) > 0 {
+			hasRunning := false
+			for _, h := range forwards {
+				if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
+					hasRunning = true
+					break
+				}
+			}
+			stackItems = append(stackItems, pair{"s", "stack all"})
+			if hasRunning {
+				stackItems = append(stackItems, pair{"x", "stop all"})
+			}
+			stackItems = append(stackItems, pair{"r r", "reset all"})
+		}
+		if m.extraEnvCount() < 3 {
+			stackItems = append(stackItems, pair{"n", "new env"})
+		}
+		if len(m.profile.Environments) > 0 && m.currentEnv() != nil && m.currentEnv().Name != "local" {
+			stackItems = append(stackItems, pair{"D D", "delete env"})
+		}
+		sections = append(sections, section("Env / Stack", stackItems))
+	} else {
+		svcs := m.currentEnvServices()
+		env := m.currentEnv()
+		hasServices := len(svcs) > 0 || (env != nil && len(env.LocalProcesses) > 0)
 
-		pad := "   "
-		row1 := lipgloss.JoinHorizontal(lipgloss.Top, nav, pad, pf)
-		row2 := lipgloss.JoinHorizontal(lipgloss.Top, envCol)
-		content := lipgloss.JoinVertical(lipgloss.Left, row1, "", row2)
-		return styles.StylePanelFocused.Width(cardW).Render(content)
+		// Services
+		var svcItems []pair
+		svcItems = append(svcItems, pair{"a", "add service"})
+		if hasServices {
+			runLabel := "run"
+			if m.isSelectedServiceRunning() {
+				runLabel = "stop"
+			}
+			svcItems = append(svcItems, pair{"↵", runLabel})
+			if m.selectedDBType() != "" {
+				svcItems = append(svcItems, pair{"o", "db ops"})
+			}
+			if len(svcs) > 1 {
+				svcItems = append(svcItems, pair{"d d", "delete svc"})
+			}
+			svcItems = append(svcItems, pair{"v", "view config"})
+			if len(svcs) > 0 && m.cursor < len(svcs) {
+				svcItems = append(svcItems, pair{"p", "pull"})
+			}
+			hasRunning := false
+			for _, st := range m.statuses {
+				if st.State == "running" {
+					hasRunning = true
+					break
+				}
+			}
+			if hasRunning && m.isSelectedServiceRunning() {
+				svcItems = append(svcItems, pair{"h", "shell"})
+				svcItems = append(svcItems, pair{"t", "stats"})
+			}
+		}
+		sections = append(sections, section("Services", svcItems), "")
+
+		// Env / Stack
+		var stackItems []pair
+		if hasServices {
+			hasRunning := false
+			for _, st := range m.statuses {
+				if st.State == "running" {
+					hasRunning = true
+					break
+				}
+			}
+			stackItems = append(stackItems, pair{"s", "stack all"})
+			if hasRunning {
+				stackItems = append(stackItems, pair{"x", "stop all"})
+			}
+			stackItems = append(stackItems, pair{"r r", "reset all"})
+			stackItems = append(stackItems, pair{"r v", "reset vols"})
+		}
+		if m.extraEnvCount() < 3 {
+			stackItems = append(stackItems, pair{"n", "new env"})
+		}
+		if len(m.profile.Environments) > 0 && env != nil && env.Name != "local" {
+			stackItems = append(stackItems, pair{"D D", "delete env"})
+		}
+		sections = append(sections, section("Env / Stack", stackItems))
 	}
 
-	svc := col("Services", []pair{
-		{"a", "add service"},
-		{"d d", "delete svc"},
-		{"o", "db ops"},
-		{"v", "view config"},
-		{"t", "stats"},
-		{"p", "pull"},
-		{"h", "shell"},
-	})
-
-	envCol := col("Env / Stack", []pair{
-		{"s", "stack all"},
-		{"x", "stop all"},
-		{"r r", "reset all"},
-		{"r v", "reset volumes"},
-		{"n", "add env"},
-		{"D D", "delete env"},
-	})
-
-	pad := "   "
-	row1 := lipgloss.JoinHorizontal(lipgloss.Top, nav, pad, svc)
-	row2 := lipgloss.JoinHorizontal(lipgloss.Top, envCol)
-	content := lipgloss.JoinVertical(lipgloss.Left, row1, "", row2)
-
+	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	return styles.StylePanelFocused.Width(cardW).Render(content)
 }
 

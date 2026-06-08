@@ -257,14 +257,12 @@ func (m *NewProfileModel) View() string {
 	}
 	b.WriteString("\n\n")
 	if m.step == npStepEnvs {
+		// Line 1: contextual actions (affect env fields)
 		if m.canRemoveEnv() {
-			b.WriteString(styles.HelpBar(
-				styles.HelpGroup{Label: "Manage", Items: []styles.HelpItemResult{
-					styles.HelpItem("ctrl+d ctrl+d", "remove"),
-				}},
-			))
+			b.WriteString("      " + styles.InlineHelp(styles.HelpItem("ctrl+d ctrl+d", "remove")))
 			b.WriteString("\n\n")
 		}
+		// Line 2: global navigation
 		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "add/finish")))
 	} else {
 		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "continue")))
