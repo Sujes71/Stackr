@@ -177,6 +177,7 @@ var Catalog = []CatalogEntry{
 			"ACTIVEMQ_USERNAME":    "admin",
 			"ACTIVEMQ_PASSWORD":    "admin",
 			"ACTIVEMQ_SSL_ENABLED": "false",
+			"ACTIVEMQ_OPTS":        "-Xms512m -Xmx1g -Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.port=1099 -Dcom.sun.management.jmxremote.rmi.port=1100 -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -Djava.rmi.server.hostname=localhost",
 		},
 		DefaultVolumeTarget: "/opt/activemq/data",
 	},

@@ -41,6 +41,9 @@ var (
 
 // queueOpsDoneMsg is reused from messages.go (already defined there).
 
+// clearResultMsg auto-dismisses the result panel after 5 seconds.
+type clearResultMsg struct{}
+
 // ── Model ─────────────────────────────────────────────────────────────────────
 
 // QueueOpsModel implements the 3-screen queue operations view.
@@ -79,6 +82,12 @@ type QueueOpsModel struct {
 
 	// Viewport
 	height int
+	width  int
+
+	// Result panel overlay
+	viewingResult bool
+	resultOutput  string
+	resultTitle   string
 
 	// Wizard (delegated)
 	wizardModel *AddQueueSyncEnvModel
@@ -209,6 +218,7 @@ func (m *QueueOpsModel) Init() tea.Cmd {
 }
 
 func (m *QueueOpsModel) SetSize(w, h int) {
+	m.width = w
 	m.height = max(0, h)
 }
 
@@ -321,10 +331,6 @@ func (m *QueueOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.deleteArmed = false
 			}
 		}
-
-	case ClearActionMsg:
-		m.lastResult = ""
-		m.doneOp = ""
 	}
 
 	return m, nil
@@ -428,6 +434,9 @@ func (m *QueueOpsModel) actionParams(act actionItem) []string {
 	case "Produce message":
 		return []string{"topic"}
 	case "Consume messages":
+		if m.currentQueueType() == "activemq" {
+			return []string{"queue"}
+		}
 		return []string{"topic"}
 	case "Describe group":
 		return []string{"group"}
@@ -438,14 +447,16 @@ func (m *QueueOpsModel) actionParams(act actionItem) []string {
 	case "Delete queue":
 		return []string{"name"}
 	case "Purge queue":
+		if m.currentQueueType() == "activemq" {
+			return []string{"queue"}
+		}
 		return []string{"name"}
 	case "Browse queue":
 		return []string{"queue"}
 	case "Send message":
 		return []string{"queue", "message"}
-	default:
-		return nil
 	}
+	return nil
 }
 
 func (m *QueueOpsModel) buildActionsList(qse *config.QueueSyncEnv) []actionItem {
@@ -487,7 +498,7 @@ func (m *QueueOpsModel) buildActionsList(qse *config.QueueSyncEnv) []actionItem 
 		actions = []actionItem{
 			// Topics group
 			{label: "List topics", group: "Topics", enabled: true,
-				execute: qExec("kafka-topics", "--bootstrap-server", bs, "--list")},
+				execute: 		qExec("/usr/bin/kafka-topics", "--bootstrap-server", bs, "--list")},
 			{label: "Describe topic", group: "Topics", enabled: true,
 				execute: nil}, // params: topic → will be prompted
 			{label: "Create topic", group: "Topics", enabled: true,
@@ -503,7 +514,7 @@ func (m *QueueOpsModel) buildActionsList(qse *config.QueueSyncEnv) []actionItem 
 
 			// Consumer Groups group
 			{label: "List groups", group: "Consumer Groups", enabled: true,
-				execute: qExec("kafka-consumer-groups", "--bootstrap-server", bs, "--list")},
+				execute: 		qExec("/usr/bin/kafka-consumer-groups", "--bootstrap-server", bs, "--list")},
 			{label: "Describe group", group: "Consumer Groups", enabled: true,
 				execute: nil}, // params: group
 			{label: "Reset offset", group: "Consumer Groups", enabled: true,
@@ -539,7 +550,7 @@ func (m *QueueOpsModel) buildActionsList(qse *config.QueueSyncEnv) []actionItem 
 		actions = []actionItem{
 			// Queues group
 			{label: "List queues", group: "Queues", enabled: true,
-				execute: qExec("rabbitmqadmin", rabbitArgs("list queues")...)},
+				execute: qExec("/usr/local/bin/rabbitmqadmin", rabbitArgs("list queues")...)},
 			{label: "Create queue", group: "Queues", enabled: true,
 				execute: nil}, // params: name
 			{label: "Delete queue", group: "Queues", enabled: true,
@@ -549,55 +560,51 @@ func (m *QueueOpsModel) buildActionsList(qse *config.QueueSyncEnv) []actionItem 
 
 			// Exchanges & Bindings group
 			{label: "List exchanges", group: "Exchanges & Bindings", enabled: true,
-				execute: qExec("rabbitmqadmin", rabbitArgs("list exchanges")...)},
+				execute: qExec("/usr/local/bin/rabbitmqadmin", rabbitArgs("list exchanges")...)},
 			{label: "List bindings", group: "Exchanges & Bindings", enabled: true,
-				execute: qExec("rabbitmqadmin", rabbitArgs("list bindings")...)},
+				execute: qExec("/usr/local/bin/rabbitmqadmin", rabbitArgs("list bindings")...)},
 
 			// Connections group
 			{label: "List connections", group: "Connections", enabled: true,
-				execute: qExec("rabbitmqadmin", rabbitArgs("list connections")...)},
+				execute: qExec("/usr/local/bin/rabbitmqadmin", rabbitArgs("list connections")...)},
 			{label: "List channels", group: "Connections", enabled: true,
-				execute: qExec("rabbitmqadmin", rabbitArgs("list channels")...)},
+				execute: qExec("/usr/local/bin/rabbitmqadmin", rabbitArgs("list channels")...)},
 			{label: "List consumers", group: "Connections", enabled: true,
-				execute: qExec("rabbitmqadmin", rabbitArgs("list consumers")...)},
+				execute: qExec("/usr/local/bin/rabbitmqadmin", rabbitArgs("list consumers")...)},
 		}
 
-	case "activemq":
-		brokerFlag := []string{}
-		if qse != nil {
-			brokerURL := qse.BrokerURL
-			if brokerURL == "" {
-				brokerURL = "tcp://" + qse.Host + ":" + qse.Port
+			case "activemq":
+		// JMX exec helper: for remote, uses --jmxurl; for local (inside container),
+		// uses --jmxlocal to bypass SSL via Attach API.
+		// The flags MUST come AFTER the subcommand (CLI syntax: task [task-options]).
+		jmxExec := func(args ...string) func() tea.Cmd {
+			if qse != nil {
+				jmxURL := "service:jmx:rmi:///jndi/rmi://" + qse.Host + ":1099/jmxrmi"
+				return qExec("activemq", append(args, "--jmxurl", jmxURL)...)
 			}
-			brokerFlag = []string{"--broker-url", brokerURL}
-			if qse.User != "" {
-				brokerFlag = append(brokerFlag, "--user", qse.User, "--password", qse.Password)
-			}
-		}
-
-		amqExec := func(args ...string) func() tea.Cmd {
-			fullArgs := append(brokerFlag, args...)
-			return qExec("activemq-admin", fullArgs...)
+			return qExec("activemq", append(args, "--jmxlocal")...)
 		}
 
 		actions = []actionItem{
 			// Queues group
-			{label: "List queues", group: "Queues", enabled: true,
-				execute: amqExec("list")},
+			{label: "List destinations", group: "Queues", enabled: true,
+				execute: jmxExec("dstat")},
 			{label: "Browse queue", group: "Queues", enabled: true,
-				execute: nil}, // params: queue
+				execute: nil},
 			{label: "Purge queue", group: "Queues", enabled: true,
-				execute: nil}, // params: queue → destructive
-			{label: "Delete queue", group: "Queues", enabled: true,
-				execute: nil}, // params: queue → destructive
+				execute: nil},
 
 			// Stats group
-			{label: "Query statistics", group: "Stats", enabled: true,
-				execute: amqExec("query")},
+			{label: "Broker stats", group: "Stats", enabled: true,
+				execute: jmxExec("bstat")},
+			{label: "Query attributes", group: "Stats", enabled: true,
+				execute: jmxExec("query")},
 
 			// Messaging group
 			{label: "Send message", group: "Messaging", enabled: true,
-				execute: nil}, // params: queue, message
+				execute: nil},
+			{label: "Consume messages", group: "Messaging", enabled: true,
+				execute: nil},
 		}
 	}
 
@@ -724,7 +731,17 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case clearResultMsg:
+		m.doneOp = ""
+		return m, nil
+
 	case tea.KeyMsg:
+		if m.viewingResult {
+			m.viewingResult = false
+			return m, tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
+				return clearResultMsg{}
+			})
+		}
 		switch {
 		case key.Matches(msg, queueOpsBack):
 			if m.promptStartDaemon || len(m.pendingOps) > 0 {
@@ -901,13 +918,15 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.doneOp = completedLabel
-		m.lastResult = styles.StyleSuccess.Render("✓ " + completedLabel + " completed") +
-			"\n" + styles.StyleCode.Render(strings.TrimSpace(msg.result))
-		return m, ClearActionAfter(2 * time.Second)
-
-	case ClearActionMsg:
-		m.lastResult = ""
-		m.doneOp = ""
+		// Clean verbose output: for ActiveMQ, strip JVM startup noise.
+		cleaned := msg.result
+		if m.currentQueueType() == "activemq" {
+			cleaned = cleanActiveMQOutput(msg.result)
+		}
+		m.viewingResult = true
+		m.resultOutput = cleaned
+		m.resultTitle = completedLabel
+		return m, nil
 
 	case daemonStartedMsg:
 		m.daemonStarting = false
@@ -1144,19 +1163,19 @@ func (m *QueueOpsModel) buildParamActionCmd(act actionItem) tea.Cmd {
 			}
 			switch act.label {
 			case "Describe topic":
-				program, args = "kafka-topics", []string{"--bootstrap-server", bs, "--describe", "--topic", m.paramValues["topic"]}
+				program, args = "/usr/bin/kafka-topics", []string{"--bootstrap-server", bs, "--describe", "--topic", m.paramValues["topic"]}
 			case "Create topic":
-				program, args = "kafka-topics", []string{"--bootstrap-server", bs, "--create", "--topic", m.paramValues["name"], "--partitions", m.paramValues["partitions"], "--replication-factor", m.paramValues["replication_factor"]}
+				program, args = "/usr/bin/kafka-topics", []string{"--bootstrap-server", bs, "--create", "--topic", m.paramValues["name"], "--partitions", m.paramValues["partitions"], "--replication-factor", m.paramValues["replication_factor"]}
 			case "Delete topic":
-				program, args = "kafka-topics", []string{"--bootstrap-server", bs, "--delete", "--topic", m.paramValues["topic"]}
+				program, args = "/usr/bin/kafka-topics", []string{"--bootstrap-server", bs, "--delete", "--topic", m.paramValues["topic"]}
 			case "Produce message":
-				program, args = "kafka-console-producer", []string{"--bootstrap-server", bs, "--topic", m.paramValues["topic"]}
+				program, args = "/usr/bin/kafka-console-producer", []string{"--bootstrap-server", bs, "--topic", m.paramValues["topic"]}
 			case "Consume messages":
-				program, args = "kafka-console-consumer", []string{"--bootstrap-server", bs, "--topic", m.paramValues["topic"], "--max-messages", "100", "--from-beginning"}
+				program, args = "/usr/bin/kafka-console-consumer", []string{"--bootstrap-server", bs, "--topic", m.paramValues["topic"], "--max-messages", "100", "--from-beginning"}
 			case "Describe group":
-				program, args = "kafka-consumer-groups", []string{"--bootstrap-server", bs, "--describe", "--group", m.paramValues["group"]}
+				program, args = "/usr/bin/kafka-consumer-groups", []string{"--bootstrap-server", bs, "--describe", "--group", m.paramValues["group"]}
 			case "Reset offset":
-				program, args = "kafka-consumer-groups", []string{"--bootstrap-server", bs, "--reset-offsets", "--group", m.paramValues["group"], "--to-earliest", "--execute", "--topic", m.paramValues["topic"]}
+				program, args = "/usr/bin/kafka-consumer-groups", []string{"--bootstrap-server", bs, "--reset-offsets", "--group", m.paramValues["group"], "--to-earliest", "--execute", "--topic", m.paramValues["topic"]}
 			}
 
 		case queueType == "rabbitmq":
@@ -1172,44 +1191,79 @@ func (m *QueueOpsModel) buildParamActionCmd(act actionItem) tea.Cmd {
 			}
 			switch act.label {
 			case "Create queue":
-				program, args = "rabbitmqadmin", []string{"-H", hostFlag, "declare", "queue", "name=" + m.paramValues["name"]}
+				program, args = "/usr/local/bin/rabbitmqadmin", []string{"-H", hostFlag, "declare", "queue", "name=" + m.paramValues["name"]}
 			case "Delete queue":
-				program, args = "rabbitmqadmin", []string{"-H", hostFlag, "delete", "queue", "name=" + m.paramValues["name"]}
+				program, args = "/usr/local/bin/rabbitmqadmin", []string{"-H", hostFlag, "delete", "queue", "name=" + m.paramValues["name"]}
 			case "Purge queue":
-				program, args = "rabbitmqadmin", []string{"-H", hostFlag, "purge", "queue", "name=" + m.paramValues["name"]}
+				program, args = "/usr/local/bin/rabbitmqadmin", []string{"-H", hostFlag, "purge", "queue", "name=" + m.paramValues["name"]}
 			}
 
 		case queueType == "activemq":
-			brokerArgs := []string{}
-			if m.targetSyncEnv {
-				svc := m.currentService()
-				if svc != nil {
-					qse := svc.FindQueueSyncEnv(m.selectedEnv)
-					if qse != nil {
-						brokerURL := qse.BrokerURL
-						if brokerURL == "" {
-							brokerURL = "tcp://" + qse.Host + ":" + qse.Port
-						}
-						brokerArgs = append(brokerArgs, "--broker-url", brokerURL)
-						if qse.User != "" {
-							brokerArgs = append(brokerArgs, "--user", qse.User, "--password", qse.Password)
+			switch act.label {
+			case "Browse queue":
+				program = "activemq"
+				args = []string{"browse", m.paramValues["queue"]}
+				if m.targetSyncEnv {
+					svc := m.currentService()
+					if svc != nil {
+						qse := svc.FindQueueSyncEnv(m.selectedEnv)
+						if qse != nil {
+							port := qse.Port
+							if port == "" {
+								port = "61616"
+							}
+							amqURL := "tcp://" + qse.Host + ":" + port
+							args = append(args, "--amqurl", amqURL)
 						}
 					}
 				}
-			}
-			switch act.label {
-			case "Browse queue":
-				args = append(brokerArgs, "browse", m.paramValues["queue"])
-				program = "activemq-admin"
 			case "Purge queue":
-				args = append(brokerArgs, "purge", m.paramValues["queue"])
-				program = "activemq-admin"
-			case "Delete queue":
-				args = append(brokerArgs, "remove", m.paramValues["queue"])
-				program = "activemq-admin"
+				program = "activemq"
+				jmxURL := "service:jmx:rmi:///jndi/rmi://localhost:1099/jmxrmi"
+				if m.targetSyncEnv {
+					svc := m.currentService()
+					if svc != nil {
+						qse := svc.FindQueueSyncEnv(m.selectedEnv)
+						if qse != nil {
+							jmxURL = "service:jmx:rmi:///jndi/rmi://" + qse.Host + ":1099/jmxrmi"
+						}
+					}
+				}
+				args = []string{"purge", m.paramValues["queue"], "--jmxurl", jmxURL}
 			case "Send message":
-				args = append(brokerArgs, "send", m.paramValues["queue"], m.paramValues["message"])
-				program = "activemq-admin"
+				program = "activemq"
+				args = []string{"producer", "--destination", m.paramValues["queue"], "--message", m.paramValues["message"]}
+				if m.targetSyncEnv {
+					svc := m.currentService()
+					if svc != nil {
+						qse := svc.FindQueueSyncEnv(m.selectedEnv)
+						if qse != nil {
+							port := qse.Port
+							if port == "" {
+								port = "61616"
+							}
+							amqURL := "tcp://" + qse.Host + ":" + port
+							args = append(args, "--brokerUrl", amqURL)
+						}
+					}
+				}
+			case "Consume messages":
+				program = "activemq"
+				args = []string{"consumer", "--destination", m.paramValues["queue"]}
+				if m.targetSyncEnv {
+					svc := m.currentService()
+					if svc != nil {
+						qse := svc.FindQueueSyncEnv(m.selectedEnv)
+						if qse != nil {
+							port := qse.Port
+							if port == "" {
+								port = "61616"
+							}
+							amqURL := "tcp://" + qse.Host + ":" + port
+							args = append(args, "--brokerUrl", amqURL)
+						}
+					}
+				}
 			}
 		}
 
@@ -1414,6 +1468,12 @@ func (m *QueueOpsModel) View() string {
 // ── View: Actions screen ──────────────────────────────────────────────────────
 
 func (m *QueueOpsModel) viewActions() string {
+	if m.viewingResult {
+		cardW := m.width - 4
+		content := styles.StyleHeader.Render(m.resultTitle) + "\n\n" + styles.StyleCode.Render(m.resultOutput)
+		return styles.StylePanelFocused.Width(cardW).Render(content) + "\n\n  press any key to return"
+	}
+
 	svc := m.currentService()
 	if svc == nil {
 		m.screen = queueScreenSyncEnvList
@@ -1657,4 +1717,23 @@ func (m *QueueOpsModel) launchDockerCmd() tea.Cmd {
 		time.Sleep(2 * time.Second)
 		return daemonStartedMsg{available: docker.DaemonAvailable()}
 	}
+}
+
+// cleanActiveMQOutput strips JVM startup noise from activemq CLI output.
+// The noise (INFO logs, JVM args, env vars) always ends with ACTIVEMQ_DATA:
+// or "Connecting to JMX URL:" for remote commands — we take everything after.
+func cleanActiveMQOutput(out string) string {
+	// Local --jmxlocal output: noise ends with ACTIVEMQ_DATA:
+	if idx := strings.LastIndex(out, "ACTIVEMQ_DATA:"); idx >= 0 {
+		if end := strings.Index(out[idx:], "\n"); end >= 0 {
+			return strings.TrimSpace(out[idx+end:])
+		}
+	}
+	// Remote --jmxurl output: noise ends with "Connecting to JMX URL:"
+	if idx := strings.LastIndex(out, "Connecting to JMX URL:"); idx >= 0 {
+		if end := strings.Index(out[idx:], "\n"); end >= 0 {
+			return strings.TrimSpace(out[idx+end:])
+		}
+	}
+	return strings.TrimSpace(out)
 }

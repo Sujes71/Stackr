@@ -461,14 +461,59 @@ func ContainerExecWithEnv(container string, env []string, args ...string) (strin
 // program: the CLI tool binary (e.g., "kafka-topics", "rabbitmqadmin")
 // args: arguments passed to the tool
 // Returns combined stdout+stderr and any error.
+//
+// For ActiveMQ commands, auto-detects the JMX RMI port if no -Dactivemq.jmx.url
+// flag is already present in args, and prepends the correct JMX JVM flag.
 func QueueExecLocal(containerName, program string, args ...string) (string, error) {
-	cmdArgs := append([]string{"exec", containerName, program}, args...)
+	cmdArgs := []string{"exec", containerName}
+	if program == "activemq" {
+		// Override ACTIVEMQ_OPTS to prevent the CLI's JVM from inheriting the
+		// broker's JMX port binding flags (which cause "Address already in use").
+		// The CLI's JVM reads ACTIVEMQ_OPTS and passes all -D flags to the JVM,
+		// including -Dcom.sun.management.jmxremote.port=1099 which conflicts with
+		// the already-running broker on the same port.
+		//
+		// We override completely (no $ACTIVEMQ_OPTS reference) so only our
+		// desired flags reach the CLI JVM. The actual JMX connection URL is
+		// passed via --jmxlocal (for JMX commands) or --jmxurl (for purge).
+		// The -Dactivemq.jmx.url here is a fallback for any command that reads
+		// the system property instead of the CLI flag.
+		port := detectActiveMQJmxPort(containerName)
+		jmxURL := fmt.Sprintf("service:jmx:rmi:///jndi/rmi://localhost:%s/jmxrmi", port)
+		shellCmd := fmt.Sprintf(
+			`ACTIVEMQ_OPTS="-Dcom.sun.management.jmxremote.ssl=false -Dactivemq.jmx.url=%s" %s %s`,
+			jmxURL, program, strings.Join(args, " "),
+		)
+		cmdArgs = append(cmdArgs, "sh", "-c", shellCmd)
+	} else {
+		cmdArgs = append(cmdArgs, program)
+		cmdArgs = append(cmdArgs, args...)
+	}
 	cmd := exec.Command("docker", cmdArgs...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%s: %s: %w", program, strings.TrimSpace(string(out)), err)
 	}
 	return string(out), nil
+}
+
+// detectActiveMQJmxPort returns the JMX RMI registry port for an ActiveMQ container.
+// The standard JMX RMI registry port is 1099 — we confirm it's listening in
+// /proc/1/net/tcp before returning, falling back to 1099 as the default.
+func detectActiveMQJmxPort(containerName string) string {
+	portsCmd := `cat /proc/1/net/tcp 2>/dev/null | awk 'NR>1 {print $2}' | cut -d: -f2 | while read h; do printf "%d\n" 0x$h 2>/dev/null; done | sort -nu`
+	out, err := exec.Command("docker", "exec", containerName, "sh", "-c", portsCmd).Output()
+	if err != nil {
+		return "1099"
+	}
+	for _, f := range strings.Fields(string(out)) {
+		if f == "1099" {
+			return "1099"
+		}
+	}
+	// Port 1099 is the standard JMX RMI registry — use it even if not
+	// detected (e.g., container started without ACTIVEMQ_OPTS).
+	return "1099"
 }
 
 // QueueExecRemote executes a queue command against a remote QueueSyncEnv via
