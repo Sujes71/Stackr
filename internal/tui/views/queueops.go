@@ -460,8 +460,11 @@ func (m *QueueOpsModel) actionParams(act actionItem) []string {
 		return []string{"name", "partitions", "replication_factor"}
 	case "Delete topic":
 		return []string{"topic"}
-	case "Produce message":
-		return []string{"topic"}
+	case "Send message":
+		if m.currentQueueType() == "activemq" {
+			return []string{"queue", "message"}
+		}
+		return []string{"topic", "message"}
 	case "Consume messages":
 		if m.currentQueueType() == "activemq" {
 			return []string{"queue"}
@@ -482,8 +485,6 @@ func (m *QueueOpsModel) actionParams(act actionItem) []string {
 		return []string{"name"}
 	case "Browse queue":
 		return []string{"queue"}
-	case "Send message":
-		return []string{"queue", "message"}
 	}
 	return nil
 }
@@ -536,8 +537,8 @@ func (m *QueueOpsModel) buildActionsList(qse *config.QueueSyncEnv) []actionItem 
 				execute: nil}, // params: topic → destructive
 
 			// Messaging group
-			{label: "Produce message", group: "Messaging", enabled: true,
-				execute: nil}, // params: topic
+			{label: "Send message", group: "Messaging", enabled: true,
+				execute: nil}, // params: topic, message
 			{label: "Consume messages", group: "Messaging", enabled: true,
 				execute: nil}, // params: topic
 
@@ -562,9 +563,6 @@ func (m *QueueOpsModel) buildActionsList(qse *config.QueueSyncEnv) []actionItem 
 		}
 
 		rabbitArgs := func(subcmd string) []string {
-			return []string{"-H", hostFlag, "-P", portFlag, subcmd}
-		}
-		rabbitArgsAll := func(subcmd string) []string {
 			args := []string{"-H", hostFlag, "-P", portFlag}
 			if qse != nil && qse.User != "" {
 				args = append(args, "-u", qse.User, "-p", qse.Password)
@@ -572,9 +570,6 @@ func (m *QueueOpsModel) buildActionsList(qse *config.QueueSyncEnv) []actionItem 
 			args = append(args, subcmd)
 			return args
 		}
-
-		// rabbitmqadmin list queues (no auth needed typically)
-		_ = rabbitArgsAll // for authenticated variants if needed
 
 		actions = []actionItem{
 			// Queues group
@@ -1237,10 +1232,16 @@ func (m *QueueOpsModel) buildParamActionCmd(act actionItem) tea.Cmd {
 				program, args = "/usr/bin/kafka-topics", []string{"--bootstrap-server", bs, "--create", "--topic", m.paramValues["name"], "--partitions", m.paramValues["partitions"], "--replication-factor", m.paramValues["replication_factor"]}
 			case "Delete topic":
 				program, args = "/usr/bin/kafka-topics", []string{"--bootstrap-server", bs, "--delete", "--topic", m.paramValues["topic"]}
-			case "Produce message":
-				program, args = "/usr/bin/kafka-console-producer", []string{"--bootstrap-server", bs, "--topic", m.paramValues["topic"]}
+			case "Send message":
+				program = "sh"
+				args = []string{"-c", fmt.Sprintf(
+					`/usr/bin/kafka-console-producer --bootstrap-server '%s' --topic '%s' <<'INNEREOF'
+%s
+INNEREOF`,
+					bs, m.paramValues["topic"], m.paramValues["message"],
+				)}
 			case "Consume messages":
-				program, args = "/usr/bin/kafka-console-consumer", []string{"--bootstrap-server", bs, "--topic", m.paramValues["topic"], "--max-messages", "100", "--from-beginning"}
+				program, args = "/usr/bin/kafka-console-consumer", []string{"--bootstrap-server", bs, "--topic", m.paramValues["topic"], "--max-messages", "1", "--from-beginning"}
 			case "Describe group":
 				program, args = "/usr/bin/kafka-consumer-groups", []string{"--bootstrap-server", bs, "--describe", "--group", m.paramValues["group"]}
 			case "Reset offset":
@@ -1249,22 +1250,38 @@ func (m *QueueOpsModel) buildParamActionCmd(act actionItem) tea.Cmd {
 
 		case queueType == "rabbitmq":
 			hostFlag := "localhost"
+			portFlag := "15672"
+			userFlag := ""
+			passFlag := ""
 			if m.targetSyncEnv {
 				svc := m.currentService()
 				if svc != nil {
 					qse := svc.FindQueueSyncEnv(m.selectedEnv)
 					if qse != nil {
 						hostFlag = qse.Host
+						if qse.Port != "" {
+							portFlag = qse.Port
+						}
+						userFlag = qse.User
+						passFlag = qse.Password
 					}
 				}
 			}
+			// Build rabbitmqadmin base args with host, port, and optional auth
+			rabbitBase := []string{"-H", hostFlag, "-P", portFlag}
+			if userFlag != "" {
+				rabbitBase = append(rabbitBase, "-u", userFlag, "-p", passFlag)
+			}
 			switch act.label {
 			case "Create queue":
-				program, args = "/usr/local/bin/rabbitmqadmin", []string{"-H", hostFlag, "declare", "queue", "name=" + m.paramValues["name"]}
+				program = "/usr/local/bin/rabbitmqadmin"
+				args = append(rabbitBase, "declare", "queue", "name="+m.paramValues["name"])
 			case "Delete queue":
-				program, args = "/usr/local/bin/rabbitmqadmin", []string{"-H", hostFlag, "delete", "queue", "name=" + m.paramValues["name"]}
+				program = "/usr/local/bin/rabbitmqadmin"
+				args = append(rabbitBase, "delete", "queue", "name="+m.paramValues["name"])
 			case "Purge queue":
-				program, args = "/usr/local/bin/rabbitmqadmin", []string{"-H", hostFlag, "purge", "queue", "name=" + m.paramValues["name"]}
+				program = "/usr/local/bin/rabbitmqadmin"
+				args = append(rabbitBase, "purge", "queue", "name="+m.paramValues["name"])
 			}
 
 		case queueType == "activemq":
@@ -1286,19 +1303,23 @@ func (m *QueueOpsModel) buildParamActionCmd(act actionItem) tea.Cmd {
 						}
 					}
 				}
-			case "Purge queue":
-				program = "activemq"
-				jmxURL := "service:jmx:rmi:///jndi/rmi://localhost:1099/jmxrmi"
-				if m.targetSyncEnv {
-					svc := m.currentService()
-					if svc != nil {
-						qse := svc.FindQueueSyncEnv(m.selectedEnv)
-						if qse != nil {
-							jmxURL = "service:jmx:rmi:///jndi/rmi://" + qse.Host + ":1099/jmxrmi"
-						}
+		case "Purge queue":
+			program = "activemq"
+			if m.targetSyncEnv {
+				svc := m.currentService()
+				if svc != nil {
+					qse := svc.FindQueueSyncEnv(m.selectedEnv)
+					if qse != nil {
+						jmxURL := "service:jmx:rmi:///jndi/rmi://" + qse.Host + ":1099/jmxrmi"
+						args = []string{"purge", m.paramValues["queue"], "--jmxurl", jmxURL}
 					}
 				}
-				args = []string{"purge", m.paramValues["queue"], "--jmxurl", jmxURL}
+			}
+			if args == nil {
+				// --jmxlocal avoids a NullPointerException in ActiveMQ 6.2.0
+				// that occurs with --jmxurl when running purge locally.
+				args = []string{"purge", m.paramValues["queue"], "--jmxlocal"}
+			}
 			case "Send message":
 				program = "activemq"
 				args = []string{"producer", "--destination", m.paramValues["queue"], "--message", m.paramValues["message"], "--messageCount", "1"}
@@ -1831,8 +1852,9 @@ func cleanActiveMQOutput(out string) string {
 		if strings.Contains(trimmed, "ActiveMQ.Advisory") {
 			continue
 		}
-		// Skip INFO | lines (internal ActiveMQ Java logging)
-		if strings.HasPrefix(trimmed, "INFO |") {
+		// Skip INFO lines (internal ActiveMQ Java logging).
+		// The consumer/producer use "INFO |" format, purge uses "INFO:".
+		if strings.HasPrefix(trimmed, "INFO |") || strings.HasPrefix(trimmed, "INFO:") {
 			continue
 		}
 		result = append(result, line)
