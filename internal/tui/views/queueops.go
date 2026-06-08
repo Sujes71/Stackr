@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -574,15 +575,17 @@ func (m *QueueOpsModel) buildActionsList(qse *config.QueueSyncEnv) []actionItem 
 		}
 
 			case "activemq":
-		// JMX exec helper: for remote, uses --jmxurl; for local (inside container),
-		// uses --jmxlocal to bypass SSL via Attach API.
+		// JMX exec helper: uses --jmxurl for both remote and local.
+		// --jmxlocal (Attach API) was initially used for local but doesn't
+		// reliably find destination MBeans inside the container — --jmxurl
+		// via RMI/JMX remote works consistently.
 		// The flags MUST come AFTER the subcommand (CLI syntax: task [task-options]).
 		jmxExec := func(args ...string) func() tea.Cmd {
+			jmxURL := "service:jmx:rmi:///jndi/rmi://localhost:1099/jmxrmi"
 			if qse != nil {
-				jmxURL := "service:jmx:rmi:///jndi/rmi://" + qse.Host + ":1099/jmxrmi"
-				return qExec("activemq", append(args, "--jmxurl", jmxURL)...)
+				jmxURL = "service:jmx:rmi:///jndi/rmi://" + qse.Host + ":1099/jmxrmi"
 			}
-			return qExec("activemq", append(args, "--jmxlocal")...)
+			return qExec("activemq", append(args, "--jmxurl", jmxURL)...)
 		}
 
 		actions = []actionItem{
@@ -918,10 +921,12 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.doneOp = completedLabel
-		// Clean verbose output: for ActiveMQ, strip JVM startup noise.
+		// Clean verbose output: for ActiveMQ, strip JVM startup noise
+		// and format table output for List destinations.
 		cleaned := msg.result
 		if m.currentQueueType() == "activemq" {
 			cleaned = cleanActiveMQOutput(msg.result)
+			cleaned = formatActiveMQTable(cleaned)
 		}
 		m.viewingResult = true
 		m.resultOutput = cleaned
@@ -1719,21 +1724,202 @@ func (m *QueueOpsModel) launchDockerCmd() tea.Cmd {
 	}
 }
 
-// cleanActiveMQOutput strips JVM startup noise from activemq CLI output.
-// The noise (INFO logs, JVM args, env vars) always ends with ACTIVEMQ_DATA:
-// or "Connecting to JMX URL:" for remote commands — we take everything after.
+// cleanActiveMQOutput strips JVM startup noise and internal advisory queues
+// from activemq CLI output, keeping only the meaningful data.
 func cleanActiveMQOutput(out string) string {
-	// Local --jmxlocal output: noise ends with ACTIVEMQ_DATA:
+	// Strip JVM noise at the start: everything after ACTIVEMQ_DATA:
 	if idx := strings.LastIndex(out, "ACTIVEMQ_DATA:"); idx >= 0 {
 		if end := strings.Index(out[idx:], "\n"); end >= 0 {
-			return strings.TrimSpace(out[idx+end:])
+			out = out[idx+end+1:]
 		}
 	}
-	// Remote --jmxurl output: noise ends with "Connecting to JMX URL:"
+	// Strip "Connecting to JMX URL:" line (remote commands)
 	if idx := strings.LastIndex(out, "Connecting to JMX URL:"); idx >= 0 {
 		if end := strings.Index(out[idx:], "\n"); end >= 0 {
-			return strings.TrimSpace(out[idx+end:])
+			out = out[idx+end+1:]
 		}
 	}
-	return strings.TrimSpace(out)
+	// Filter out internal advisory queues (system noise)
+	lines := strings.Split(out, "\n")
+	var result []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		// Skip ActiveMQ advisory queues — they're internal system topics/queues
+		if strings.Contains(trimmed, "ActiveMQ.Advisory") {
+			continue
+		}
+		result = append(result, line)
+	}
+	return strings.TrimSpace(strings.Join(result, "\n"))
+}
+
+// ── Table Formatting ────────────────────────────────────────────────────────────
+
+// tableColumn represents a column in a fixed-format CLI table like dstat.
+type tableColumn struct {
+	name  string
+	start int // byte offset in the line where this column starts
+	end   int // byte offset where this column ends (exclusive)
+}
+
+// reTableSplit splits on 2+ spaces, preserving multi-word column names.
+var reTableSplit = regexp.MustCompile(`\s{2,}`)
+
+// parseTableColumns determines column boundaries from the header line of a
+// fixed-format table (e.g. ActiveMQ dstat output). Columns are separated by 2+
+// spaces; the header name determines the start position for each column.
+func parseTableColumns(header string) []tableColumn {
+	parts := reTableSplit.Split(header, -1)
+
+	var cols []tableColumn
+	searchPos := 0
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			continue
+		}
+		idx := strings.Index(header[searchPos:], name)
+		if idx < 0 {
+			continue
+		}
+		start := searchPos + idx
+		cols = append(cols, tableColumn{name: name, start: start})
+		searchPos = start + len(name)
+	}
+
+	// Set end positions (up to the next column's start, or end of line)
+	for i := range cols {
+		if i+1 < len(cols) {
+			cols[i].end = cols[i+1].start
+		} else {
+			cols[i].end = len(header)
+		}
+	}
+	return cols
+}
+
+// extractColumn extracts the value for a single column from a fixed-format line.
+func extractColumn(line string, col tableColumn) string {
+	if col.start >= len(line) {
+		return ""
+	}
+	end := col.end
+	if end > len(line) {
+		end = len(line)
+	}
+	return strings.TrimSpace(line[col.start:end])
+}
+
+// padRight pads s on the right to at least the given width.
+func padRight(s string, width int) string {
+	if d := width - lipgloss.Width(s); d > 0 {
+		return s + strings.Repeat(" ", d)
+	}
+	return s
+}
+
+// padLeft pads s on the left to at least the given width.
+func padLeft(s string, width int) string {
+	if d := width - lipgloss.Width(s); d > 0 {
+		return strings.Repeat(" ", d) + s
+	}
+	return s
+}
+
+// formatActiveMQTable renders a fixed-format CLI table (like dstat) as a styled
+// lipgloss table with aligned columns and consistent theming. Returns the raw
+// string unchanged if the output doesn't look like a table.
+func formatActiveMQTable(raw string) string {
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	if len(lines) < 2 {
+		return raw
+	}
+
+	header := lines[0]
+	cols := parseTableColumns(header)
+	if len(cols) < 3 {
+		return raw // not tabular enough to format
+	}
+
+	// ── Calculate max width per column ──────────────────────────────────────
+
+	colWidths := make([]int, len(cols))
+	for i, col := range cols {
+		if w := lipgloss.Width(extractColumn(header, col)); w > colWidths[i] {
+			colWidths[i] = w
+		}
+	}
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		for i, col := range cols {
+			if w := lipgloss.Width(extractColumn(line, col)); w > colWidths[i] {
+				colWidths[i] = w
+			}
+		}
+	}
+
+	// ── Build total width for the separator ─────────────────────────────────
+
+	totalWidth := 0
+	for i, w := range colWidths {
+		if i > 0 {
+			totalWidth += 2 // inter-column spacing
+		}
+		totalWidth += w
+	}
+
+	var b strings.Builder
+
+	// ── Header row ──────────────────────────────────────────────────────────
+
+	for i, col := range cols {
+		val := extractColumn(header, col)
+		styled := styles.StyleHeader.Render(val)
+		if i < len(cols)-1 {
+			styled = padRight(styled, colWidths[i])
+		}
+		if i > 0 {
+			b.WriteString("  ")
+		}
+		b.WriteString(styled)
+	}
+	b.WriteString("\n")
+
+	// ── Separator ───────────────────────────────────────────────────────────
+
+	b.WriteString(styles.StyleSubtitle.Render(strings.Repeat("─", totalWidth)))
+	b.WriteString("\n")
+
+	// ── Data rows ───────────────────────────────────────────────────────────
+
+	for _, line := range lines[1:] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		for i, col := range cols {
+			val := extractColumn(line, col)
+			var styled string
+			if i == 0 {
+				// Name column — left-aligned, primary (blue)
+				nameStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary)
+				styled = nameStyle.Render(padRight(val, colWidths[i]))
+			} else {
+				// Numeric columns — right-aligned, muted
+				styled = styles.StyleSubtitle.Render(padLeft(val, colWidths[i]))
+			}
+			if i > 0 {
+				b.WriteString("  ")
+			}
+			b.WriteString(styled)
+		}
+		b.WriteString("\n")
+	}
+
+	return b.String()
 }
