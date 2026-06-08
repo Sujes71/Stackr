@@ -26,6 +26,13 @@ const (
 	DefaultPortMSSQL    = "1433"
 )
 
+// Default port constants for supported queue types.
+const (
+	DefaultPortKafka    = "9092"
+	DefaultPortRabbitMQ = "5672"
+	DefaultPortActiveMQ = "61616"
+)
+
 type Config struct {
 	Profiles []Profile `yaml:"profiles"`
 }
@@ -56,8 +63,9 @@ type Service struct {
 	EnvVars     []EnvVar          `yaml:"env_vars,omitempty"`
 	Volumes     []VolumeMapping   `yaml:"volumes,omitempty"`
 	DependsOn   []string          `yaml:"depends_on,omitempty"`
-	SyncEnvs    []SyncEnv         `yaml:"sync_envs,omitempty"`
-	HealthCheck *HealthCheck      `yaml:"healthcheck,omitempty"`
+	SyncEnvs      []SyncEnv         `yaml:"sync_envs,omitempty"`
+	QueueSyncEnvs []QueueSyncEnv   `yaml:"queue_sync_envs,omitempty"`
+	HealthCheck   *HealthCheck      `yaml:"healthcheck,omitempty"`
 	Restart     string            `yaml:"restart,omitempty"`
 	Networks    []string          `yaml:"networks,omitempty"`
 }
@@ -120,11 +128,37 @@ func containsFold(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
 
+// QueueType returns the queue type this service provides, or "" if not a queue.
+// Supported: kafka, rabbitmq, activemq.
+func (s Service) QueueType() string {
+	img := s.Image
+	switch {
+	case containsFold(img, "kafka") || containsFold(img, "confluent"):
+		return "kafka"
+	case containsFold(img, "rabbitmq"):
+		return "rabbitmq"
+	case containsFold(img, "activemq"):
+		return "activemq"
+	default:
+		return ""
+	}
+}
+
 // FindSyncEnv finds a SyncEnv by name, or returns nil if not found.
 func (s Service) FindSyncEnv(name string) *SyncEnv {
 	for i := range s.SyncEnvs {
 		if s.SyncEnvs[i].Name == name {
 			return &s.SyncEnvs[i]
+		}
+	}
+	return nil
+}
+
+// FindQueueSyncEnv finds a QueueSyncEnv by name, or returns nil if not found.
+func (s Service) FindQueueSyncEnv(name string) *QueueSyncEnv {
+	for i := range s.QueueSyncEnvs {
+		if s.QueueSyncEnvs[i].Name == name {
+			return &s.QueueSyncEnvs[i]
 		}
 	}
 	return nil
@@ -172,6 +206,52 @@ type SyncEnv struct {
 	AuthDB        string         `yaml:"auth_db,omitempty"`
 	ToolImage     string         `yaml:"tool_image,omitempty"`
 	CustomActions []CustomAction `yaml:"custom_actions,omitempty"`
+}
+
+// QueueSyncEnv defines a remote queue environment's connection details.
+type QueueSyncEnv struct {
+	Name      string `yaml:"name"`
+	QueueType string `yaml:"queue_type"` // kafka | rabbitmq | activemq
+	Host      string `yaml:"host"`
+	Port      string `yaml:"port"`
+	User      string `yaml:"user,omitempty"`
+	Password  string `yaml:"password,omitempty"`
+	ToolImage string `yaml:"tool_image,omitempty"`
+	// Kafka-specific
+	BootstrapServers string `yaml:"bootstrap_servers,omitempty"` // host:port,host:port
+	// RabbitMQ-specific
+	ManagementEndpoint string `yaml:"management_endpoint,omitempty"` // http://host:15672
+	VHost              string `yaml:"vhost,omitempty"`               // default: /
+	// ActiveMQ-specific
+	BrokerURL     string         `yaml:"broker_url,omitempty"` // tcp://host:61616
+	CustomActions []CustomAction `yaml:"custom_actions,omitempty"`
+}
+
+// Validate checks that all required fields are set and valid.
+// Returns a map of field name → error message for invalid fields.
+func (q QueueSyncEnv) Validate() map[string]string {
+	errs := make(map[string]string)
+	validTypes := map[string]bool{"kafka": true, "rabbitmq": true, "activemq": true}
+	if !validTypes[q.QueueType] {
+		errs["queue_type"] = fmt.Sprintf("invalid QueueType %q; must be one of: kafka, rabbitmq, activemq", q.QueueType)
+	}
+	if strings.TrimSpace(q.Name) == "" {
+		errs["name"] = "Name is required"
+	}
+	if strings.TrimSpace(q.Host) == "" {
+		errs["host"] = "Host is required"
+	}
+	if q.Port != "" {
+		if p, err := strconv.Atoi(q.Port); err != nil || p < 1 || p > 65535 {
+			errs["port"] = "Port must be a number between 1 and 65535"
+		}
+	}
+	return errs
+}
+
+// DumpDir returns the directory path for custom action output of this queue sync environment.
+func (q QueueSyncEnv) DumpDir(profileName, envName, serviceName string) string {
+	return filepath.Join(ProfileDir(profileName), envName, "queue-ops", serviceName, q.Name)
 }
 
 // PortForward defines a K8s port-forward configuration.

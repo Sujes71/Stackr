@@ -54,6 +54,32 @@ func ToolImage(se *config.SyncEnv) string {
 	return DefaultToolImage(se.DBType)
 }
 
+// ================================================================
+// Queue tool images
+// ================================================================
+
+// DefaultQueueToolImage returns the default tool image for the given queue type.
+func DefaultQueueToolImage(queueType string) string {
+	switch queueType {
+	case "kafka":
+		return "confluentinc/cp-kafka:latest"
+	case "rabbitmq":
+		return "rabbitmq:3-management"
+	case "activemq":
+		return "apache/activemq-classic:latest"
+	default:
+		return ""
+	}
+}
+
+// QueueToolImage returns the tool image for a QueueSyncEnv, or the default if not set.
+func QueueToolImage(qse *config.QueueSyncEnv) string {
+	if qse.ToolImage != "" {
+		return qse.ToolImage
+	}
+	return DefaultQueueToolImage(qse.QueueType)
+}
+
 // DaemonAvailable checks if the Docker daemon is reachable by running
 // `docker version --format '{{.Server.Version}}'` with a timeout.
 func DaemonAvailable() bool {
@@ -424,6 +450,53 @@ func ContainerExecWithEnv(container string, env []string, args ...string) (strin
 		return "", fmt.Errorf("docker exec: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return string(out), nil
+}
+
+// ================================================================
+// Queue container helpers
+// ================================================================
+
+// QueueExecLocal executes a queue command inside the running container via docker exec.
+// containerName: the service container name
+// program: the CLI tool binary (e.g., "kafka-topics", "rabbitmqadmin")
+// args: arguments passed to the tool
+// Returns combined stdout+stderr and any error.
+func QueueExecLocal(containerName, program string, args ...string) (string, error) {
+	cmdArgs := append([]string{"exec", containerName, program}, args...)
+	cmd := exec.Command("docker", cmdArgs...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s: %s: %w", program, strings.TrimSpace(string(out)), err)
+	}
+	return string(out), nil
+}
+
+// QueueExecRemote executes a queue command against a remote QueueSyncEnv via
+// a throwaway container (docker run --rm) using the configured tool image.
+// qse: the QueueSyncEnv with connection details
+// program: the CLI tool binary
+// args: arguments (should include host/port connectivity flags)
+func QueueExecRemote(qse *config.QueueSyncEnv, program string, args ...string) (string, error) {
+	image := QueueToolImage(qse)
+	cmdArgs := append([]string{"run", "--rm", image, program}, args...)
+	cmd := exec.Command("docker", cmdArgs...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s: %s: %w", program, strings.TrimSpace(string(out)), err)
+	}
+	return string(out), nil
+}
+
+// QueueContainerRunning checks whether a queue container exists and is running
+// via docker inspect. Returns (false, nil) if the container doesn't exist or
+// the Docker daemon is not available.
+func QueueContainerRunning(containerName string) (bool, error) {
+	cmd := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", containerName)
+	out, err := cmd.Output()
+	if err != nil {
+		return false, nil
+	}
+	return strings.TrimSpace(string(out)) == "true", nil
 }
 
 // ContainerReady checks if the database inside the container is accepting connections.

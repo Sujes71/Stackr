@@ -1,0 +1,1660 @@
+package views
+
+import (
+	"fmt"
+	"os/exec"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/stackr/stackr/internal/config"
+	"github.com/stackr/stackr/internal/docker"
+	"github.com/stackr/stackr/internal/tui/styles"
+)
+
+// ── Internal screen enum ──────────────────────────────────────────────────────
+
+type queueOpsScreen int
+
+const (
+	queueScreenSyncEnvList queueOpsScreen = iota
+	queueScreenActions
+	queueScreenWizard
+)
+
+// ── Key bindings ──────────────────────────────────────────────────────────────
+
+var (
+	queueOpsUp     = key.NewBinding(key.WithKeys("up"))
+	queueOpsDown   = key.NewBinding(key.WithKeys("down"))
+	queueOpsEnter  = key.NewBinding(key.WithKeys("enter"))
+	queueOpsBack   = key.NewBinding(key.WithKeys("esc"))
+	queueOpsAdd    = key.NewBinding(key.WithKeys("a"))
+	queueOpsEdit   = key.NewBinding(key.WithKeys("e"))
+	queueOpsDelete = key.NewBinding(key.WithKeys("d"))
+)
+
+// ── Queue Ops specific messages ───────────────────────────────────────────────
+
+// queueOpsDoneMsg is reused from messages.go (already defined there).
+
+// ── Model ─────────────────────────────────────────────────────────────────────
+
+// QueueOpsModel implements the 3-screen queue operations view.
+// Internal screens:
+//   - SyncEnv List (default) — shows configured QueueSyncEnvs + virtual "(local)" entry
+//   - Actions — pre-defined and custom actions for the selected queue type
+//   - Wizard — delegates to AddQueueSyncEnvModel for add/edit
+type QueueOpsModel struct {
+	cfg         *config.Config
+	profile     *config.Profile
+	envName     string
+	serviceName string
+	serviceIdx  int
+
+	// Internal screen
+	screen queueOpsScreen
+
+	// SyncEnv list state
+	listCursor       int
+	deleteArmed      bool
+	selectedEnv      string // name of selected QueueSyncEnv (empty = local)
+	selectedEnvName  string // display name
+
+	// Actions state
+	actions       []actionItem
+	actionCursor  int
+	targetSyncEnv bool // true = remote via docker run --rm, false = local via docker exec
+
+	// Running state — per-action inline spinners
+	pendingOps map[string]string
+	lastResult string
+	doneOp     string
+
+	// Spinner
+	spinnerFrame int
+
+	// Viewport
+	height int
+
+	// Wizard (delegated)
+	wizardModel *AddQueueSyncEnvModel
+
+	// Custom action form
+	addingCustomAction bool
+	editingCustomIdx   int
+	customFormFocus    int
+	customNameInput    textinput.Model
+	customCmdInput     textinput.Model
+
+	// Custom action param prompting
+	promptingParams   bool
+	promptingForCore  bool // true = prompting for pre-defined action, false = for custom
+	paramsToPrompt    []string
+	paramValues       map[string]string
+	currentParamIdx   int
+	paramInput        textinput.Model
+
+	// Custom action delete
+	deleteActionArmed bool
+
+	// Confirm before execute (double confirmation)
+	confirmAction       bool
+	confirmCustomAction bool
+	pendingCustomCmd    string
+
+	// Prompt state (start service before action)
+	promptStartService bool
+	promptStartDaemon  bool
+	daemonStarting     bool
+	pendingStartLabel  string
+}
+
+// ── Constructor ───────────────────────────────────────────────────────────────
+
+func NewQueueOps(cfg *config.Config, p *config.Profile, envName, serviceName string) *QueueOpsModel {
+	m := &QueueOpsModel{
+		cfg:         cfg,
+		profile:     p,
+		envName:     envName,
+		serviceName: serviceName,
+		screen:      queueScreenSyncEnvList,
+		pendingOps:  make(map[string]string),
+		customNameInput: textinput.New(),
+		customCmdInput:  textinput.New(),
+		paramInput:      textinput.New(),
+	}
+	m.customNameInput.Placeholder = "Action name"
+	m.customCmdInput.Placeholder = "Command (use {param} for variables)"
+	m.paramInput.Placeholder = "value"
+	// Resolve service index for mutations
+	for i, svc := range m.currentEnv().Services {
+		if svc.Name == serviceName {
+			m.serviceIdx = i
+			break
+		}
+	}
+	return m
+}
+
+// ── Getters for breadcrumb navigation ─────────────────────────────────────────
+
+func (m *QueueOpsModel) ProfileName() string { return m.profile.Name }
+func (m *QueueOpsModel) EnvName() string     { return m.envName }
+func (m *QueueOpsModel) ServiceName() string { return m.serviceName }
+
+func (m *QueueOpsModel) ServiceKey() string {
+	return m.profile.Name + "/" + m.envName + "/" + m.serviceName
+}
+
+func (m *QueueOpsModel) ReShow(cfg *config.Config) {
+	if p, ok := cfg.GetProfile(m.profile.Name); ok {
+		m.profile = p
+	}
+	m.deleteArmed = false
+	m.deleteActionArmed = false
+}
+
+func (m *QueueOpsModel) IsBusy() bool {
+	return len(m.pendingOps) > 0
+}
+
+// ── Environment / Service helpers ─────────────────────────────────────────────
+
+func (m *QueueOpsModel) currentEnv() *config.Environment {
+	for i := range m.profile.Environments {
+		if m.profile.Environments[i].Name == m.envName {
+			return &m.profile.Environments[i]
+		}
+	}
+	return nil
+}
+
+func (m *QueueOpsModel) currentService() *config.Service {
+	env := m.currentEnv()
+	if env == nil {
+		return nil
+	}
+	if m.serviceIdx >= 0 && m.serviceIdx < len(env.Services) {
+		svc := &env.Services[m.serviceIdx]
+		if svc.Name == m.serviceName || svc.ComposeName() == m.serviceName {
+			return svc
+		}
+	}
+	for i := range env.Services {
+		svc := &env.Services[i]
+		if svc.Name == m.serviceName || svc.ComposeName() == m.serviceName {
+			m.serviceIdx = i
+			return svc
+		}
+	}
+	return nil
+}
+
+func (m *QueueOpsModel) currentQueueType() string {
+	svc := m.currentService()
+	if svc == nil {
+		return ""
+	}
+	return svc.QueueType()
+}
+
+// ── Init / Size ───────────────────────────────────────────────────────────────
+
+func (m *QueueOpsModel) Init() tea.Cmd {
+	return nil
+}
+
+func (m *QueueOpsModel) SetSize(w, h int) {
+	m.height = max(0, h)
+}
+
+// ── Update dispatch ───────────────────────────────────────────────────────────
+
+func (m *QueueOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, ok := msg.(SpinnerTickMsg); ok {
+		if len(m.pendingOps) > 0 {
+			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
+			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+				return SpinnerTickMsg{}
+			})
+		}
+		return m, nil
+	}
+
+	switch m.screen {
+	case queueScreenWizard:
+		return m.updateWizard(msg)
+	case queueScreenActions:
+		return m.updateActions(msg)
+	default:
+		return m.updateList(msg)
+	}
+}
+
+// ── SyncEnv List screen ───────────────────────────────────────────────────────
+
+func (m *QueueOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch {
+		case key.Matches(msg, queueOpsBack):
+			m.deleteArmed = false
+			return m, func() tea.Msg {
+				return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name, EnvName: m.envName, ServiceName: m.serviceName}
+			}
+		}
+
+		svc := m.currentService()
+		if svc == nil {
+			return m, nil
+		}
+		queueSyncEnvs := svc.QueueSyncEnvs
+		// Cursor range: 0 (local) to len(queueSyncEnvs) (last real entry)
+		maxCursor := len(queueSyncEnvs)
+
+		switch {
+		case key.Matches(msg, queueOpsUp) && m.listCursor > 0 && !m.deleteArmed:
+			m.listCursor--
+
+		case key.Matches(msg, queueOpsDown) && m.listCursor < maxCursor && !m.deleteArmed:
+			m.listCursor++
+
+		case key.Matches(msg, queueOpsEnter):
+			if m.listCursor == 0 {
+				// Local entry
+				m.targetSyncEnv = false
+				m.selectedEnv = ""
+				m.selectedEnvName = "(local)"
+				m.actions = m.buildActionsList(nil)
+			} else {
+				// Real QueueSyncEnv
+				qse := &queueSyncEnvs[m.listCursor-1]
+				m.targetSyncEnv = true
+				m.selectedEnv = qse.Name
+				m.selectedEnvName = qse.Name
+				m.actions = m.buildActionsList(qse)
+			}
+			m.actionCursor = m.firstEnabledAction()
+			m.screen = queueScreenActions
+			m.deleteArmed = false
+
+		case key.Matches(msg, queueOpsAdd):
+			m.deleteArmed = false
+			m.wizardModel = NewAddQueueSyncEnv(m.cfg, m.profile, m.envName, m.serviceName, true, nil)
+			m.screen = queueScreenWizard
+
+		case key.Matches(msg, queueOpsEdit):
+			if m.listCursor > 0 && m.listCursor <= len(queueSyncEnvs) {
+				qse := &queueSyncEnvs[m.listCursor-1]
+				m.wizardModel = NewAddQueueSyncEnv(m.cfg, m.profile, m.envName, m.serviceName, false, qse)
+				m.screen = queueScreenWizard
+				m.deleteArmed = false
+			}
+
+		case key.Matches(msg, queueOpsDelete):
+			if m.listCursor == 0 {
+				break // can't delete local entry
+			}
+			if !m.deleteArmed {
+				m.deleteArmed = true
+			} else {
+				idx := m.listCursor - 1
+				m.deleteArmed = false
+				svc.QueueSyncEnvs = append(queueSyncEnvs[:idx], queueSyncEnvs[idx+1:]...)
+				m.profile.UpdatedAt = time.Now()
+				if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+					m.lastResult = formatErrorMsg(err.Error())
+					return m, nil
+				}
+				if m.listCursor > len(svc.QueueSyncEnvs) && m.listCursor > 0 {
+					m.listCursor--
+				}
+				return m, nil
+			}
+
+		default:
+			if m.deleteArmed {
+				m.deleteArmed = false
+			}
+		}
+
+	case ClearActionMsg:
+		m.lastResult = ""
+		m.doneOp = ""
+	}
+
+	return m, nil
+}
+
+func (m *QueueOpsModel) viewSyncEnvList() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(styles.StyleTitle.Render(
+		fmt.Sprintf(" Queue Ops — %s / %s / %s ", m.profile.Name, m.envName, m.serviceName)))
+	b.WriteString("\n\n")
+	b.WriteString(styles.StyleSubtitle.Render("  Queue Environments"))
+	b.WriteString("\n\n")
+
+	svc := m.currentService()
+	if svc == nil {
+		b.WriteString(styles.StyleError.Render("  Service not found."))
+		b.WriteString("\n")
+		b.WriteString(styles.StyleSubtitle.Render("  This Queue Ops entry is stale or the service was removed."))
+		b.WriteString("\n")
+		b.WriteString(styles.StyleSubtitle.Render("  Press esc to go back to the profile and choose another service."))
+		b.WriteString("\n\n")
+		b.WriteString(styles.BackHelp())
+		return b.String()
+	}
+	queueSyncEnvs := svc.QueueSyncEnvs
+
+	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
+
+	// Virtual "(local)" entry at index 0
+	localLine := fmt.Sprintf("    %s  %s  %s", "(local)", m.currentQueueType(), "(docker exec)")
+	if m.listCursor == 0 {
+		b.WriteString(selStyle.Render("  > " + localLine))
+	} else {
+		b.WriteString("    " + localLine)
+	}
+	b.WriteString("\n")
+
+	if len(queueSyncEnvs) == 0 {
+		b.WriteString("\n")
+		b.WriteString(styles.StyleSubtitle.Render("  No remote queue environments configured."))
+		b.WriteString("\n")
+		b.WriteString(styles.StyleSubtitle.Render("  Press a to add one."))
+		b.WriteString("\n")
+	} else {
+		for i, qse := range queueSyncEnvs {
+			cursorIdx := i + 1 // offset by local entry
+			prefix := "    "
+			if cursorIdx == m.listCursor {
+				prefix = "  > "
+			}
+			line := fmt.Sprintf("%s%s  %s  %s:%s",
+				prefix, qse.Name, qse.QueueType, qse.Host, qse.Port)
+			if cursorIdx == m.listCursor {
+				b.WriteString(selStyle.Render(line))
+			} else {
+				b.WriteString(line)
+			}
+			b.WriteString("\n")
+		}
+	}
+
+	if m.deleteArmed {
+		b.WriteString("\n" + styles.StyleError.Render("  Press d again to confirm removal"))
+		b.WriteString("\n")
+	}
+
+	if m.lastResult != "" {
+		b.WriteString("\n  " + m.lastResult + "\n")
+	}
+
+	b.WriteString("\n")
+	// Contextual actions
+	var contextItems []styles.HelpItemResult
+	contextItems = append(contextItems, styles.HelpItem("a", "add"))
+	if len(queueSyncEnvs) > 0 && m.listCursor > 0 {
+		contextItems = append(contextItems, styles.HelpItem("e", "edit"))
+		contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
+	}
+	b.WriteString("      " + styles.InlineHelp(contextItems...))
+	b.WriteString("\n\n")
+	// Navigation
+	b.WriteString(styles.BackHelp(
+		styles.HelpItem("↑ ↓", "navigate"),
+		styles.HelpItem("↵", "open"),
+	))
+	return b.String()
+}
+
+// ── Build Actions List ────────────────────────────────────────────────────────
+
+// actionParams returns the param names required for a pre-defined action, or nil.
+func (m *QueueOpsModel) actionParams(act actionItem) []string {
+	switch act.label {
+	case "Describe topic":
+		return []string{"topic"}
+	case "Create topic":
+		return []string{"name", "partitions", "replication_factor"}
+	case "Delete topic":
+		return []string{"topic"}
+	case "Produce message":
+		return []string{"topic"}
+	case "Consume messages":
+		return []string{"topic"}
+	case "Describe group":
+		return []string{"group"}
+	case "Reset offset":
+		return []string{"group", "topic"}
+	case "Create queue":
+		return []string{"name"}
+	case "Delete queue":
+		return []string{"name"}
+	case "Purge queue":
+		return []string{"name"}
+	case "Browse queue":
+		return []string{"queue"}
+	case "Send message":
+		return []string{"queue", "message"}
+	default:
+		return nil
+	}
+}
+
+func (m *QueueOpsModel) buildActionsList(qse *config.QueueSyncEnv) []actionItem {
+	queueType := m.currentQueueType()
+	container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
+
+	// helper: return the right exec function
+	qExec := func(program string, args ...string) func() tea.Cmd {
+		return func() tea.Cmd {
+			return func() tea.Msg {
+				var out string
+				var err error
+				if qse != nil {
+					out, err = docker.QueueExecRemote(qse, program, args...)
+				} else {
+					out, err = docker.QueueExecLocal(container, program, args...)
+				}
+				if err != nil {
+					return queueOpsDoneMsg{err: err}
+				}
+				return queueOpsDoneMsg{result: out}
+			}
+		}
+	}
+
+	var actions []actionItem
+
+	switch queueType {
+	case "kafka":
+		// Bootstrap servers: local uses localhost, remote uses qse config
+		bs := "localhost:9092"
+		if qse != nil {
+			bs = qse.BootstrapServers
+			if bs == "" {
+				bs = qse.Host + ":" + qse.Port
+			}
+		}
+
+		actions = []actionItem{
+			// Topics group
+			{label: "List topics", group: "Topics", enabled: true,
+				execute: qExec("kafka-topics", "--bootstrap-server", bs, "--list")},
+			{label: "Describe topic", group: "Topics", enabled: true,
+				execute: nil}, // params: topic → will be prompted
+			{label: "Create topic", group: "Topics", enabled: true,
+				execute: nil}, // params: name, partitions, replication_factor
+			{label: "Delete topic", group: "Topics", enabled: true,
+				execute: nil}, // params: topic → destructive
+
+			// Messaging group
+			{label: "Produce message", group: "Messaging", enabled: true,
+				execute: nil}, // params: topic
+			{label: "Consume messages", group: "Messaging", enabled: true,
+				execute: nil}, // params: topic
+
+			// Consumer Groups group
+			{label: "List groups", group: "Consumer Groups", enabled: true,
+				execute: qExec("kafka-consumer-groups", "--bootstrap-server", bs, "--list")},
+			{label: "Describe group", group: "Consumer Groups", enabled: true,
+				execute: nil}, // params: group
+			{label: "Reset offset", group: "Consumer Groups", enabled: true,
+				execute: nil}, // params: group, topic → destructive
+		}
+
+	case "rabbitmq":
+		// For rabbitmqadmin: local uses -H localhost, remote uses qse host:port
+		hostFlag := "localhost"
+		if qse != nil {
+			hostFlag = qse.Host
+		}
+		portFlag := "15672"
+		if qse != nil && qse.Port != "" {
+			portFlag = qse.Port
+		}
+
+		rabbitArgs := func(subcmd string) []string {
+			return []string{"-H", hostFlag, "-P", portFlag, subcmd}
+		}
+		rabbitArgsAll := func(subcmd string) []string {
+			args := []string{"-H", hostFlag, "-P", portFlag}
+			if qse != nil && qse.User != "" {
+				args = append(args, "-u", qse.User, "-p", qse.Password)
+			}
+			args = append(args, subcmd)
+			return args
+		}
+
+		// rabbitmqadmin list queues (no auth needed typically)
+		_ = rabbitArgsAll // for authenticated variants if needed
+
+		actions = []actionItem{
+			// Queues group
+			{label: "List queues", group: "Queues", enabled: true,
+				execute: qExec("rabbitmqadmin", rabbitArgs("list queues")...)},
+			{label: "Create queue", group: "Queues", enabled: true,
+				execute: nil}, // params: name
+			{label: "Delete queue", group: "Queues", enabled: true,
+				execute: nil}, // params: name → destructive
+			{label: "Purge queue", group: "Queues", enabled: true,
+				execute: nil}, // params: name → destructive
+
+			// Exchanges & Bindings group
+			{label: "List exchanges", group: "Exchanges & Bindings", enabled: true,
+				execute: qExec("rabbitmqadmin", rabbitArgs("list exchanges")...)},
+			{label: "List bindings", group: "Exchanges & Bindings", enabled: true,
+				execute: qExec("rabbitmqadmin", rabbitArgs("list bindings")...)},
+
+			// Connections group
+			{label: "List connections", group: "Connections", enabled: true,
+				execute: qExec("rabbitmqadmin", rabbitArgs("list connections")...)},
+			{label: "List channels", group: "Connections", enabled: true,
+				execute: qExec("rabbitmqadmin", rabbitArgs("list channels")...)},
+			{label: "List consumers", group: "Connections", enabled: true,
+				execute: qExec("rabbitmqadmin", rabbitArgs("list consumers")...)},
+		}
+
+	case "activemq":
+		brokerFlag := []string{}
+		if qse != nil {
+			brokerURL := qse.BrokerURL
+			if brokerURL == "" {
+				brokerURL = "tcp://" + qse.Host + ":" + qse.Port
+			}
+			brokerFlag = []string{"--broker-url", brokerURL}
+			if qse.User != "" {
+				brokerFlag = append(brokerFlag, "--user", qse.User, "--password", qse.Password)
+			}
+		}
+
+		amqExec := func(args ...string) func() tea.Cmd {
+			fullArgs := append(brokerFlag, args...)
+			return qExec("activemq-admin", fullArgs...)
+		}
+
+		actions = []actionItem{
+			// Queues group
+			{label: "List queues", group: "Queues", enabled: true,
+				execute: amqExec("list")},
+			{label: "Browse queue", group: "Queues", enabled: true,
+				execute: nil}, // params: queue
+			{label: "Purge queue", group: "Queues", enabled: true,
+				execute: nil}, // params: queue → destructive
+			{label: "Delete queue", group: "Queues", enabled: true,
+				execute: nil}, // params: queue → destructive
+
+			// Stats group
+			{label: "Query statistics", group: "Stats", enabled: true,
+				execute: amqExec("query")},
+
+			// Messaging group
+			{label: "Send message", group: "Messaging", enabled: true,
+				execute: nil}, // params: queue, message
+		}
+	}
+
+	// Append custom actions (only when remote — qse != nil)
+	if qse != nil && len(qse.CustomActions) > 0 {
+		for idx := range qse.CustomActions {
+			i := idx
+			actions = append(actions, actionItem{
+				label:     qse.CustomActions[i].Name,
+				group:     actions[len(actions)-1].group, // same group as last pre-defined
+				enabled:   true,
+				isCustom:  true,
+				customIdx: i,
+				execute:   nil,
+			})
+		}
+	}
+
+	// "+ Add action" entry (only when remote)
+	if qse != nil {
+		lastGroup := ""
+		if len(actions) > 0 {
+			lastGroup = actions[len(actions)-1].group
+		}
+		actions = append(actions, actionItem{
+			label:       "+ Add action",
+			group:       lastGroup,
+			enabled:     true,
+			isAddAction: true,
+			execute:     nil,
+		})
+	}
+
+	return actions
+}
+
+// ── Actions screen ────────────────────────────────────────────────────────────
+
+func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Handle Docker daemon prompt (takes priority over service prompt)
+	if m.promptStartDaemon {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "y", "Y":
+				m.promptStartDaemon = false
+				m.daemonStarting = true
+				m.lastResult = ""
+				if m.pendingStartLabel != "" {
+					m.pendingOps[m.pendingStartLabel] = "starting"
+				}
+				return m, tea.Batch(
+					m.launchDockerCmd(),
+					spinnerCmd(),
+				)
+			case "n", "N", "esc":
+				m.promptStartDaemon = false
+				m.pendingOps = make(map[string]string)
+				m.pendingStartLabel = ""
+				return m, nil
+			}
+		}
+		return m, nil
+	}
+
+	// Block keys while Docker daemon is starting
+	if m.daemonStarting {
+		if _, ok := msg.(tea.KeyMsg); ok {
+			return m, nil
+		}
+	}
+
+	// Handle start-service prompt inline
+	if m.promptStartService {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "y", "Y":
+				m.promptStartService = false
+				svc := m.currentService()
+				if svc == nil {
+					m.pendingOps = make(map[string]string)
+					m.lastResult = styles.StyleError.Render("Service not found.")
+					return m, nil
+				}
+				if m.pendingStartLabel != "" {
+					m.pendingOps[m.pendingStartLabel] = "starting"
+				}
+				return m, tea.Batch(
+					func() tea.Msg {
+						err := docker.UpService(m.profile.Name, m.envName, svc.ComposeName())
+						return serviceStartedMsg{err: err}
+					},
+					spinnerCmd(),
+				)
+			case "n", "N", "esc":
+				m.promptStartService = false
+				m.pendingOps = make(map[string]string)
+				m.pendingStartLabel = ""
+				return m, nil
+			}
+		}
+		return m, nil
+	}
+
+	// Param prompting (for pre-defined and custom actions)
+	if m.promptingParams {
+		return m.updateParamPrompt(msg)
+	}
+
+	// Confirm custom action before execute
+	if m.confirmCustomAction {
+		return m.updateCustomConfirm(msg)
+	}
+
+	// Confirm core action before execute (double confirmation)
+	if m.confirmAction {
+		return m.updateCoreConfirm(msg)
+	}
+
+	// Custom action form (add/edit)
+	if m.addingCustomAction {
+		return m.updateCustomForm(msg)
+	}
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch {
+		case key.Matches(msg, queueOpsBack):
+			if m.promptStartDaemon || len(m.pendingOps) > 0 {
+				if m.promptStartDaemon {
+					m.promptStartDaemon = false
+					m.promptStartService = false
+				}
+				break
+			}
+			m.deleteArmed = false
+			m.deleteActionArmed = false
+			m.screen = queueScreenSyncEnvList
+			m.selectedEnv = ""
+			m.actions = nil
+
+		case key.Matches(msg, queueOpsUp) && len(m.pendingOps) == 0 && !m.promptStartService:
+			for i := m.actionCursor - 1; i >= 0; i-- {
+				if m.actions[i].enabled {
+					m.actionCursor = i
+					break
+				}
+			}
+
+		case key.Matches(msg, queueOpsDown) && len(m.pendingOps) == 0 && !m.promptStartService:
+			for i := m.actionCursor + 1; i < len(m.actions); i++ {
+				if m.actions[i].enabled {
+					m.actionCursor = i
+					break
+				}
+			}
+
+		case key.Matches(msg, queueOpsEnter) && len(m.pendingOps) == 0 && !m.promptStartService:
+			m.deleteActionArmed = false
+			if m.actionCursor < len(m.actions) {
+				act := m.actions[m.actionCursor]
+				if act.enabled {
+					if act.isAddAction {
+						m.addingCustomAction = true
+						m.editingCustomIdx = -1
+						m.customFormFocus = 0
+						m.customNameInput.SetValue("")
+						m.customCmdInput.SetValue("")
+						return m, nil
+					}
+					// Check for pre-defined actions that need param prompting
+					if params := m.actionParams(act); len(params) > 0 {
+						m.promptingParams = true
+						m.promptingForCore = true
+						m.paramsToPrompt = params
+						m.paramValues = make(map[string]string)
+						m.currentParamIdx = 0
+						m.paramInput.SetValue("")
+						m.paramInput.Placeholder = params[0]
+						m.paramInput.Focus()
+						return m, nil
+					}
+					if act.isCustom {
+						svc := m.currentService()
+						if svc == nil {
+							return m, nil
+						}
+						qse := svc.FindQueueSyncEnv(m.selectedEnv)
+						if qse == nil || act.customIdx >= len(qse.CustomActions) {
+							return m, nil
+						}
+						cmd := qse.CustomActions[act.customIdx].Command
+						m.pendingCustomCmd = cmd
+						params := extractParams(cmd)
+						if len(params) > 0 {
+							m.promptingParams = true
+							m.promptingForCore = false
+							m.paramsToPrompt = params
+							m.paramValues = make(map[string]string)
+							m.currentParamIdx = 0
+							m.paramInput.SetValue("")
+							m.paramInput.Placeholder = params[0]
+							m.paramInput.Focus()
+						} else {
+							m.confirmCustomAction = true
+						}
+						return m, nil
+					}
+					// Core action (no params or all params pre-filled): double confirmation
+					if act.execute != nil {
+						m.confirmAction = true
+					}
+				}
+				if act.disabledReason != "" {
+					m.lastResult = styles.StyleSubtitle.Render("Unavailable: " + act.disabledReason)
+					return m, nil
+				}
+			}
+
+		case key.Matches(msg, queueOpsEdit) && len(m.pendingOps) == 0 && !m.promptStartService:
+			m.deleteActionArmed = false
+			if m.actionCursor < len(m.actions) {
+				act := m.actions[m.actionCursor]
+				if act.isCustom {
+					svc := m.currentService()
+					if svc == nil {
+						return m, nil
+					}
+					qse := svc.FindQueueSyncEnv(m.selectedEnv)
+					if qse == nil || act.customIdx >= len(qse.CustomActions) {
+						return m, nil
+					}
+					m.addingCustomAction = true
+					m.editingCustomIdx = act.customIdx
+					m.customFormFocus = 0
+					m.customNameInput.SetValue(qse.CustomActions[act.customIdx].Name)
+					m.customCmdInput.SetValue(qse.CustomActions[act.customIdx].Command)
+				}
+			}
+
+		case key.Matches(msg, queueOpsDelete) && len(m.pendingOps) == 0 && !m.promptStartService:
+			if m.actionCursor < len(m.actions) {
+				act := m.actions[m.actionCursor]
+				if act.isCustom {
+					if !m.deleteActionArmed {
+						m.deleteActionArmed = true
+					} else {
+						m.deleteActionArmed = false
+						svc := m.currentService()
+						if svc == nil {
+							return m, nil
+						}
+						qse := svc.FindQueueSyncEnv(m.selectedEnv)
+						if qse == nil || act.customIdx >= len(qse.CustomActions) {
+							return m, nil
+						}
+						qse.CustomActions = append(qse.CustomActions[:act.customIdx], qse.CustomActions[act.customIdx+1:]...)
+						m.profile.UpdatedAt = time.Now()
+						if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+							m.lastResult = formatErrorMsg(err.Error())
+							return m, nil
+						}
+						m.actions = m.buildActionsList(qse)
+						if m.actionCursor >= len(m.actions) {
+							m.actionCursor = len(m.actions) - 1
+						}
+						return m, nil
+					}
+				} else {
+					m.deleteActionArmed = false
+				}
+			}
+
+		default:
+			if m.deleteActionArmed {
+				m.deleteActionArmed = false
+			}
+		}
+
+	case queueOpsDoneMsg:
+		var completedLabel string
+		for label := range m.pendingOps {
+			completedLabel = label
+		}
+		m.pendingOps = make(map[string]string)
+
+		if msg.err != nil {
+			m.lastResult = formatErrorMsg(msg.err.Error())
+			return m, nil
+		}
+
+		// Rebuild actions (custom actions may have changed)
+		svc := m.currentService()
+		if svc != nil {
+			qse := svc.FindQueueSyncEnv(m.selectedEnv)
+			m.actions = m.buildActionsList(qse)
+		}
+		if m.actionCursor >= len(m.actions) || !m.actions[m.actionCursor].enabled {
+			m.actionCursor = m.firstEnabledAction()
+		}
+
+		m.doneOp = completedLabel
+		m.lastResult = styles.StyleSuccess.Render("✓ " + completedLabel + " completed") +
+			"\n" + styles.StyleCode.Render(strings.TrimSpace(msg.result))
+		return m, ClearActionAfter(2 * time.Second)
+
+	case ClearActionMsg:
+		m.lastResult = ""
+		m.doneOp = ""
+
+	case daemonStartedMsg:
+		m.daemonStarting = false
+		if !msg.available {
+			m.pendingOps = make(map[string]string)
+			m.pendingStartLabel = ""
+			m.lastResult = formatErrorMsg("Docker daemon failed to start")
+			return m, nil
+		}
+		svc := m.currentService()
+		if svc == nil {
+			m.pendingOps = make(map[string]string)
+			m.lastResult = styles.StyleError.Render("Service not found.")
+			return m, nil
+		}
+		if m.pendingStartLabel != "" {
+			m.pendingOps[m.pendingStartLabel] = "starting"
+		}
+		return m, tea.Batch(
+			func() tea.Msg {
+				err := docker.UpService(m.profile.Name, m.envName, svc.ComposeName())
+				if err != nil {
+					return serviceStartedMsg{err: err}
+				}
+				env := m.currentEnv()
+				if env != nil {
+					for _, s := range env.Services {
+						if s.ComposeName() != svc.ComposeName() {
+							_ = docker.RmService(m.profile.Name, m.envName, s.ComposeName())
+						}
+					}
+				}
+				return serviceStartedMsg{}
+			},
+			spinnerCmd(),
+		)
+
+	case serviceStartedMsg:
+		if msg.err != nil {
+			m.pendingOps = make(map[string]string)
+			m.lastResult = formatErrorMsg("start service: " + msg.err.Error())
+			return m, nil
+		}
+		// Poll container readiness before executing
+		svc := m.currentService()
+		if svc != nil {
+			qse := svc.FindQueueSyncEnv(m.selectedEnv)
+			m.actions = m.buildActionsList(qse)
+			for pendingLabel, state := range m.pendingOps {
+				if state == "starting" {
+					return m, func() tea.Msg {
+						return readyRetryMsg{label: pendingLabel, retry: 0}
+					}
+				}
+			}
+		}
+		m.pendingOps = make(map[string]string)
+		m.lastResult = styles.StyleError.Render("Could not find pending action")
+		return m, nil
+
+	case readyRetryMsg:
+		container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
+		ready, _ := docker.QueueContainerRunning(container)
+		if ready {
+			m.spinnerFrame = 0
+			// Execute pending action
+			if m.pendingCustomCmd != "" {
+				return m, tea.Batch(m.customActionExecCmd(m.pendingCustomCmd), spinnerCmd())
+			}
+			for _, act := range m.actions {
+				if act.label == msg.label && act.enabled && act.execute != nil {
+					m.pendingOps[msg.label] = "running"
+					return m, tea.Batch(act.execute(), spinnerCmd())
+				}
+			}
+			m.pendingOps = make(map[string]string)
+			m.lastResult = styles.StyleError.Render("Could not find pending action")
+			return m, nil
+		}
+		if msg.retry >= 30 {
+			m.pendingOps = make(map[string]string)
+			m.lastResult = formatErrorMsg("container not ready after 30s")
+			return m, nil
+		}
+		return m, func() tea.Msg {
+			time.Sleep(1 * time.Second)
+			return readyRetryMsg{label: msg.label, retry: msg.retry + 1}
+		}
+	}
+	return m, nil
+}
+
+// ── Param prompt update ───────────────────────────────────────────────────────
+
+func (m *QueueOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
+	keyMsg, isKey := msg.(tea.KeyMsg)
+	if !isKey {
+		var cmd tea.Cmd
+		m.paramInput, cmd = m.paramInput.Update(msg)
+		return m, cmd
+	}
+
+	switch {
+	case key.Matches(keyMsg, queueOpsBack):
+		m.promptingParams = false
+	case key.Matches(keyMsg, queueOpsEnter):
+		if m.paramInput.Value() != "" {
+			paramName := m.paramsToPrompt[m.currentParamIdx]
+			m.paramValues[paramName] = m.paramInput.Value()
+			m.currentParamIdx++
+			m.paramInput.SetValue("")
+			if m.currentParamIdx < len(m.paramsToPrompt) {
+				m.paramInput.Placeholder = m.paramsToPrompt[m.currentParamIdx]
+			}
+			if m.currentParamIdx >= len(m.paramsToPrompt) {
+				m.promptingParams = false
+				if m.promptingForCore {
+					m.confirmAction = true
+				} else {
+					m.confirmCustomAction = true
+				}
+			}
+		}
+	default:
+		var cmd tea.Cmd
+		m.paramInput, cmd = m.paramInput.Update(msg)
+		return m, cmd
+	}
+	return m, nil
+}
+
+// ── Custom confirm update ─────────────────────────────────────────────────────
+
+func (m *QueueOpsModel) updateCustomConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch {
+		case key.Matches(msg, queueOpsEnter):
+			container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
+			if !m.isContainerRunning(container) && m.targetSyncEnv == false {
+				m.confirmCustomAction = false
+				if !docker.DaemonAvailable() {
+					m.promptStartDaemon = true
+				} else {
+					m.promptStartService = true
+				}
+				m.pendingStartLabel = m.actions[m.actionCursor].label
+				return m, nil
+			}
+			m.confirmCustomAction = false
+			m.lastResult = ""
+			label := "Custom action"
+			if m.actionCursor < len(m.actions) {
+				label = m.actions[m.actionCursor].label
+			}
+			m.pendingOps[label] = "running"
+			return m, tea.Batch(m.customActionExecCmd(m.pendingCustomCmd), spinnerCmd())
+		case key.Matches(msg, queueOpsBack):
+			m.confirmCustomAction = false
+		default:
+			m.confirmCustomAction = false
+		}
+	}
+	return m, nil
+}
+
+// ── Core confirm update (double confirmation) ─────────────────────────────────
+
+func (m *QueueOpsModel) updateCoreConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch {
+		case key.Matches(msg, queueOpsEnter):
+			m.confirmAction = false
+			act := m.actions[m.actionCursor]
+
+			// For local targeting, check container is running
+			if m.targetSyncEnv == false {
+				container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
+				if !m.isContainerRunning(container) {
+					if !docker.DaemonAvailable() {
+						m.promptStartDaemon = true
+					} else {
+						m.promptStartService = true
+					}
+					m.pendingStartLabel = act.label
+					return m, nil
+				}
+			}
+
+			// Build execute closure for pre-defined actions with params
+			var execCmd tea.Cmd
+			if act.execute != nil {
+				execCmd = act.execute()
+			} else if params := m.actionParams(act); len(params) > 0 {
+				// Build dynamic execution for param-based actions
+				execCmd = m.buildParamActionCmd(act)
+			}
+
+			if execCmd != nil {
+				m.pendingOps[act.label] = "running"
+				m.lastResult = ""
+				return m, tea.Batch(execCmd, spinnerCmd())
+			}
+		default:
+			m.confirmAction = false
+		}
+	}
+	return m, nil
+}
+
+// buildParamActionCmd creates a tea.Cmd for a pre-defined action that needs param substitution.
+func (m *QueueOpsModel) buildParamActionCmd(act actionItem) tea.Cmd {
+	container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
+	queueType := m.currentQueueType()
+
+	return func() tea.Msg {
+		var program string
+		var args []string
+		switch {
+		case queueType == "kafka":
+			bs := "localhost:9092"
+			if m.targetSyncEnv {
+				svc := m.currentService()
+				if svc != nil {
+					qse := svc.FindQueueSyncEnv(m.selectedEnv)
+					if qse != nil {
+						bs = qse.BootstrapServers
+						if bs == "" {
+							bs = qse.Host + ":" + qse.Port
+						}
+					}
+				}
+			}
+			switch act.label {
+			case "Describe topic":
+				program, args = "kafka-topics", []string{"--bootstrap-server", bs, "--describe", "--topic", m.paramValues["topic"]}
+			case "Create topic":
+				program, args = "kafka-topics", []string{"--bootstrap-server", bs, "--create", "--topic", m.paramValues["name"], "--partitions", m.paramValues["partitions"], "--replication-factor", m.paramValues["replication_factor"]}
+			case "Delete topic":
+				program, args = "kafka-topics", []string{"--bootstrap-server", bs, "--delete", "--topic", m.paramValues["topic"]}
+			case "Produce message":
+				program, args = "kafka-console-producer", []string{"--bootstrap-server", bs, "--topic", m.paramValues["topic"]}
+			case "Consume messages":
+				program, args = "kafka-console-consumer", []string{"--bootstrap-server", bs, "--topic", m.paramValues["topic"], "--max-messages", "100", "--from-beginning"}
+			case "Describe group":
+				program, args = "kafka-consumer-groups", []string{"--bootstrap-server", bs, "--describe", "--group", m.paramValues["group"]}
+			case "Reset offset":
+				program, args = "kafka-consumer-groups", []string{"--bootstrap-server", bs, "--reset-offsets", "--group", m.paramValues["group"], "--to-earliest", "--execute", "--topic", m.paramValues["topic"]}
+			}
+
+		case queueType == "rabbitmq":
+			hostFlag := "localhost"
+			if m.targetSyncEnv {
+				svc := m.currentService()
+				if svc != nil {
+					qse := svc.FindQueueSyncEnv(m.selectedEnv)
+					if qse != nil {
+						hostFlag = qse.Host
+					}
+				}
+			}
+			switch act.label {
+			case "Create queue":
+				program, args = "rabbitmqadmin", []string{"-H", hostFlag, "declare", "queue", "name=" + m.paramValues["name"]}
+			case "Delete queue":
+				program, args = "rabbitmqadmin", []string{"-H", hostFlag, "delete", "queue", "name=" + m.paramValues["name"]}
+			case "Purge queue":
+				program, args = "rabbitmqadmin", []string{"-H", hostFlag, "purge", "queue", "name=" + m.paramValues["name"]}
+			}
+
+		case queueType == "activemq":
+			brokerArgs := []string{}
+			if m.targetSyncEnv {
+				svc := m.currentService()
+				if svc != nil {
+					qse := svc.FindQueueSyncEnv(m.selectedEnv)
+					if qse != nil {
+						brokerURL := qse.BrokerURL
+						if brokerURL == "" {
+							brokerURL = "tcp://" + qse.Host + ":" + qse.Port
+						}
+						brokerArgs = append(brokerArgs, "--broker-url", brokerURL)
+						if qse.User != "" {
+							brokerArgs = append(brokerArgs, "--user", qse.User, "--password", qse.Password)
+						}
+					}
+				}
+			}
+			switch act.label {
+			case "Browse queue":
+				args = append(brokerArgs, "browse", m.paramValues["queue"])
+				program = "activemq-admin"
+			case "Purge queue":
+				args = append(brokerArgs, "purge", m.paramValues["queue"])
+				program = "activemq-admin"
+			case "Delete queue":
+				args = append(brokerArgs, "remove", m.paramValues["queue"])
+				program = "activemq-admin"
+			case "Send message":
+				args = append(brokerArgs, "send", m.paramValues["queue"], m.paramValues["message"])
+				program = "activemq-admin"
+			}
+		}
+
+		var out string
+		var err error
+		if m.targetSyncEnv {
+			svc := m.currentService()
+			if svc != nil {
+				qse := svc.FindQueueSyncEnv(m.selectedEnv)
+				if qse != nil {
+					out, err = docker.QueueExecRemote(qse, program, args...)
+				}
+			}
+		} else {
+			out, err = docker.QueueExecLocal(container, program, args...)
+		}
+		if err != nil {
+			return queueOpsDoneMsg{err: err}
+		}
+		return queueOpsDoneMsg{result: out}
+	}
+}
+
+// ── Custom form update ────────────────────────────────────────────────────────
+
+func (m *QueueOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	keyMsg, isKey := msg.(tea.KeyMsg)
+	if !isKey {
+		var cmd tea.Cmd
+		if m.customFormFocus == 0 {
+			m.customNameInput, cmd = m.customNameInput.Update(msg)
+		} else {
+			m.customCmdInput, cmd = m.customCmdInput.Update(msg)
+		}
+		return m, cmd
+	}
+
+	switch {
+	case key.Matches(keyMsg, queueOpsBack):
+		m.addingCustomAction = false
+
+	case key.Matches(keyMsg, queueOpsUp):
+		if m.customFormFocus > 0 {
+			m.customFormFocus--
+		}
+
+	case key.Matches(keyMsg, queueOpsDown):
+		if m.customFormFocus < 1 {
+			m.customFormFocus++
+		}
+
+	case key.Matches(keyMsg, queueOpsEnter):
+		if m.customNameInput.Value() != "" && m.customCmdInput.Value() != "" {
+			svc := m.currentService()
+			if svc == nil {
+				return m, nil
+			}
+			qse := svc.FindQueueSyncEnv(m.selectedEnv)
+			if qse == nil {
+				return m, nil
+			}
+			name := strings.TrimSpace(m.customNameInput.Value())
+			cmd := strings.TrimSpace(m.customCmdInput.Value())
+			if m.editingCustomIdx >= 0 && m.editingCustomIdx < len(qse.CustomActions) {
+				qse.CustomActions[m.editingCustomIdx].Name = name
+				qse.CustomActions[m.editingCustomIdx].Command = cmd
+			} else {
+				qse.CustomActions = append(qse.CustomActions, config.CustomAction{Name: name, Command: cmd})
+			}
+			m.profile.UpdatedAt = time.Now()
+			if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+				m.lastResult = formatErrorMsg(err.Error())
+				return m, nil
+			}
+			m.addingCustomAction = false
+			m.actions = m.buildActionsList(qse)
+			if m.actionCursor >= len(m.actions) {
+				m.actionCursor = len(m.actions) - 1
+			}
+			return m, nil
+		}
+
+	default:
+		var cmd tea.Cmd
+		if m.customFormFocus == 0 {
+			m.customNameInput, cmd = m.customNameInput.Update(msg)
+		} else {
+			m.customCmdInput, cmd = m.customCmdInput.Update(msg)
+		}
+		return m, cmd
+	}
+	return m, nil
+}
+
+// ── Custom action execution ───────────────────────────────────────────────────
+
+func (m *QueueOpsModel) customActionExecCmd(cmd string) tea.Cmd {
+	return func() tea.Msg {
+		svc := m.currentService()
+		if svc == nil {
+			return queueOpsDoneMsg{err: fmt.Errorf("service not found")}
+		}
+		qse := svc.FindQueueSyncEnv(m.selectedEnv)
+		if qse == nil && m.targetSyncEnv {
+			return queueOpsDoneMsg{err: fmt.Errorf("queue sync env not found")}
+		}
+
+		container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
+
+		// Auto-variables
+		autoVars := map[string]string{
+			"service":   m.serviceName,
+			"container": container,
+		}
+		if qse != nil {
+			autoVars["qs_host"] = qse.Host
+			autoVars["qs_port"] = qse.Port
+			autoVars["qs_user"] = qse.User
+			autoVars["qs_pass"] = qse.Password
+			autoVars["qs_type"] = qse.QueueType
+			autoVars["qs_bs"] = qse.BootstrapServers
+			autoVars["qs_vhost"] = qse.VHost
+			autoVars["qs_broker"] = qse.BrokerURL
+		}
+
+		// Substitute user params and auto vars
+		substituted := cmd
+		for k, v := range m.paramValues {
+			substituted = strings.ReplaceAll(substituted, "{"+k+"}", v)
+		}
+		for k, v := range autoVars {
+			if v != "" {
+				substituted = strings.ReplaceAll(substituted, "{"+k+"}", v)
+			}
+		}
+
+		// Execute the command string as a shell command
+		var out string
+		var err error
+		if qse != nil && m.targetSyncEnv {
+			out, err = docker.QueueExecRemote(qse, "sh", "-c", substituted)
+		} else {
+			out, err = docker.QueueExecLocal(container, "sh", "-c", substituted)
+		}
+		if err != nil {
+			return queueOpsDoneMsg{err: err}
+		}
+		return queueOpsDoneMsg{result: out}
+	}
+}
+
+// ── Wizard delegate ───────────────────────────────────────────────────────────
+
+func (m *QueueOpsModel) updateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg.(type) {
+	case queueSyncEnvSavedMsg:
+		m.wizardModel = nil
+		m.screen = queueScreenSyncEnvList
+		// Re-read profile (it was updated by the wizard via cfg.UpdateProfile)
+		if p, ok := m.cfg.GetProfile(m.profile.Name); ok {
+			m.profile = p
+		}
+		return m, nil
+	}
+
+	if m.wizardModel == nil {
+		m.screen = queueScreenSyncEnvList
+		return m, nil
+	}
+
+	wm, cmd := m.wizardModel.Update(msg)
+	if wm == nil {
+		// Wizard cancelled (esc from name step)
+		m.wizardModel = nil
+		m.screen = queueScreenSyncEnvList
+		return m, nil
+	}
+	m.wizardModel = wm
+	return m, cmd
+}
+
+func (m *QueueOpsModel) viewWizard() string {
+	if m.wizardModel == nil {
+		return ""
+	}
+	return m.wizardModel.View()
+}
+
+// ── View dispatch ─────────────────────────────────────────────────────────────
+
+func (m *QueueOpsModel) View() string {
+	switch m.screen {
+	case queueScreenActions:
+		return m.viewActions()
+	case queueScreenWizard:
+		return m.viewWizard()
+	default:
+		return m.viewSyncEnvList()
+	}
+}
+
+// ── View: Actions screen ──────────────────────────────────────────────────────
+
+func (m *QueueOpsModel) viewActions() string {
+	svc := m.currentService()
+	if svc == nil {
+		m.screen = queueScreenSyncEnvList
+		return m.viewSyncEnvList()
+	}
+
+	var b strings.Builder
+	b.WriteString("\n")
+
+	targetLabel := "local (docker exec)"
+	if m.targetSyncEnv {
+		targetLabel = m.selectedEnvName
+	}
+	b.WriteString(styles.StyleTitle.Render(
+		fmt.Sprintf(" Queue Actions — %s ", m.serviceName)))
+	b.WriteString("\n\n")
+	b.WriteString(styles.StyleSubtitle.Render(
+		fmt.Sprintf("  Target: %s  |  Type: %s", targetLabel, m.currentQueueType()),
+	))
+	b.WriteString("\n\n")
+
+	// Custom action form
+	if m.addingCustomAction {
+		b.WriteString(m.viewCustomForm())
+		return b.String()
+	}
+
+	// Param prompting
+	if m.promptingParams {
+		b.WriteString(m.viewParamPrompt())
+		return b.String()
+	}
+
+	// Action group sections
+	groupHeaderStyle := lipgloss.NewStyle().
+		Foreground(styles.ColorPrimary).
+		Bold(true)
+	selStyle := lipgloss.NewStyle().
+		Foreground(styles.ColorPrimary).
+		Bold(true)
+	customSelStyle := lipgloss.NewStyle().
+		Foreground(styles.ColorAccent).
+		Bold(true)
+	addSelStyle := lipgloss.NewStyle().
+		Foreground(styles.ColorPrimary).
+		Bold(true)
+
+	currentGroup := ""
+	for i, act := range m.actions {
+		if act.group != currentGroup {
+			currentGroup = act.group
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString("  " + groupHeaderStyle.Render(currentGroup))
+			b.WriteString("\n")
+		}
+
+		isCursor := i == m.actionCursor
+
+		if !act.enabled {
+			b.WriteString(styles.StyleSubtitle.Render("      " + act.label) + "\n")
+			if act.disabledReason != "" {
+				b.WriteString(styles.StyleSubtitle.Render("      unavailable: " + act.disabledReason) + "\n")
+			}
+			continue
+		}
+
+		if state, pending := m.pendingOps[act.label]; pending {
+			b.WriteString("    " + m.renderSpinnerDot(state) + "\n")
+			continue
+		}
+		if m.doneOp == act.label {
+			b.WriteString("    " + styles.StyleSuccess.Render("✓") + " " + act.label + "\n")
+			continue
+		}
+		if len(m.pendingOps) > 0 {
+			b.WriteString("      " + act.label + "\n")
+			continue
+		}
+
+		if isCursor {
+			if act.isCustom {
+				b.WriteString(customSelStyle.Render("    > " + act.label) + "\n")
+			} else if act.isAddAction {
+				b.WriteString(addSelStyle.Render("    > " + act.label) + "\n")
+			} else {
+				b.WriteString(selStyle.Render("    > " + act.label) + "\n")
+			}
+		} else {
+			b.WriteString("      " + act.label + "\n")
+		}
+	}
+
+	b.WriteString("\n")
+
+	if m.lastResult != "" {
+		b.WriteString("  " + m.lastResult + "\n\n")
+	}
+
+	if m.deleteActionArmed {
+		b.WriteString(styles.StyleError.Render("  Press d again to delete this custom action") + "\n")
+	}
+
+	if m.promptStartDaemon {
+		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+		b.WriteString(styles.StyleError.Render("  Docker daemon is not running.") + "\n")
+		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
+	} else if m.promptStartService {
+		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+		b.WriteString(styles.StyleError.Render("  Service '" + m.serviceName + "' is not running.") + "\n")
+		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
+	}
+
+	if m.confirmAction {
+		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n\n")
+		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "execute")))
+	} else if m.confirmCustomAction {
+		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n\n")
+		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "execute")))
+	} else {
+		var contextItems []styles.HelpItemResult
+		if m.actionCursor < len(m.actions) && m.actions[m.actionCursor].isCustom {
+			contextItems = append(contextItems, styles.HelpItem("e", "edit"), styles.HelpItem("d d", "delete"))
+		}
+		if len(contextItems) > 0 {
+			b.WriteString("      " + styles.InlineHelp(contextItems...))
+			b.WriteString("\n\n")
+		}
+		b.WriteString(styles.BackHelp(
+			styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "run"),
+		))
+	}
+	return b.String()
+}
+
+// ── Custom form view ──────────────────────────────────────────────────────────
+
+func (m *QueueOpsModel) viewCustomForm() string {
+	var b strings.Builder
+	titleStr := "Add Custom Action"
+	if m.editingCustomIdx >= 0 {
+		titleStr = "Edit Custom Action"
+	}
+	b.WriteString(styles.StyleSubtitle.Render("  " + titleStr) + "\n\n")
+
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	normalStyle := lipgloss.NewStyle()
+
+	// Name field
+	if m.customFormFocus == 0 {
+		m.customNameInput.Focus()
+		m.customCmdInput.Blur()
+		b.WriteString("  " + focusStyle.Render("Name:    ") + m.customNameInput.View() + "\n")
+	} else {
+		m.customNameInput.Blur()
+		b.WriteString("  " + normalStyle.Render("Name:    ") + m.customNameInput.View() + "\n")
+	}
+
+	// Command field
+	if m.customFormFocus == 1 {
+		m.customCmdInput.Focus()
+		m.customNameInput.Blur()
+		b.WriteString("  " + focusStyle.Render("Command: ") + m.customCmdInput.View() + "\n\n")
+	} else {
+		m.customCmdInput.Blur()
+		b.WriteString("  " + normalStyle.Render("Command: ") + m.customCmdInput.View() + "\n\n")
+	}
+
+	b.WriteString("  " + styles.InlineHelp(
+		styles.HelpItem("esc", "cancel"),
+		styles.HelpItem("↑ ↓", "field"),
+		styles.HelpItem("↵", "save"),
+	))
+	return b.String()
+}
+
+// ── Param prompt view ─────────────────────────────────────────────────────────
+
+func (m *QueueOpsModel) viewParamPrompt() string {
+	var b strings.Builder
+	b.WriteString(styles.StyleSubtitle.Render("  Enter parameter values") + "\n\n")
+
+	purpleStyle := lipgloss.NewStyle().Foreground(styles.ColorPurple).Bold(true)
+	valStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+
+	for i, param := range m.paramsToPrompt {
+		if i < m.currentParamIdx {
+			b.WriteString("  " + purpleStyle.Render("{"+param+"}") + " " + valStyle.Render(m.paramValues[param]) + "\n")
+		} else if i == m.currentParamIdx {
+			b.WriteString("  " + purpleStyle.Render("{"+param+"}") + " " + m.paramInput.View() + "\n")
+		} else {
+			b.WriteString("  " + purpleStyle.Render("{"+param+"}") + " \n")
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString("  " + styles.InlineHelp(
+		styles.HelpItem("esc", "cancel"),
+		styles.HelpItem("enter", "next"),
+	))
+	return b.String()
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+func (m *QueueOpsModel) renderSpinnerDot(op string) string {
+	frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+	return lipgloss.NewStyle().Foreground(styles.ColorAccent).Render(fmt.Sprintf("%s %s", frame, op))
+}
+
+func (m *QueueOpsModel) firstEnabledAction() int {
+	for i, act := range m.actions {
+		if act.enabled {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m *QueueOpsModel) isContainerRunning(container string) bool {
+	statuses, err := docker.Status(m.profile.Name, m.envName)
+	if err != nil {
+		return false
+	}
+	for _, s := range statuses {
+		if s.Name == container && s.State == "running" {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *QueueOpsModel) launchDockerCmd() tea.Cmd {
+	return func() tea.Msg {
+		if _, err := exec.LookPath("colima"); err == nil {
+			_ = exec.Command("colima", "start").Run()
+		} else {
+			_ = exec.Command("open", "-a", "Docker").Run()
+		}
+		time.Sleep(2 * time.Second)
+		return daemonStartedMsg{available: docker.DaemonAvailable()}
+	}
+}

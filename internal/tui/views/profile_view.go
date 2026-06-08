@@ -350,7 +350,7 @@ func (m *ProfileViewModel) executeDockerAction(action string) tea.Cmd {
 }
 
 var profileKeys = struct {
-	back, up, down, enter, start, stop, addSvc, svcDelete, dbOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort, viewConfig, stats, pull, shell, tab key.Binding
+	back, up, down, enter, start, stop, addSvc, svcDelete, dbOps, queueOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort, viewConfig, stats, pull, shell, tab key.Binding
 }{
 	back:           key.NewBinding(key.WithKeys("esc")),
 	up:             key.NewBinding(key.WithKeys("up")),
@@ -361,6 +361,7 @@ var profileKeys = struct {
 	addSvc:         key.NewBinding(key.WithKeys("a")),
 	svcDelete:      key.NewBinding(key.WithKeys("d")),
 	dbOps:          key.NewBinding(key.WithKeys("o")),
+	queueOps:       key.NewBinding(key.WithKeys("q")),
 	switchEnvLeft:  key.NewBinding(key.WithKeys("left")),
 	switchEnvRight: key.NewBinding(key.WithKeys("right")),
 	addEnv:         key.NewBinding(key.WithKeys("n")),
@@ -1623,6 +1624,25 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case key.Matches(msg, profileKeys.queueOps):
+			svcs := m.currentEnvServices()
+			if m.cursor < len(svcs) && m.selectedQueueType() != "" {
+				env := m.currentEnv()
+				svc := svcs[m.selectedServiceIndex()]
+				m.deleteArmed = false
+				m.deleteEnvArmed = false
+				m.resetArmed = false
+				m.keyPending = ""
+				return m, func() tea.Msg {
+					return NavigateTo{
+						Screen:      NavQueueOps,
+						ProfileName: m.profile.Name,
+						EnvName:     env.Name,
+						ServiceName: svc.Name,
+					}
+				}
+			}
+
 		case key.Matches(msg, profileKeys.viewConfig):
 			m.keyPending = ""; m.deleteArmed = false; m.deleteEnvArmed = false; m.resetArmed = false
 			env := m.currentEnv()
@@ -1755,6 +1775,15 @@ func (m *ProfileViewModel) selectedDBType() string {
 		return ""
 	}
 	return svcs[svcIdx].DBType()
+}
+
+func (m *ProfileViewModel) selectedQueueType() string {
+	svcs := m.currentEnvServices()
+	svcIdx := m.selectedServiceIndex()
+	if svcIdx < 0 || svcIdx >= len(svcs) {
+		return ""
+	}
+	return svcs[svcIdx].QueueType()
 }
 
 func (m *ProfileViewModel) isSelectedServiceRunning() bool {
@@ -2862,6 +2891,9 @@ func (m *ProfileViewModel) renderShortcuts() string {
 			svcItems = append(svcItems, pair{"↵", runLabel})
 			if m.selectedDBType() != "" {
 				svcItems = append(svcItems, pair{"o", "db ops"})
+			}
+			if m.selectedQueueType() != "" {
+				svcItems = append(svcItems, pair{"q", "queue ops"})
 			}
 			if len(svcs) > 1 {
 				svcItems = append(svcItems, pair{"d d", "delete svc"})

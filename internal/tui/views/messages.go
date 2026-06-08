@@ -11,6 +11,7 @@ const (
 	NavProfileView
 	NavAddService
 	NavDBOps
+	NavQueueOps
 )
 
 // NavigateTo is a tea.Msg that tells the root App to switch screens.
@@ -29,6 +30,12 @@ func (n NavigateTo) ServiceKey() string {
 // ProfileSavedMsg is sent when a profile is created or updated.
 type ProfileSavedMsg struct {
 	Config *config.Config
+}
+
+// queueOpsDoneMsg is sent when a queue operation action completes.
+type queueOpsDoneMsg struct {
+	result string
+	err    error
 }
 
 // ErrorMsg carries an error string to surface in the footer.
