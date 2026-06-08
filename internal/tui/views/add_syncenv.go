@@ -573,7 +573,7 @@ func (m *AddSyncEnvModel) viewNameStep() string {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styles.BackHelp(styles.HelpItem("↵", "continue")))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↵", "next")))
 	return b.String()
 }
 
@@ -617,7 +617,7 @@ func (m *AddSyncEnvModel) viewCredentialsStep() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "continue")))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "next")))
 
 	return b.String()
 }

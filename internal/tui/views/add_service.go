@@ -1353,7 +1353,7 @@ func (m *AddServiceModel) viewSource() string {
 	b.WriteString("\n")
 
 	b.WriteString("\n\n")
-	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "add/continue")))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "next")))
 	return b.String()
 }
 
@@ -1389,7 +1389,7 @@ func (m *AddServiceModel) viewCatalog() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "choose image")))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "next")))
 	return b.String()
 }
 
@@ -1436,7 +1436,7 @@ func (m *AddServiceModel) viewSearch() string {
 		b.WriteString("  Type a name and press ↵ to search\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "search/select")))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "next")))
 	return b.String()
 }
 
@@ -1475,7 +1475,7 @@ func (m *AddServiceModel) viewTags() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "choose tag")))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "next")))
 	return b.String()
 }
 
@@ -1487,21 +1487,21 @@ func (m *AddServiceModel) viewName() string {
 			b.WriteString("  Image\n\n")
 			b.WriteString("  " + m.imageInput.View() + "\n")
 			b.WriteString("  Docker image to pull (e.g. postgres:16, mongo:4.2)\n")
-			b.WriteString("\n  " + styles.BackHelp(styles.HelpItem("↑ ↓", "next field"), styles.HelpItem("↵", "use image")))
+			b.WriteString("\n  " + styles.BackHelp(styles.HelpItem("↑ ↓", "next field"), styles.HelpItem("↵", "next")))
 		} else {
 			// Step 2: confirm/enter service name
 			b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
 			focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 			b.WriteString("  " + focusStyle.Render("Service name: ") + m.nameInput.View() + "\n")
 			b.WriteString("  Used as the compose service key and container name suffix\n")
-			b.WriteString("\n  " + styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "continue")))
+			b.WriteString("\n  " + styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "next")))
 		}
 	} else {
 		b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
 		focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 		b.WriteString("  " + focusStyle.Render("Service name: ") + m.nameInput.View() + "\n")
 		b.WriteString("  Used as the compose service key and container name suffix\n")
-		b.WriteString("\n" + styles.BackHelp(styles.HelpItem("↵", "continue")))
+		b.WriteString("\n" + styles.BackHelp(styles.HelpItem("↵", "next")))
 	}
 	return b.String()
 }
@@ -1556,7 +1556,7 @@ func (m *AddServiceModel) viewPorts() string {
 		b.WriteString("\n\n")
 	}
 	// Line 2: global navigation
-	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "add/continue")))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "next")))
 	return b.String()
 }
 
@@ -1663,7 +1663,7 @@ func (m *AddServiceModel) viewEnvVars() string {
 		b.WriteString("\n\n")
 	}
 	// Line 2: global navigation
-	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "add/continue")))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "next")))
 	return b.String()
 }
 
@@ -1716,7 +1716,7 @@ func (m *AddServiceModel) viewVolumes() string {
 	if m.volumesCanReset() {
 		helpItems = append(helpItems, styles.HelpItem("ctrl+r ctrl+r", "reset"))
 	}
-	helpItems = append(helpItems, styles.HelpItem("↵", "continue"))
+	helpItems = append(helpItems, styles.HelpItem("↵", "next"))
 	b.WriteString(styles.BackHelp(helpItems...))
 	return b.String()
 }

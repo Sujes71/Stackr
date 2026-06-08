@@ -263,9 +263,9 @@ func (m *NewProfileModel) View() string {
 			b.WriteString("\n\n")
 		}
 		// Line 2: global navigation
-		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "add/finish")))
+		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "next")))
 	} else {
-		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "continue")))
+		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "next")))
 	}
 
 	return b.String()
