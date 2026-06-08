@@ -1758,60 +1758,8 @@ func cleanActiveMQOutput(out string) string {
 
 // ── Table Formatting ────────────────────────────────────────────────────────────
 
-// tableColumn represents a column in a fixed-format CLI table like dstat.
-type tableColumn struct {
-	name  string
-	start int // byte offset in the line where this column starts
-	end   int // byte offset where this column ends (exclusive)
-}
-
 // reTableSplit splits on 2+ spaces, preserving multi-word column names.
 var reTableSplit = regexp.MustCompile(`\s{2,}`)
-
-// parseTableColumns determines column boundaries from the header line of a
-// fixed-format table (e.g. ActiveMQ dstat output). Columns are separated by 2+
-// spaces; the header name determines the start position for each column.
-func parseTableColumns(header string) []tableColumn {
-	parts := reTableSplit.Split(header, -1)
-
-	var cols []tableColumn
-	searchPos := 0
-	for _, part := range parts {
-		name := strings.TrimSpace(part)
-		if name == "" {
-			continue
-		}
-		idx := strings.Index(header[searchPos:], name)
-		if idx < 0 {
-			continue
-		}
-		start := searchPos + idx
-		cols = append(cols, tableColumn{name: name, start: start})
-		searchPos = start + len(name)
-	}
-
-	// Set end positions (up to the next column's start, or end of line)
-	for i := range cols {
-		if i+1 < len(cols) {
-			cols[i].end = cols[i+1].start
-		} else {
-			cols[i].end = len(header)
-		}
-	}
-	return cols
-}
-
-// extractColumn extracts the value for a single column from a fixed-format line.
-func extractColumn(line string, col tableColumn) string {
-	if col.start >= len(line) {
-		return ""
-	}
-	end := col.end
-	if end > len(line) {
-		end = len(line)
-	}
-	return strings.TrimSpace(line[col.start:end])
-}
 
 // padRight pads s on the right to at least the given width.
 func padRight(s string, width int) string {
@@ -1832,33 +1780,43 @@ func padLeft(s string, width int) string {
 // formatActiveMQTable renders a fixed-format CLI table (like dstat) as a styled
 // lipgloss table with aligned columns and consistent theming. Returns the raw
 // string unchanged if the output doesn't look like a table.
+//
+// Each row is split on 2+ consecutive spaces (reTableSplit), preserving
+// multi-word column names and handling variable-length values correctly
+// (e.g. queue names longer than the header padding).
 func formatActiveMQTable(raw string) string {
 	lines := strings.Split(strings.TrimSpace(raw), "\n")
 	if len(lines) < 2 {
 		return raw
 	}
 
-	header := lines[0]
-	cols := parseTableColumns(header)
-	if len(cols) < 3 {
+	// Parse every row by splitting on 2+ spaces — each row independently.
+	// This is robust against variable-length values (long queue names, etc.).
+	type row []string
+	var rows []row
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		fields := reTableSplit.Split(trimmed, -1)
+		rows = append(rows, fields)
+	}
+	if len(rows) < 2 {
+		return raw
+	}
+	numCols := len(rows[0])
+	if numCols < 3 {
 		return raw // not tabular enough to format
 	}
 
-	// ── Calculate max width per column ──────────────────────────────────────
+	// ── Calculate max width per column across all rows ──────────────────────
 
-	colWidths := make([]int, len(cols))
-	for i, col := range cols {
-		if w := lipgloss.Width(extractColumn(header, col)); w > colWidths[i] {
-			colWidths[i] = w
-		}
-	}
-	for _, line := range lines[1:] {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		for i, col := range cols {
-			if w := lipgloss.Width(extractColumn(line, col)); w > colWidths[i] {
-				colWidths[i] = w
+	colWidths := make([]int, numCols)
+	for _, row := range rows {
+		for i, val := range row {
+			if i < numCols && lipgloss.Width(val) > colWidths[i] {
+				colWidths[i] = lipgloss.Width(val)
 			}
 		}
 	}
@@ -1875,12 +1833,11 @@ func formatActiveMQTable(raw string) string {
 
 	var b strings.Builder
 
-	// ── Header row ──────────────────────────────────────────────────────────
+	// ── Header row (rows[0]) ────────────────────────────────────────────────
 
-	for i, col := range cols {
-		val := extractColumn(header, col)
+	for i, val := range rows[0] {
 		styled := styles.StyleHeader.Render(val)
-		if i < len(cols)-1 {
+		if i < numCols-1 {
 			styled = padRight(styled, colWidths[i])
 		}
 		if i > 0 {
@@ -1895,19 +1852,17 @@ func formatActiveMQTable(raw string) string {
 	b.WriteString(styles.StyleSubtitle.Render(strings.Repeat("─", totalWidth)))
 	b.WriteString("\n")
 
-	// ── Data rows ───────────────────────────────────────────────────────────
+	// ── Data rows (rows[1:]) ────────────────────────────────────────────────
 
-	for _, line := range lines[1:] {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		for i, col := range cols {
-			val := extractColumn(line, col)
+	nameStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary)
+	for _, row := range rows[1:] {
+		for i, val := range row {
+			if i >= numCols {
+				break
+			}
 			var styled string
 			if i == 0 {
 				// Name column — left-aligned, primary (blue)
-				nameStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary)
 				styled = nameStyle.Render(padRight(val, colWidths[i]))
 			} else {
 				// Numeric columns — right-aligned, muted
