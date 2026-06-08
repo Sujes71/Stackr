@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stackr/stackr/internal/config"
@@ -42,9 +43,6 @@ var (
 
 // queueOpsDoneMsg is reused from messages.go (already defined there).
 
-// clearResultMsg auto-dismisses the result panel after 5 seconds.
-type clearResultMsg struct{}
-
 // ── Model ─────────────────────────────────────────────────────────────────────
 
 // QueueOpsModel implements the 3-screen queue operations view.
@@ -77,6 +75,7 @@ type QueueOpsModel struct {
 	pendingOps map[string]string
 	lastResult string
 	doneOp     string
+	doneOpAt   time.Time
 
 	// Spinner
 	spinnerFrame int
@@ -86,9 +85,11 @@ type QueueOpsModel struct {
 	width  int
 
 	// Result panel overlay
-	viewingResult bool
-	resultOutput  string
-	resultTitle   string
+	viewingResult   bool
+	resultOutput    string
+	resultTitle     string
+	resultViewport  viewport.Model
+	viewportContent string // cached styled content for viewport
 
 	// Wizard (delegated)
 	wizardModel *AddQueueSyncEnvModel
@@ -136,7 +137,15 @@ func NewQueueOps(cfg *config.Config, p *config.Profile, envName, serviceName str
 		customNameInput: textinput.New(),
 		customCmdInput:  textinput.New(),
 		paramInput:      textinput.New(),
+		resultViewport:  viewport.New(0, 0),
 	}
+	vp := &m.resultViewport
+	vp.KeyMap.Up.SetKeys("up")
+	vp.KeyMap.Down.SetKeys("down")
+	vp.KeyMap.PageUp.SetKeys()
+	vp.KeyMap.PageDown.SetKeys()
+	vp.KeyMap.HalfPageUp.SetKeys()
+	vp.KeyMap.HalfPageDown.SetKeys()
 	m.customNameInput.Placeholder = "Action name"
 	m.customCmdInput.Placeholder = "Command (use {param} for variables)"
 	m.paramInput.Placeholder = "value"
@@ -221,6 +230,13 @@ func (m *QueueOpsModel) Init() tea.Cmd {
 func (m *QueueOpsModel) SetSize(w, h int) {
 	m.width = w
 	m.height = max(0, h)
+	m.resultViewport.Width = w - 4
+	if m.viewingResult {
+		lineCount := strings.Count(m.viewportContent, "\n") + 1
+		m.resultViewport.Height = min(lineCount, max(8, h-10))
+	} else {
+		m.resultViewport.Height = max(8, h-10)
+	}
 }
 
 // ── Update dispatch ───────────────────────────────────────────────────────────
@@ -232,6 +248,18 @@ func (m *QueueOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 				return SpinnerTickMsg{}
 			})
+		}
+		// Keep spinner running while doneOp is active to trigger re-renders
+		// (the "✓" is shown based on timestamp, not a one-shot timer).
+		if m.doneOp != "" {
+			if time.Since(m.doneOpAt) >= 5*time.Second {
+				m.doneOp = ""
+			} else {
+				m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
+				return m, tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+					return SpinnerTickMsg{}
+				})
+			}
 		}
 		return m, nil
 	}
@@ -597,12 +625,6 @@ func (m *QueueOpsModel) buildActionsList(qse *config.QueueSyncEnv) []actionItem 
 			{label: "Purge queue", group: "Queues", enabled: true,
 				execute: nil},
 
-			// Stats group
-			{label: "Broker stats", group: "Stats", enabled: true,
-				execute: jmxExec("bstat")},
-			{label: "Query attributes", group: "Stats", enabled: true,
-				execute: jmxExec("query")},
-
 			// Messaging group
 			{label: "Send message", group: "Messaging", enabled: true,
 				execute: nil},
@@ -734,16 +756,18 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
-	case clearResultMsg:
-		m.doneOp = ""
-		return m, nil
-
 	case tea.KeyMsg:
 		if m.viewingResult {
-			m.viewingResult = false
-			return m, tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
-				return clearResultMsg{}
-			})
+			switch {
+			case key.Matches(msg, queueOpsUp):
+				m.resultViewport.LineUp(1)
+			case key.Matches(msg, queueOpsDown):
+				m.resultViewport.LineDown(1)
+			default:
+				m.viewingResult = false
+				return m, nil
+			}
+			return m, nil
 		}
 		switch {
 		case key.Matches(msg, queueOpsBack):
@@ -921,18 +945,32 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.doneOp = completedLabel
+		m.doneOpAt = time.Now()
 		// Clean verbose output: for ActiveMQ, strip JVM startup noise
 		// and format table output for List destinations.
 		cleaned := msg.result
 		if m.currentQueueType() == "activemq" {
 			cleaned = cleanActiveMQOutput(msg.result)
 			cleaned = formatActiveMQTable(cleaned)
-			cleaned = formatActiveJMSBrowse(cleaned)
+			cleaned = formatActiveMQBrowse(cleaned)
+		}
+		if cleaned == "" {
+			// Auto-generated success — no output, skip the result panel entirely.
+			// The "✓" in the action list is enough confirmation.
+			m.viewingResult = false
+			m.resultOutput = ""
+			return m, spinnerCmd()
 		}
 		m.viewingResult = true
 		m.resultOutput = cleaned
 		m.resultTitle = completedLabel
-		return m, nil
+		m.viewportContent = styles.StyleHeader.Render(m.resultTitle) + "\n\n" + styles.StyleCode.Render(m.resultOutput)
+		m.resultViewport.SetContent(m.viewportContent)
+		m.resultViewport.Width = m.width - 4
+		lineCount := strings.Count(m.viewportContent, "\n") + 1
+		m.resultViewport.Height = min(lineCount, max(8, m.height-10))
+		m.resultViewport.YPosition = 0
+		return m, spinnerCmd()
 
 	case daemonStartedMsg:
 		m.daemonStarting = false
@@ -1263,7 +1301,7 @@ func (m *QueueOpsModel) buildParamActionCmd(act actionItem) tea.Cmd {
 				args = []string{"purge", m.paramValues["queue"], "--jmxurl", jmxURL}
 			case "Send message":
 				program = "activemq"
-				args = []string{"producer", "--destination", m.paramValues["queue"], "--message", m.paramValues["message"], "--message-count", "1"}
+				args = []string{"producer", "--destination", m.paramValues["queue"], "--message", m.paramValues["message"], "--messageCount", "1"}
 				if m.targetSyncEnv {
 					svc := m.currentService()
 					if svc != nil {
@@ -1280,7 +1318,7 @@ func (m *QueueOpsModel) buildParamActionCmd(act actionItem) tea.Cmd {
 				}
 			case "Consume messages":
 				program = "activemq"
-				args = []string{"consumer", "--destination", m.paramValues["queue"]}
+				args = []string{"consumer", "--destination", m.paramValues["queue"], "--messageCount", "1"}
 				if m.targetSyncEnv {
 					svc := m.currentService()
 					if svc != nil {
@@ -1500,9 +1538,19 @@ func (m *QueueOpsModel) View() string {
 
 func (m *QueueOpsModel) viewActions() string {
 	if m.viewingResult {
-		cardW := m.width - 4
-		content := styles.StyleHeader.Render(m.resultTitle) + "\n\n" + styles.StyleCode.Render(m.resultOutput)
-		return styles.StylePanelFocused.Width(cardW).Render(content) + "\n\n  press any key to return"
+		// Scroll hint: shows direction arrows when content is scrollable
+		scrollHint := ""
+		atTop := m.resultViewport.AtTop()
+		atBottom := m.resultViewport.AtBottom()
+		switch {
+		case !atTop && !atBottom:
+			scrollHint = "\n  " + styles.StyleHelp.Render("▲ up  ▼ down") + "\n"
+		case !atTop:
+			scrollHint = "\n  " + styles.StyleHelp.Render("▲ up") + "\n"
+		case !atBottom:
+			scrollHint = "\n  " + styles.StyleHelp.Render("▼ down") + "\n"
+		}
+		return m.resultViewport.View() + scrollHint + "\n  " + styles.StyleHelp.Render("press any key to close")
 	}
 
 	svc := m.currentService()
@@ -1577,7 +1625,7 @@ func (m *QueueOpsModel) viewActions() string {
 			b.WriteString("    " + m.renderSpinnerDot(state) + "\n")
 			continue
 		}
-		if m.doneOp == act.label {
+		if m.doneOp == act.label && time.Since(m.doneOpAt) < 5*time.Second {
 			b.WriteString("    " + styles.StyleSuccess.Render("✓") + " " + act.label + "\n")
 			continue
 		}
@@ -1703,10 +1751,14 @@ func (m *QueueOpsModel) viewParamPrompt() string {
 	}
 
 	b.WriteString("\n")
+	enterLabel := "next"
+	if m.currentParamIdx == len(m.paramsToPrompt)-1 {
+		enterLabel = "submit"
+	}
 	b.WriteString("  " + styles.InlineHelp(
 		styles.HelpItem("esc", "cancel"),
 		styles.HelpItem("↑ ↓", "navigate"),
-		styles.HelpItem("enter", "next/submit"),
+		styles.HelpItem("enter", enterLabel),
 	))
 	return b.String()
 }
@@ -1909,44 +1961,80 @@ func formatActiveMQTable(raw string) string {
 	return b.String()
 }
 
-// formatActiveJMSBrowse formats ActiveMQ browse output by stripping
-// JMS_HEADER_FIELD:/JMS_BODY_FIELD: prefixes and rendering each line
-// as "  [key]  value". Returns the raw string unchanged if no JMS lines found.
-func formatActiveJMSBrowse(raw string) string {
-	lines := strings.Split(raw, "\n")
-	var hasJMS bool
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "JMS_HEADER_FIELD:") || strings.HasPrefix(trimmed, "JMS_BODY_FIELD:") {
-			hasJMS = true
-			break
-		}
-	}
-	if !hasJMS {
+// formatActiveMQBrowse formats ActiveMQ browse output (JMS messages) as
+// styled grouped message blocks. Auto-activates when JMSMessageID is present.
+// Groups fields by message: each JMSMessageID starts a new block, JMSText
+// is shown prominently, and other fields are indented key-value pairs.
+func formatActiveMQBrowse(raw string) string {
+	if !strings.Contains(raw, "JMSMessageID") {
 		return raw
 	}
 
 	keyStyle := styles.StyleSubtitle
 	valStyle := lipgloss.NewStyle().Foreground(styles.ColorCyan)
+	textStyle := styles.StyleHeader
+	sepStyle := styles.StyleSubtitle
 
-	var b strings.Builder
-	for _, line := range lines {
+	// Collect each message as a string block (delimited by JMSText),
+	// then reverse so most recent message appears first.
+	var messages []string
+	var curBuf strings.Builder
+
+	for _, line := range strings.Split(raw, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
 		}
+
 		cleaned := strings.TrimPrefix(trimmed, "JMS_HEADER_FIELD:")
 		cleaned = strings.TrimPrefix(cleaned, "JMS_BODY_FIELD:")
+
 		parts := strings.SplitN(cleaned, " = ", 2)
-		if len(parts) == 2 {
-			b.WriteString("  ")
-			b.WriteString(keyStyle.Render(parts[0]))
-			b.WriteString("  ")
-			b.WriteString(valStyle.Render(parts[1]))
-			b.WriteString("\n")
+		if len(parts) != 2 {
+			curBuf.WriteString(line + "\n")
+			continue
+		}
+
+		key, val := parts[0], parts[1]
+
+		if key == "JMSText" {
+			// Flush previous message
+			if curBuf.Len() > 0 {
+				messages = append(messages, strings.TrimRight(curBuf.String(), " \n\r"))
+				curBuf.Reset()
+			}
+			curBuf.WriteString("  ")
+			curBuf.WriteString(textStyle.Render(val))
+			curBuf.WriteString("\n")
 		} else {
-			b.WriteString(line + "\n")
+			curBuf.WriteString("    ")
+			curBuf.WriteString(keyStyle.Render(key))
+			curBuf.WriteString("  ")
+			curBuf.WriteString(valStyle.Render(val))
+			curBuf.WriteString("\n")
 		}
 	}
-	return strings.TrimSpace(b.String())
+
+	// Flush last message
+	if curBuf.Len() > 0 {
+		messages = append(messages, strings.TrimRight(curBuf.String(), " \n\r"))
+	}
+
+	// Reverse: most recent message first
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+
+	var b strings.Builder
+	for i, msg := range messages {
+		if i > 0 {
+			b.WriteString("  ")
+			b.WriteString(sepStyle.Render(strings.Repeat("─", 40)))
+			b.WriteString("\n")
+		}
+		b.WriteString(msg)
+		b.WriteString("\n")
+	}
+
+	return strings.TrimRight(b.String(), " \n\r")
 }
