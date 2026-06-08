@@ -2696,7 +2696,7 @@ func (m *ProfileViewModel) renderPortEditor() string {
 	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 	return "  " + focusStyle.Render("Local port:") +
 		" " + m.portInput.View() +
-		"  " + styles.InlineHelp(styles.HelpItem("↵", "save"), styles.HelpItem("esc", "cancel"))
+		"  " + styles.InlineHelp(styles.HelpItem("esc", "cancel"), styles.HelpItem("↵", "save"))
 }
 
 // ── Config Panel ──────────────────────────────────────────────────────────
