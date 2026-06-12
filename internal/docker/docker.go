@@ -603,11 +603,11 @@ func ContainerReady(container, dbType string) bool {
 	}
 }
 
-// MockServerReady checks if MockServer is accepting HTTP requests on localhost:1080.
+// MockServerReady checks if MockServer is accepting HTTP requests on the given host port.
 // It tries to reach the /mockserver/status endpoint which returns 200 when ready.
-func MockServerReady(containerName string) bool {
+func MockServerReady(hostPort string) bool {
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://localhost:1080/mockserver/status")
+	resp, err := client.Get("http://localhost:" + hostPort + "/mockserver/status")
 	if err != nil {
 		return false
 	}
