@@ -596,8 +596,10 @@ func (m *MockOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinnerCmd()
 		}
 
-		// List endpoints: parse as array and show compact item list
+		// List endpoints: parse as array and show compact item list.
+		// These are read-only — clear doneOp so no spurious checkmark appears.
 		if completedLabel == "List active expectations" || completedLabel == "Retrieve requests" {
+			m.doneOp = ""
 			var items []interface{}
 			if json.Unmarshal([]byte(msg.result), &items) == nil && len(items) > 0 {
 				m.itemList = items
@@ -1275,15 +1277,15 @@ func (m *MockOpsModel) viewActions() string {
 	return m.padView(b.String())
 }
 
-// padView fills remaining terminal height with blank lines so every
-// builder-based view (action list, param prompt, confirm) overwrites the
-// full visible area. Does NOT pad viewport or item list — they handle
-// their own height internally.
+// padView fills to one line less than the available height, leaving
+// breathing room so the terminal does not scroll the header off-screen
+// when the frame exactly matches the terminal height.
 func (m *MockOpsModel) padView(view string) string {
-	if m.height > 0 {
+	target := m.height - 1 // leave 1 line of breathing room
+	if target > 0 {
 		lines := strings.Count(view, "\n") + 1
-		if lines < m.height {
-			view += strings.Repeat("\n", m.height-lines)
+		if lines < target {
+			view += strings.Repeat("\n", target-lines)
 		}
 	}
 	return view
