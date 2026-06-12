@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -106,6 +107,7 @@ type DBOpsModel struct {
 	customFormFocus    int // 0=name, 1=command
 	customNameInput    textinput.Model
 	customCmdInput     textinput.Model
+	customCmdTextarea  textarea.Model
 
 	// Custom action param prompting
 	promptingParams   bool
@@ -164,6 +166,11 @@ func NewDBOps(cfg *config.Config, p *config.Profile, envName, serviceName string
 	m.customNameInput.Placeholder = "Function name"
 	m.customCmdInput.Placeholder = "SQL command (use {param} for variables)"
 	m.paramInput.Placeholder = "value"
+	m.customCmdTextarea = textarea.New()
+	m.customCmdTextarea.SetHeight(6)
+	m.customCmdTextarea.ShowLineNumbers = false
+	m.customCmdTextarea.Placeholder = "SQL command (use {param} for variables)"
+	m.customCmdTextarea.CharLimit = 0
 	// Resolve service index for mutations
 	for i, svc := range m.currentEnv().Services {
 		if svc.Name == serviceName {
@@ -564,7 +571,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.editingCustomIdx = -1
 						m.customFormFocus = 0
 			m.customNameInput.SetValue("")
-			m.customCmdInput.SetValue("")
+			m.customCmdTextarea.SetValue("")
 			return m, nil
 					}
 					if act.isCustom {
@@ -618,7 +625,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.editingCustomIdx = act.customIdx
 					m.customFormFocus = 0
 			m.customNameInput.SetValue(se.CustomActions[act.customIdx].Name)
-			m.customCmdInput.SetValue(se.CustomActions[act.customIdx].Command)
+			m.customCmdTextarea.SetValue(se.CustomActions[act.customIdx].Command)
 				}
 			}
 
@@ -905,27 +912,14 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.customFormFocus == 0 {
 			m.customNameInput, cmd = m.customNameInput.Update(msg)
 		} else {
-			m.customCmdInput, cmd = m.customCmdInput.Update(msg)
+			m.customCmdTextarea, cmd = m.customCmdTextarea.Update(msg)
 		}
 		return m, cmd
 	}
 
-	switch {
-	case key.Matches(keyMsg, dbOpsBack):
-		m.addingCustomAction = false
-
-	case key.Matches(keyMsg, dbOpsUp):
-		if m.customFormFocus > 0 {
-			m.customFormFocus--
-		}
-
-	case key.Matches(keyMsg, dbOpsDown):
-		if m.customFormFocus < 1 {
-			m.customFormFocus++
-		}
-
-	case key.Matches(keyMsg, dbOpsEnter):
-		if m.customNameInput.Value() != "" && m.customCmdInput.Value() != "" {
+	saveForm := func() (tea.Model, tea.Cmd) {
+		cmdVal := m.customCmdTextarea.Value()
+		if m.customNameInput.Value() != "" && cmdVal != "" {
 			svc := m.currentService()
 			if svc == nil {
 				return m, nil
@@ -935,33 +929,72 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			name := strings.TrimSpace(m.customNameInput.Value())
-			cmd := strings.TrimSpace(m.customCmdInput.Value())
+			cmd := strings.TrimSpace(cmdVal)
 			if m.editingCustomIdx >= 0 && m.editingCustomIdx < len(se.CustomActions) {
 				se.CustomActions[m.editingCustomIdx].Name = name
 				se.CustomActions[m.editingCustomIdx].Command = cmd
 			} else {
 				se.CustomActions = append(se.CustomActions, config.CustomAction{Name: name, Command: cmd})
 			}
-		m.profile.UpdatedAt = time.Now()
-		if err := m.cfg.UpdateProfile(*m.profile); err != nil {
-			m.lastResult = formatErrorMsg(err.Error())
-			return m, nil
-		}
-		m.addingCustomAction = false
-		m.actions = m.buildActionsList(se)
+			m.profile.UpdatedAt = time.Now()
+			if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+				m.lastResult = formatErrorMsg(err.Error())
+				return m, nil
+			}
+			m.addingCustomAction = false
+			m.actions = m.buildActionsList(se)
 			if m.actionCursor >= len(m.actions) {
 				m.actionCursor = len(m.actions) - 1
 			}
-			return m, nil
+		}
+		return m, nil
+	}
+
+	switch {
+	case key.Matches(keyMsg, dbOpsBack):
+		m.addingCustomAction = false
+
+	case key.Matches(keyMsg, dbOpsUp):
+		if m.customFormFocus == 1 {
+			if m.customCmdTextarea.Line() > 0 {
+				break // let textarea handle cursor up
+			}
+		}
+		if m.customFormFocus > 0 {
+			m.customFormFocus--
 		}
 
+	case key.Matches(keyMsg, dbOpsDown):
+		if m.customFormFocus == 1 {
+			totalLines := len(strings.Split(m.customCmdTextarea.Value(), "\n"))
+			if m.customCmdTextarea.Line() < totalLines-1 {
+				break // let textarea handle cursor down
+			}
+		}
+		if m.customFormFocus < 1 {
+			m.customFormFocus++
+		}
+
+	case key.Matches(keyMsg, dbOpsEnter):
+		if m.customFormFocus == 1 {
+			break // let textarea add newline
+		}
+		// Name field (textinput): save and submit
+		return saveForm()
+
+	case keyMsg.String() == "ctrl+s":
+		if m.customFormFocus == 1 {
+			return saveForm()
+		}
+		return m, nil
+
 	default:
-		// Forward to focused text input (handles typing, backspace, cursor, paste)
+		// Forward to focused input (handles typing, backspace, cursor, paste)
 		var cmd tea.Cmd
 		if m.customFormFocus == 0 {
 			m.customNameInput, cmd = m.customNameInput.Update(msg)
 		} else {
-			m.customCmdInput, cmd = m.customCmdInput.Update(msg)
+			m.customCmdTextarea, cmd = m.customCmdTextarea.Update(msg)
 		}
 		return m, cmd
 	}
@@ -1239,7 +1272,7 @@ func (m *DBOpsModel) viewCustomForm() string {
 	// Name field
 	if m.customFormFocus == 0 {
 		m.customNameInput.Focus()
-		m.customCmdInput.Blur()
+		m.customCmdTextarea.Blur()
 		b.WriteString("  " + focusStyle.Render("Name:    ") + m.customNameInput.View() + "\n")
 	} else {
 		m.customNameInput.Blur()
@@ -1248,19 +1281,40 @@ func (m *DBOpsModel) viewCustomForm() string {
 
 	// Command field
 	if m.customFormFocus == 1 {
-		m.customCmdInput.Focus()
+		m.customCmdTextarea.Focus()
 		m.customNameInput.Blur()
-		b.WriteString("  " + focusStyle.Render("Command: ") + m.customCmdInput.View() + "\n\n")
+		b.WriteString("  " + focusStyle.Render("Command: ") + "\n\n")
+		ta := m.customCmdTextarea.View()
+		taStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(styles.ColorPrimary).
+			Padding(0, 1)
+		b.WriteString("  " + taStyle.Render(ta) + "\n\n")
 	} else {
-		m.customCmdInput.Blur()
-		b.WriteString("  " + normalStyle.Render("Command: ") + m.customCmdInput.View() + "\n\n")
+		m.customCmdTextarea.Blur()
+		b.WriteString("  " + normalStyle.Render("Command: ") + "\n\n")
+		ta := m.customCmdTextarea.View()
+		taStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(styles.ColorMuted).
+			Padding(0, 1)
+		b.WriteString("  " + taStyle.Render(ta) + "\n\n")
 	}
 
+	if m.customFormFocus == 1 {
+		b.WriteString("  " + styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↑ ↓", "field"),
+			styles.HelpItem("enter", "newline"),
+			styles.HelpItem("ctrl+s", "save"),
+		))
+	} else {
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "field"),
 			styles.HelpItem("↵", "save"),
 		))
+	}
 	return b.String()
 }
 

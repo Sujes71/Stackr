@@ -76,6 +76,9 @@ type MockOpsModel struct {
 	resultViewport  viewport.Model
 	viewportContent string
 	detailFromList  bool // true when viewingResult came from item list detail
+	editingOrigMethod string // set when editing from item list, to clear old expectation
+	editingOrigPath   string
+	deleteItemArmed   bool // double-press 'd' from item list to delete
 
 	// Item list (compact view for list endpoints)
 	viewingItemList bool
@@ -341,8 +344,6 @@ func (m *MockOpsModel) buildActionsList() []actionItem {
 			execute: nil}, // params: method, path, status_code, content_type, body
 		{label: "List active expectations", group: "Expectations", enabled: true,
 			execute: m.mockAPICall("/mockserver/retrieve", "PUT", nil, map[string]string{"type": "ACTIVE_EXPECTATIONS"})},
-		{label: "Clear by path", group: "Expectations", enabled: true,
-			execute: nil}, // params: method, path
 		{label: "Reset all", group: "Expectations", enabled: true,
 			execute: nil}, // destructive, needs confirm
 
@@ -360,8 +361,6 @@ func (m *MockOpsModel) actionParams(act actionItem) []string {
 	switch act.label {
 	case "Create expectation":
 		return []string{"method", "path", "status_code", "content_type", "body"}
-	case "Clear by path":
-		return []string{"method", "path"}
 	case "Verify request":
 		return []string{"method", "path", "at_least"}
 	}
@@ -403,16 +402,19 @@ func (m *MockOpsModel) execParamAction(act actionItem) tea.Cmd {
 				"body": m.paramValues["body"],
 			},
 		}
-		return m.mockAPICall("/mockserver/expectation", "PUT", body, nil)()
 
-	case "Clear by path":
-		body := map[string]interface{}{
-			"httpRequest": map[string]interface{}{
-				"method": m.paramValues["method"],
-				"path":   m.paramValues["path"],
-			},
+		// When editing an existing expectation, clear the old one first
+		// (MockServer PUT does NOT replace by matcher — it appends, causing
+		// the duplicate listing bug).
+		if m.editingOrigMethod != "" {
+			origMethod := m.editingOrigMethod
+			origPath := m.editingOrigPath
+			m.editingOrigMethod = ""
+			m.editingOrigPath = ""
+			return m.editThenCreateExpectation(body, origMethod, origPath)
 		}
-		return m.mockAPICall("/mockserver/clear", "PUT", body, nil)()
+
+		return m.mockAPICall("/mockserver/expectation", "PUT", body, nil)()
 
 	case "Verify request":
 		atLeast := 1
@@ -430,6 +432,67 @@ func (m *MockOpsModel) execParamAction(act actionItem) tea.Cmd {
 		return m.mockAPICall("/mockserver/verify", "PUT", body, nil)()
 	}
 	return nil
+}
+
+// editThenCreateExpectation clears the old expectation by method+path then creates
+// the new one. MockServer's PUT does not replace by matcher — it appends — so we
+// must clear first to avoid duplicate expectations in the listing.
+func (m *MockOpsModel) editThenCreateExpectation(body map[string]interface{}, origMethod, origPath string) tea.Cmd {
+	return func() tea.Msg {
+		port := m.mockHostPort()
+		client := &http.Client{Timeout: 10 * time.Second}
+
+		// Step 1: Clear the old expectation
+		clearBody := map[string]interface{}{
+			"httpRequest": map[string]interface{}{
+				"method": origMethod,
+				"path":   origPath,
+			},
+		}
+		clearJSON, err := json.Marshal(clearBody)
+		if err == nil {
+			clearReq, reqErr := http.NewRequest("PUT", fmt.Sprintf("http://localhost:%s/mockserver/clear", port), bytes.NewReader(clearJSON))
+			if reqErr == nil {
+				clearReq.Header.Set("Content-Type", "application/json")
+				clearResp, doErr := client.Do(clearReq)
+				if doErr == nil {
+					clearResp.Body.Close()
+				}
+			}
+		}
+
+		// Step 2: Create the new expectation
+		createJSON, err := json.Marshal(body)
+		if err != nil {
+			return mockOpsDoneMsg{err: fmt.Errorf("invalid request: %w", err)}
+		}
+		createReq, err := http.NewRequest("PUT", fmt.Sprintf("http://localhost:%s/mockserver/expectation", port), bytes.NewReader(createJSON))
+		if err != nil {
+			return mockOpsDoneMsg{err: fmt.Errorf("request failed: %w", err)}
+		}
+		createReq.Header.Set("Content-Type", "application/json")
+		createResp, err := client.Do(createReq)
+		if err != nil {
+			return mockOpsDoneMsg{err: fmt.Errorf("cannot reach MockServer at localhost:%s — is the service running?\n  %w", port, err)}
+		}
+		defer createResp.Body.Close()
+
+		respData, _ := io.ReadAll(createResp.Body)
+		if createResp.StatusCode >= 400 {
+			return mockOpsDoneMsg{err: fmt.Errorf("MockServer error (%d): %s", createResp.StatusCode, strings.TrimSpace(string(respData)))}
+		}
+		if len(respData) > 0 {
+			trimmed := strings.TrimSpace(string(respData))
+			if trimmed == "[]" {
+				return mockOpsDoneMsg{result: "No active expectations found."}
+			}
+			if trimmed == "{}" {
+				return mockOpsDoneMsg{result: "Empty response from MockServer."}
+			}
+			return mockOpsDoneMsg{result: prettyMockResult(respData)}
+		}
+		return mockOpsDoneMsg{result: ""}
+	}
 }
 
 // showItemDetail marshals the selected item to pretty-printed JSON and shows
@@ -647,35 +710,30 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.viewingItemList {
 			switch {
 			case key.Matches(msg, mockOpsUp):
+				m.deleteItemArmed = false
 				if m.itemCursor > 0 {
 					m.itemCursor--
 				}
 			case key.Matches(msg, mockOpsDown):
+				m.deleteItemArmed = false
 				if m.itemCursor < len(m.itemList)-1 {
 					m.itemCursor++
 				}
 			case key.Matches(msg, mockOpsEnter):
+				m.deleteItemArmed = false
 				// Show selected item detail in viewport
 				return m.showItemDetail()
-			case key.Matches(msg, mockOpsBack):
-				m.viewingItemList = false
-				m.itemList = nil
-			}
-			return m, nil
-		}
-		if m.viewingResult {
-			switch {
-			case key.Matches(msg, mockOpsUp):
-				m.resultViewport.LineUp(1)
-			case key.Matches(msg, mockOpsDown):
-				m.resultViewport.LineDown(1)
 			case key.Matches(msg, mockOpsEdit):
-				// Edit the current item — pre-fill param form from its JSON
-				if m.detailFromList && m.itemCursor >= 0 && m.itemCursor < len(m.itemList) {
+				m.deleteItemArmed = false
+				// Edit the selected item — pre-fill param form from its JSON
+				if m.itemCursor >= 0 && m.itemCursor < len(m.itemList) {
 					if item, ok := m.itemList[m.itemCursor].(map[string]interface{}); ok && m.prefillParamsFromItem(item) {
-						m.viewingResult = false
-						m.detailFromList = false
-						// Find or create "Create expectation" action for the PUT request
+						m.editingOrigMethod = m.paramValues["method"]
+						m.editingOrigPath = m.paramValues["path"]
+						// Keep itemList alive and mark detailFromList so the
+						// viewport close handler returns to the item list.
+						m.viewingItemList = false
+						m.detailFromList = true
 						for i, act := range m.actions {
 							if act.label == "Create expectation" {
 								m.actionCursor = i
@@ -689,13 +747,51 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, nil
 					}
 				}
-				// Fall through to close result if item isn't editable
-				m.viewingResult = false
-				if m.detailFromList {
-					m.detailFromList = false
-					m.viewingItemList = true
+			case msg.String() == "d":
+				if m.deleteItemArmed {
+					// Second 'd' — confirm delete via /mockserver/clear
+					m.deleteItemArmed = false
+					if item, ok := m.itemList[m.itemCursor].(map[string]interface{}); ok {
+						if req, ok := item["httpRequest"].(map[string]interface{}); ok {
+							method, _ := req["method"].(string)
+							path, _ := req["path"].(string)
+							if method != "" && path != "" {
+								clearBody := map[string]interface{}{
+									"httpRequest": map[string]interface{}{
+										"method": method,
+										"path":   path,
+									},
+								}
+								m.viewingItemList = false
+								m.itemList = nil
+								m.doneOp = "Delete expectation"
+								m.doneOpAt = time.Now()
+								m.pendingOps["Delete expectation"] = "running"
+								// The doneMsg handler shows the result in the viewport
+								// since "Delete expectation" doesn't match list/report labels.
+								return m, m.mockAPICall("/mockserver/clear", "PUT", clearBody, nil)()
+							}
+						}
+					}
+				} else {
+					m.deleteItemArmed = true
+					return m, nil
 				}
-				return m, spinnerCmd()
+			case key.Matches(msg, mockOpsBack):
+				m.deleteItemArmed = false
+				m.viewingItemList = false
+				m.itemList = nil
+			default:
+				m.deleteItemArmed = false
+			}
+			return m, nil
+		}
+		if m.viewingResult {
+			switch {
+			case key.Matches(msg, mockOpsUp):
+				m.resultViewport.LineUp(1)
+			case key.Matches(msg, mockOpsDown):
+				m.resultViewport.LineDown(1)
 			default:
 				m.viewingResult = false
 				// If we came from the item list, go back to it
@@ -925,6 +1021,13 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc":
 			m.promptingParams = false
+			m.editingOrigMethod = ""
+			m.editingOrigPath = ""
+			// Return to item list when cancelling an edit started from there
+			if m.detailFromList {
+				m.detailFromList = false
+				m.viewingItemList = true
+			}
 			return m, nil
 
 		case "up":
@@ -969,7 +1072,7 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case "ctrl+enter":
+		case "ctrl+s":
 			if isBody {
 				m.setCurrentParamValue()
 				m.formatBody()
@@ -1012,6 +1115,8 @@ func (m *MockOpsModel) submitCurrentParam() (tea.Model, tea.Cmd) {
 	act := m.actions[m.actionCursor]
 	execCmd := m.execParamAction(act)
 	if execCmd == nil {
+		m.editingOrigMethod = ""
+		m.editingOrigPath = ""
 		return m, nil
 	}
 	m.lastResult = ""
@@ -1024,16 +1129,7 @@ func (m *MockOpsModel) submitCurrentParam() (tea.Model, tea.Cmd) {
 // ── View ───────────────────────────────────────────────────────────────────────
 
 func (m *MockOpsModel) View() string {
-	view := m.viewActions()
-	// Pad to terminal height so every view overwrites the full visible area,
-	// preventing stale content from the previous view in the scrollback buffer.
-	if m.height > 0 {
-		lines := strings.Count(view, "\n") + 1
-		if lines < m.height {
-			view += strings.Repeat("\n", m.height-lines)
-		}
-	}
-	return view
+	return m.viewActions()
 }
 
 func (m *MockOpsModel) viewActions() string {
@@ -1056,6 +1152,7 @@ func (m *MockOpsModel) viewActions() string {
 		return m.viewItemList()
 	}
 
+	// ── Builder-based views (action list, param prompt, confirm) ──
 	var b strings.Builder
 	b.WriteString("\n")
 
@@ -1069,7 +1166,7 @@ func (m *MockOpsModel) viewActions() string {
 	// Param prompting
 	if m.promptingParams {
 		b.WriteString(m.viewParamPrompt())
-		return b.String()
+		return m.padView(b.String())
 	}
 
 	// Confirm destructive
@@ -1077,7 +1174,7 @@ func (m *MockOpsModel) viewActions() string {
 		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 		b.WriteString(styles.StyleError.Render("  ✗ This action clears ALL active expectations.") + "\n")
 		b.WriteString("  " + promptStyle.Render("▸ Continue?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
-		return b.String()
+		return m.padView(b.String())
 	}
 
 	// Action group sections
@@ -1145,17 +1242,27 @@ func (m *MockOpsModel) viewActions() string {
 		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
 	}
 
-	groups := map[string]bool{}
-	for _, act := range m.actions {
-		groups[act.group] = true
-	}
 	b.WriteString("\n")
 	b.WriteString("  " + styles.InlineHelp(
 		styles.HelpItem("↑ ↓", "navigate"),
 		styles.HelpItem("↵", "execute"),
 		styles.HelpItem("esc", "back"),
 	))
-	return b.String()
+	return m.padView(b.String())
+}
+
+// padView fills remaining terminal height with blank lines so every
+// builder-based view (action list, param prompt, confirm) overwrites the
+// full visible area. Does NOT pad viewport or item list — they handle
+// their own height internally.
+func (m *MockOpsModel) padView(view string) string {
+	if m.height > 0 {
+		lines := strings.Count(view, "\n") + 1
+		if lines < m.height {
+			view += strings.Repeat("\n", m.height-lines)
+		}
+	}
+	return view
 }
 
 // viewItemList renders a compact navigable list of items (expectations or requests).
@@ -1177,9 +1284,16 @@ func (m *MockOpsModel) viewItemList() string {
 	}
 
 	b.WriteString("\n")
+
+	if m.deleteItemArmed {
+		b.WriteString("  " + styles.StyleError.Render("Press d again to delete this expectation") + "\n\n")
+	}
+
 	b.WriteString("  " + styles.InlineHelp(
 		styles.HelpItem("↑ ↓", "navigate"),
 		styles.HelpItem("↵", "view detail"),
+		styles.HelpItem("e", "edit"),
+		styles.HelpItem("d", "delete"),
 		styles.HelpItem("esc", "back"),
 	))
 	return b.String()
@@ -1214,9 +1328,6 @@ func mockItemLabel(item interface{}) string {
 
 // viewportHelp returns the help bar shown below the result viewport.
 func (m *MockOpsModel) viewportHelp() string {
-	if m.detailFromList {
-		return styles.StyleHelp.Render("e edit  esc back  any key to close")
-	}
 	return styles.StyleHelp.Render("press any key to close")
 }
 

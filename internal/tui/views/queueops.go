@@ -1,6 +1,8 @@
 package views
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -8,6 +10,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -108,6 +111,7 @@ type QueueOpsModel struct {
 	paramValues       map[string]string
 	currentParamIdx   int
 	paramInput        textinput.Model
+	paramTextarea     textarea.Model
 
 	// Custom action delete
 	deleteActionArmed bool
@@ -149,6 +153,11 @@ func NewQueueOps(cfg *config.Config, p *config.Profile, envName, serviceName str
 	m.customNameInput.Placeholder = "Action name"
 	m.customCmdInput.Placeholder = "Command (use {param} for variables)"
 	m.paramInput.Placeholder = "value"
+	m.paramTextarea = textarea.New()
+	m.paramTextarea.SetHeight(6)
+	m.paramTextarea.ShowLineNumbers = false
+	m.paramTextarea.Placeholder = "message content"
+	m.paramTextarea.CharLimit = 0
 	// Resolve service index for mutations
 	for i, svc := range m.currentEnv().Services {
 		if svc.Name == serviceName {
@@ -815,9 +824,7 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.paramsToPrompt = params
 						m.paramValues = make(map[string]string)
 						m.currentParamIdx = 0
-						m.paramInput.SetValue("")
-						m.paramInput.Placeholder = params[0]
-						m.paramInput.Focus()
+						m.refreshParamInput()
 						return m, nil
 					}
 					if act.isCustom {
@@ -838,9 +845,7 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.paramsToPrompt = params
 							m.paramValues = make(map[string]string)
 							m.currentParamIdx = 0
-							m.paramInput.SetValue("")
-							m.paramInput.Placeholder = params[0]
-							m.paramInput.Focus()
+							m.refreshParamInput()
 						} else {
 							m.confirmCustomAction = true
 						}
@@ -1063,57 +1068,178 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// ── Param prompt helpers (textarea-aware) ──────────────────────────────────────
+
+// isTextareaParam returns true when the param should use a textarea instead of textinput.
+func (m *QueueOpsModel) isTextareaParam(param string) bool {
+	return param == "message"
+}
+
+// setMessageTextareaHeight auto-sizes the message textarea to fit content,
+// with a minimum of 6 lines and a cap at 20 lines.
+func (m *QueueOpsModel) setMessageTextareaHeight() {
+	lines := len(strings.Split(m.paramTextarea.Value(), "\n"))
+	switch {
+	case lines < 6:
+		m.paramTextarea.SetHeight(6)
+	case lines > 20:
+		m.paramTextarea.SetHeight(20)
+	default:
+		m.paramTextarea.SetHeight(lines)
+	}
+}
+
+// refreshParamInput syncs the active input (textarea or textinput) to the current param.
+func (m *QueueOpsModel) refreshParamInput() {
+	param := m.paramsToPrompt[m.currentParamIdx]
+	if m.isTextareaParam(param) {
+		m.paramInput.Blur()
+		m.paramTextarea.Focus()
+		if v, ok := m.paramValues[param]; ok && v != "" {
+			m.paramTextarea.SetValue(v)
+		} else {
+			m.paramTextarea.SetValue("")
+		}
+		m.setMessageTextareaHeight()
+		m.paramTextarea.CursorEnd()
+	} else {
+		m.paramTextarea.Blur()
+		m.paramInput.Focus()
+		m.paramInput.SetValue("")
+		m.paramInput.Placeholder = param
+		m.paramInput.CursorEnd()
+	}
+}
+
+func (m *QueueOpsModel) currentParamValue() string {
+	param := m.paramsToPrompt[m.currentParamIdx]
+	if m.isTextareaParam(param) {
+		return m.paramTextarea.Value()
+	}
+	return m.paramInput.Value()
+}
+
+func (m *QueueOpsModel) setCurrentParamValue() {
+	param := m.paramsToPrompt[m.currentParamIdx]
+	val := m.currentParamValue()
+	if !m.isTextareaParam(param) {
+		val = strings.TrimSpace(val)
+	}
+	m.paramValues[param] = val
+}
+
+func (m *QueueOpsModel) allParamsFilled() bool {
+	for _, p := range m.paramsToPrompt {
+		if v, ok := m.paramValues[p]; !ok || v == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// submitForm exits param prompting and goes to confirm step (core or custom).
+func (m *QueueOpsModel) submitForm() (tea.Model, tea.Cmd) {
+	m.promptingParams = false
+	if m.promptingForCore {
+		m.confirmAction = true
+	} else {
+		m.confirmCustomAction = true
+	}
+	return m, nil
+}
+
+// formatMessage pretty-prints the message value as JSON if valid.
+func (m *QueueOpsModel) formatMessage() {
+	val := m.paramTextarea.Value()
+	var pretty bytes.Buffer
+	if json.Indent(&pretty, []byte(val), "", "  ") == nil {
+		m.paramTextarea.SetValue(pretty.String())
+		m.setMessageTextareaHeight()
+	}
+}
+
 // ── Param prompt update ───────────────────────────────────────────────────────
 
 func (m *QueueOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 	keyMsg, isKey := msg.(tea.KeyMsg)
 	if !isKey {
 		var cmd tea.Cmd
-		m.paramInput, cmd = m.paramInput.Update(msg)
+		if m.isTextareaParam(m.paramsToPrompt[m.currentParamIdx]) {
+			m.paramTextarea, cmd = m.paramTextarea.Update(msg)
+		} else {
+			m.paramInput, cmd = m.paramInput.Update(msg)
+		}
 		return m, cmd
 	}
+
+	isMessage := m.isTextareaParam(m.paramsToPrompt[m.currentParamIdx])
 
 	switch {
 	case key.Matches(keyMsg, queueOpsBack):
 		m.promptingParams = false
 
 	case key.Matches(keyMsg, queueOpsUp):
-		if m.currentParamIdx > 0 {
-			m.paramValues[m.paramsToPrompt[m.currentParamIdx]] = m.paramInput.Value()
-			m.currentParamIdx--
-			m.paramInput.SetValue(m.paramValues[m.paramsToPrompt[m.currentParamIdx]])
-			m.paramInput.Placeholder = m.paramsToPrompt[m.currentParamIdx]
+		if isMessage && m.paramTextarea.Line() > 0 {
+			break // let textarea handle cursor up
 		}
+		if m.currentParamIdx > 0 {
+			m.setCurrentParamValue()
+			m.currentParamIdx--
+			m.refreshParamInput()
+		}
+		return m, nil
 
 	case key.Matches(keyMsg, queueOpsDown):
-		if m.currentParamIdx < len(m.paramsToPrompt)-1 {
-			m.paramValues[m.paramsToPrompt[m.currentParamIdx]] = m.paramInput.Value()
-			m.currentParamIdx++
-			m.paramInput.SetValue(m.paramValues[m.paramsToPrompt[m.currentParamIdx]])
-			m.paramInput.Placeholder = m.paramsToPrompt[m.currentParamIdx]
+		if isMessage {
+			totalLines := len(strings.Split(m.paramTextarea.Value(), "\n"))
+			if m.paramTextarea.Line() < totalLines-1 {
+				break // let textarea handle cursor down
+			}
 		}
+		if m.currentParamIdx < len(m.paramsToPrompt)-1 {
+			m.setCurrentParamValue()
+			m.currentParamIdx++
+			m.refreshParamInput()
+		}
+		return m, nil
 
 	case key.Matches(keyMsg, queueOpsEnter):
-		m.paramValues[m.paramsToPrompt[m.currentParamIdx]] = m.paramInput.Value()
+		if isMessage {
+			break // let textarea add newline
+		}
+		// Non-message: save current field and try to submit
+		m.setCurrentParamValue()
+		if m.allParamsFilled() {
+			return m.submitForm()
+		}
+		return m, nil
 
-		// Check all fields filled before submitting
-		allFilled := true
-		for _, p := range m.paramsToPrompt {
-			if m.paramValues[p] == "" {
-				allFilled = false
-				break
+	case keyMsg.String() == "ctrl+f":
+		if isMessage {
+			m.formatMessage()
+		}
+		return m, nil
+
+	case keyMsg.String() == "ctrl+s":
+		if isMessage {
+			m.setCurrentParamValue()
+			m.formatMessage()
+			m.paramValues[m.paramsToPrompt[m.currentParamIdx]] = m.paramTextarea.Value()
+			if m.allParamsFilled() {
+				return m.submitForm()
 			}
 		}
-		if allFilled {
-			m.promptingParams = false
-			if m.promptingForCore {
-				m.confirmAction = true
-			} else {
-				m.confirmCustomAction = true
-			}
-		}
+		return m, nil
+	}
 
-	default:
+	// Delegate to active input
+	if isMessage {
+		var cmd tea.Cmd
+		m.paramTextarea, cmd = m.paramTextarea.Update(msg)
+		m.setMessageTextareaHeight()
+		return m, cmd
+	}
+	if m.paramInput.Focused() {
 		var cmd tea.Cmd
 		m.paramInput, cmd = m.paramInput.Update(msg)
 		return m, cmd
@@ -1760,9 +1886,22 @@ func (m *QueueOpsModel) viewParamPrompt() string {
 	filledStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 	emptyStyle := lipgloss.NewStyle().Foreground(styles.ColorMuted)
 
+	// Fixed width for param lines ensures old content is fully overwritten
+	// when switching between cursor/non-cursor views of the same line.
+	linePad := lipgloss.NewStyle().Width(60)
+
+	onMessage := false
+	if m.currentParamIdx < len(m.paramsToPrompt) {
+		onMessage = m.isTextareaParam(m.paramsToPrompt[m.currentParamIdx])
+	}
+
 	for i, param := range m.paramsToPrompt {
+		if i == m.currentParamIdx && onMessage && m.isTextareaParam(param) {
+			continue
+		}
 		if i == m.currentParamIdx {
-			b.WriteString("  " + cursorStyle.Render("> "+param+"  ") + m.paramInput.View() + "\n")
+			line := "  " + cursorStyle.Render("> "+param+"  ") + m.paramInput.View()
+			b.WriteString(linePad.Render(line) + "\n")
 		} else if v, ok := m.paramValues[param]; ok && v != "" {
 			b.WriteString("    " + param + "  " + filledStyle.Render(v) + "\n")
 		} else {
@@ -1770,12 +1909,35 @@ func (m *QueueOpsModel) viewParamPrompt() string {
 		}
 	}
 
+	if onMessage {
+		b.WriteString("  " + cursorStyle.Render("> message  ") + "\n\n")
+		ta := m.paramTextarea.View()
+		taStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(styles.ColorPrimary).
+			Padding(0, 1)
+		b.WriteString(taStyle.Render(ta))
+		b.WriteString("\n")
+	}
+
 	b.WriteString("\n")
-	b.WriteString("  " + styles.InlineHelp(
-		styles.HelpItem("esc", "cancel"),
-		styles.HelpItem("↑ ↓", "navigate"),
-		styles.HelpItem("enter", "save"),
-	))
+
+	if onMessage {
+		b.WriteString("  " + styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↑ ↓", "navigate"),
+			styles.HelpItem("enter", "newline"),
+			styles.HelpItem("ctrl+f", "format"),
+			styles.HelpItem("ctrl+s", "save"),
+		))
+	} else {
+		b.WriteString("  " + styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↑ ↓", "navigate"),
+			styles.HelpItem("enter", "save"),
+		))
+	}
+
 	return b.String()
 }
 
