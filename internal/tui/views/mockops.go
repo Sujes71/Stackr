@@ -37,6 +37,7 @@ var (
 	mockOpsDown  = key.NewBinding(key.WithKeys("down"))
 	mockOpsEnter = key.NewBinding(key.WithKeys("enter"))
 	mockOpsBack  = key.NewBinding(key.WithKeys("esc"))
+	mockOpsEdit  = key.NewBinding(key.WithKeys("e"))
 )
 
 // ── Model ──────────────────────────────────────────────────────────────────────
@@ -448,12 +449,58 @@ func (m *MockOpsModel) showItemDetail() (tea.Model, tea.Cmd) {
 	m.resultViewport.SetContent(m.viewportContent)
 	m.resultViewport.Width = m.width - 4
 	lineCount := strings.Count(m.viewportContent, "\n") + 1
-	m.resultViewport.Height = min(lineCount, max(8, m.height-10))
+	// +1 line for the help bar below the viewport
+	m.resultViewport.Height = min(lineCount, max(8, m.height-11))
 	m.resultViewport.YPosition = 0
 	m.resultViewport.GotoTop()
 	m.viewingResult = true
 	m.detailFromList = true
 	return m, nil
+}
+
+// prefillParamsFromItem extracts expectation fields into m.paramValues.
+// Returns true if the item looks like an editable expectation.
+func (m *MockOpsModel) prefillParamsFromItem(item map[string]interface{}) bool {
+	vals := make(map[string]string, 5)
+	hasHTTPReq := false
+
+	if req, ok := item["httpRequest"].(map[string]interface{}); ok {
+		hasHTTPReq = true
+		if v, ok := req["method"].(string); ok && v != "" {
+			vals["method"] = v
+		}
+		if v, ok := req["path"].(string); ok && v != "" {
+			vals["path"] = v
+		}
+	}
+
+	if res, ok := item["httpResponse"].(map[string]interface{}); ok {
+		hasHTTPReq = true
+		if v, ok := res["statusCode"].(float64); ok {
+			vals["status_code"] = fmt.Sprintf("%d", int(v))
+		}
+		if headers, ok := res["headers"].(map[string]interface{}); ok {
+			if ctList, ok := headers["Content-Type"].([]interface{}); ok && len(ctList) > 0 {
+				vals["content_type"] = fmt.Sprintf("%v", ctList[0])
+			}
+		}
+		if body, ok := res["body"]; ok && body != nil {
+			switch b := body.(type) {
+			case string:
+				vals["body"] = b
+			default:
+				if bjson, err := json.MarshalIndent(b, "", "  "); err == nil {
+					vals["body"] = string(bjson)
+				}
+			}
+		}
+	}
+
+	if !hasHTTPReq {
+		return false
+	}
+	m.paramValues = vals
+	return true
 }
 
 // ── Update ─────────────────────────────────────────────────────────────────────
@@ -621,6 +668,26 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.resultViewport.LineUp(1)
 			case key.Matches(msg, mockOpsDown):
 				m.resultViewport.LineDown(1)
+			case key.Matches(msg, mockOpsEdit):
+				// Edit the current item — pre-fill param form from its JSON
+				if m.detailFromList && m.itemCursor >= 0 && m.itemCursor < len(m.itemList) {
+					if item, ok := m.itemList[m.itemCursor].(map[string]interface{}); ok && m.prefillParamsFromItem(item) {
+						m.viewingResult = false
+						m.detailFromList = false
+						m.promptingParams = true
+						m.paramsToPrompt = []string{"method", "path", "status_code", "content_type", "body"}
+						m.currentParamIdx = 0
+						m.refreshParamInput()
+						return m, nil
+					}
+				}
+				// Fall through to close result if item isn't editable
+				m.viewingResult = false
+				if m.detailFromList {
+					m.detailFromList = false
+					m.viewingItemList = true
+				}
+				return m, spinnerCmd()
 			default:
 				m.viewingResult = false
 				// If we came from the item list, go back to it
@@ -965,7 +1032,7 @@ func (m *MockOpsModel) viewActions() string {
 		case !atBottom:
 			scrollHint = "\n  " + styles.StyleHelp.Render("▼ down") + "\n"
 		}
-		return m.resultViewport.View() + scrollHint + "\n  " + styles.StyleHelp.Render("press any key to close")
+		return m.resultViewport.View() + scrollHint + "\n  " + m.viewportHelp()
 	}
 
 	if m.viewingItemList {
@@ -1126,6 +1193,14 @@ func mockItemLabel(item interface{}) string {
 	}
 
 	return fmt.Sprintf("%v", item)
+}
+
+// viewportHelp returns the help bar shown below the result viewport.
+func (m *MockOpsModel) viewportHelp() string {
+	if m.detailFromList {
+		return styles.StyleHelp.Render("e edit  esc back  any key to close")
+	}
+	return styles.StyleHelp.Render("press any key to close")
 }
 
 // ── Param prompt view ──────────────────────────────────────────────────────────
