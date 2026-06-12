@@ -781,6 +781,13 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.deleteItemArmed = false
 				m.viewingItemList = false
 				m.itemList = nil
+				// Return focus to the action that produced this list
+				for i, act := range m.actions {
+					if act.label == m.itemListTitle {
+						m.actionCursor = i
+						break
+					}
+				}
 			default:
 				m.deleteItemArmed = false
 			}
@@ -984,14 +991,21 @@ func (m *MockOpsModel) allParamsFilled() bool {
 func (m *MockOpsModel) submitForm() (tea.Model, tea.Cmd) {
 	m.promptingParams = false
 	act := m.actions[m.actionCursor]
+	isEdit := m.editingOrigMethod != "" // capture before execParamAction clears it
 	execCmd := m.execParamAction(act)
 	if execCmd == nil {
 		return m, nil
 	}
 	m.lastResult = ""
-	m.doneOp = act.label
-	m.doneOpAt = time.Now()
-	m.pendingOps[act.label] = "running"
+	if isEdit {
+		m.doneOp = "Edit expectation"
+		m.doneOpAt = time.Now()
+		m.pendingOps["Edit expectation"] = "running"
+	} else {
+		m.doneOp = act.label
+		m.doneOpAt = time.Now()
+		m.pendingOps[act.label] = "running"
+	}
 	return m, tea.Batch(execCmd, spinnerCmd())
 }
 
@@ -1113,6 +1127,7 @@ func (m *MockOpsModel) submitCurrentParam() (tea.Model, tea.Cmd) {
 	// All params filled — execute
 	m.promptingParams = false
 	act := m.actions[m.actionCursor]
+	isEdit := m.editingOrigMethod != "" // capture before execParamAction clears it
 	execCmd := m.execParamAction(act)
 	if execCmd == nil {
 		m.editingOrigMethod = ""
@@ -1120,9 +1135,18 @@ func (m *MockOpsModel) submitCurrentParam() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.lastResult = ""
-	m.doneOp = act.label
-	m.doneOpAt = time.Now()
-	m.pendingOps[act.label] = "running"
+	if isEdit {
+		// Use a distinct label so the result viewport says "Edit expectation"
+		// and no spurious checkmark appears on "Create expectation" in the
+		// action list.
+		m.doneOp = "Edit expectation"
+		m.doneOpAt = time.Now()
+		m.pendingOps["Edit expectation"] = "running"
+	} else {
+		m.doneOp = act.label
+		m.doneOpAt = time.Now()
+		m.pendingOps[act.label] = "running"
+	}
 	return m, tea.Batch(execCmd, spinnerCmd())
 }
 
