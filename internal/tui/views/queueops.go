@@ -1962,10 +1962,29 @@ func (m *QueueOpsModel) viewParamPrompt() string {
 			styles.HelpItem("ctrl+s", "save"),
 		))
 	} else {
+		// Dynamic label: "save" if just storing the field, "submit" if it triggers the action
+		willSubmit := false
+		if m.currentParamIdx == len(m.paramsToPrompt)-1 {
+			othersFilled := true
+			for i, p := range m.paramsToPrompt {
+				if i == m.currentParamIdx {
+					continue
+				}
+				if v, ok := m.paramValues[p]; !ok || v == "" {
+					othersFilled = false
+					break
+				}
+			}
+			willSubmit = othersFilled
+		}
+		enterLabel := "save"
+		if willSubmit {
+			enterLabel = "submit"
+		}
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "navigate"),
-			styles.HelpItem("enter", "save"),
+			styles.HelpItem("enter", enterLabel),
 		))
 	}
 	return b.String()

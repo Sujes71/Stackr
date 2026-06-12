@@ -1361,10 +1361,11 @@ func (m *DBOpsModel) viewCustomForm() string {
 			styles.HelpItem("ctrl+s", "save"),
 		))
 	} else {
+		// Name field: Enter always submits the form
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "field"),
-			styles.HelpItem("↵", "save"),
+			styles.HelpItem("↵", "submit"),
 		))
 	}
 	return b.String()
@@ -1393,9 +1394,28 @@ func (m *DBOpsModel) viewParamPrompt() string {
 	}
 
 	b.WriteString("\n")
+	// Dynamic label: "save" if just storing, "submit" if it triggers the action
+	willSubmit := false
+	if m.currentParamIdx == len(m.paramsToPrompt)-1 {
+		othersFilled := true
+		for i, p := range m.paramsToPrompt {
+			if i == m.currentParamIdx {
+				continue
+			}
+			if v, ok := m.paramValues[p]; !ok || v == "" {
+				othersFilled = false
+				break
+			}
+		}
+		willSubmit = othersFilled
+	}
+	enterLabel := "save"
+	if willSubmit {
+		enterLabel = "submit"
+	}
 	b.WriteString("  " + styles.InlineHelp(
 		styles.HelpItem("esc", "cancel"),
-		styles.HelpItem("enter", "save"),
+		styles.HelpItem("enter", enterLabel),
 	))
 	return b.String()
 }
