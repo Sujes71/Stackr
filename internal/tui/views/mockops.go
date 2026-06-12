@@ -856,20 +856,23 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 									m.itemCursor--
 								}
 							}
-							// Fire-and-forget: clear expectation without sending doneMsg
-							port := m.mockHostPort()
-							return m, func() tea.Msg {
-								go func() {
-									jsonBody, _ := json.Marshal(clearBody)
-									apiURL := fmt.Sprintf("http://localhost:%s/mockserver/clear", port)
-									req, _ := http.NewRequest("PUT", apiURL, bytes.NewReader(jsonBody))
-									req.Header.Set("Content-Type", "application/json")
-									client := &http.Client{Timeout: 10 * time.Second}
-									if resp, err := client.Do(req); err == nil {
-										resp.Body.Close()
-									}
-								}()
-								return nil
+							// Only fire API call for expectations — recorded requests just
+							// remove from in-memory list (no MockServer API for that).
+							if hasHTTPReq {
+								port := m.mockHostPort()
+								return m, func() tea.Msg {
+									go func() {
+										jsonBody, _ := json.Marshal(clearBody)
+										apiURL := fmt.Sprintf("http://localhost:%s/mockserver/clear", port)
+										req, _ := http.NewRequest("PUT", apiURL, bytes.NewReader(jsonBody))
+										req.Header.Set("Content-Type", "application/json")
+										client := &http.Client{Timeout: 10 * time.Second}
+										if resp, err := client.Do(req); err == nil {
+											resp.Body.Close()
+										}
+									}()
+									return nil
+								}
 							}
 						}
 					}
