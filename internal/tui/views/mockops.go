@@ -714,6 +714,24 @@ func (m *MockOpsModel) submitForm() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(execCmd, spinnerCmd())
 }
 
+// formatBody pretty-prints the body value according to content_type.
+func (m *MockOpsModel) formatBody() {
+	ct := m.paramValues["content_type"]
+	val := m.paramTextarea.Value()
+
+	switch {
+	case strings.Contains(ct, "json"):
+		var pretty bytes.Buffer
+		if json.Indent(&pretty, []byte(val), "", "  ") == nil {
+			m.paramTextarea.SetValue(pretty.String())
+			m.setBodyTextareaHeight()
+		}
+	default:
+		// For other content types, just trim leading/trailing whitespace
+		m.paramTextarea.SetValue(strings.TrimSpace(val))
+	}
+}
+
 func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -725,6 +743,9 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "up":
+			if isBody && m.paramTextarea.Line() > 0 {
+				break // let textarea handle cursor up
+			}
 			if m.currentParamIdx > 0 {
 				m.setCurrentParamValue()
 				m.currentParamIdx--
@@ -733,6 +754,12 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "down":
+			if isBody {
+				totalLines := len(strings.Split(m.paramTextarea.Value(), "\n"))
+				if m.paramTextarea.Line() < totalLines-1 {
+					break // let textarea handle cursor down
+				}
+			}
 			if m.currentParamIdx < len(m.paramsToPrompt)-1 {
 				m.setCurrentParamValue()
 				m.currentParamIdx++
@@ -751,9 +778,17 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case "ctrl+f":
+			if isBody {
+				m.formatBody()
+			}
+			return m, nil
+
 		case "ctrl+enter":
 			if isBody {
 				m.setCurrentParamValue()
+				m.formatBody()
+				m.paramValues["body"] = m.paramTextarea.Value()
 				if m.allParamsFilled() {
 					return m.submitForm()
 				}
@@ -971,6 +1006,7 @@ func (m *MockOpsModel) viewParamPrompt() string {
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("enter", "newline"),
+			styles.HelpItem("ctrl+f", "format"),
 			styles.HelpItem("ctrl+enter", "save"),
 		))
 	} else {
