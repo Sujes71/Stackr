@@ -74,6 +74,13 @@ type MockOpsModel struct {
 	resultTitle     string
 	resultViewport  viewport.Model
 	viewportContent string
+	detailFromList  bool // true when viewingResult came from item list detail
+
+	// Item list (compact view for list endpoints)
+	viewingItemList bool
+	itemListTitle   string
+	itemList        []interface{}
+	itemCursor      int
 
 	// Param prompting
 	promptingParams bool
@@ -424,6 +431,31 @@ func (m *MockOpsModel) execParamAction(act actionItem) tea.Cmd {
 	return nil
 }
 
+// showItemDetail marshals the selected item to pretty-printed JSON and shows
+// it in the scrollable result viewport.
+func (m *MockOpsModel) showItemDetail() (tea.Model, tea.Cmd) {
+	if m.itemCursor < 0 || m.itemCursor >= len(m.itemList) {
+		return m, nil
+	}
+	item := m.itemList[m.itemCursor]
+	pretty, err := json.MarshalIndent(item, "", "  ")
+	if err != nil {
+		return m, nil
+	}
+	m.resultOutput = string(pretty)
+	m.resultTitle = fmt.Sprintf("%s — item %d/%d", m.itemListTitle, m.itemCursor+1, len(m.itemList))
+	m.viewportContent = styles.StyleHeader.Render("  "+m.resultTitle+"  —  result") + "\n\n" + styles.StyleCode.Render(m.resultOutput)
+	m.resultViewport.SetContent(m.viewportContent)
+	m.resultViewport.Width = m.width - 4
+	lineCount := strings.Count(m.viewportContent, "\n") + 1
+	m.resultViewport.Height = min(lineCount, max(8, m.height-10))
+	m.resultViewport.YPosition = 0
+	m.resultViewport.GotoTop()
+	m.viewingResult = true
+	m.detailFromList = true
+	return m, nil
+}
+
 // ── Update ─────────────────────────────────────────────────────────────────────
 
 func (m *MockOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -448,9 +480,25 @@ func (m *MockOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.result == "" {
 			// No output — auto-generated success, just show the checkmark.
 			m.viewingResult = false
+			m.viewingItemList = false
 			m.resultOutput = ""
 			return m, spinnerCmd()
 		}
+
+		// List endpoints: parse as array and show compact item list
+		if completedLabel == "List active expectations" || completedLabel == "Retrieve requests" {
+			var items []interface{}
+			if json.Unmarshal([]byte(msg.result), &items) == nil && len(items) > 0 {
+				m.itemList = items
+				m.itemCursor = 0
+				m.itemListTitle = completedLabel
+				m.viewingItemList = true
+				m.viewingResult = false
+				return m, spinnerCmd()
+			}
+			// Empty or non-array: fall through to viewport
+		}
+
 		// Show result in viewport
 		m.resultOutput = msg.result
 		m.resultTitle = completedLabel
@@ -548,6 +596,25 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.viewingItemList {
+			switch {
+			case key.Matches(msg, mockOpsUp):
+				if m.itemCursor > 0 {
+					m.itemCursor--
+				}
+			case key.Matches(msg, mockOpsDown):
+				if m.itemCursor < len(m.itemList)-1 {
+					m.itemCursor++
+				}
+			case key.Matches(msg, mockOpsEnter):
+				// Show selected item detail in viewport
+				return m.showItemDetail()
+			case key.Matches(msg, mockOpsBack):
+				m.viewingItemList = false
+				m.itemList = nil
+			}
+			return m, nil
+		}
 		if m.viewingResult {
 			switch {
 			case key.Matches(msg, mockOpsUp):
@@ -556,6 +623,11 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.resultViewport.LineDown(1)
 			default:
 				m.viewingResult = false
+				// If we came from the item list, go back to it
+				if m.detailFromList {
+					m.detailFromList = false
+					m.viewingItemList = true
+				}
 				// Return spinner so the checkmark timer stays alive
 				return m, spinnerCmd()
 			}
@@ -896,6 +968,10 @@ func (m *MockOpsModel) viewActions() string {
 		return m.resultViewport.View() + scrollHint + "\n  " + styles.StyleHelp.Render("press any key to close")
 	}
 
+	if m.viewingItemList {
+		return m.viewItemList()
+	}
+
 	var b strings.Builder
 	b.WriteString("\n")
 
@@ -996,6 +1072,60 @@ func (m *MockOpsModel) viewActions() string {
 		styles.HelpItem("esc", "back"),
 	))
 	return b.String()
+}
+
+// viewItemList renders a compact navigable list of items (expectations or requests).
+func (m *MockOpsModel) viewItemList() string {
+	var b strings.Builder
+	b.WriteString(styles.StyleTitle.Render(fmt.Sprintf(" %s — %d items ", m.itemListTitle, len(m.itemList))))
+	b.WriteString("\n\n")
+
+	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
+	itemStyle := lipgloss.NewStyle().Foreground(styles.ColorMuted)
+
+	for i, item := range m.itemList {
+		label := mockItemLabel(item)
+		if i == m.itemCursor {
+			b.WriteString(selStyle.Render("    > " + label) + "\n")
+		} else {
+			b.WriteString(itemStyle.Render("      " + label) + "\n")
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString("  " + styles.InlineHelp(
+		styles.HelpItem("↑ ↓", "navigate"),
+		styles.HelpItem("↵", "view detail"),
+		styles.HelpItem("esc", "back"),
+	))
+	return b.String()
+}
+
+// mockItemLabel extracts a readable "METHOD /path" label from a parsed
+// MockServer expectation or request item.
+func mockItemLabel(item interface{}) string {
+	obj, ok := item.(map[string]interface{})
+	if !ok {
+		return fmt.Sprintf("%v", item)
+	}
+
+	// Try top-level method/path (requests)
+	if method, ok := obj["method"].(string); ok {
+		if path, ok := obj["path"].(string); ok {
+			return method + " " + path
+		}
+	}
+
+	// Try httpRequest.method/httpRequest.path (expectations)
+	if req, ok := obj["httpRequest"].(map[string]interface{}); ok {
+		method, _ := req["method"].(string)
+		path, _ := req["path"].(string)
+		if method != "" || path != "" {
+			return method + " " + path
+		}
+	}
+
+	return fmt.Sprintf("%v", item)
 }
 
 // ── Param prompt view ──────────────────────────────────────────────────────────
