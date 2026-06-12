@@ -638,8 +638,19 @@ func (m *MockOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingOps = make(map[string]string)
 
 		if msg.err != nil {
-			m.lastResult = styles.StyleError.Render("✗ " + msg.err.Error())
-			return m, nil
+			// Show errors in viewport instead of inline — MockServer error
+			// diffs are huge and break the action list layout.
+			m.resultOutput = msg.err.Error()
+			m.resultTitle = completedLabel
+			m.viewportContent = styles.StyleError.Render(m.resultOutput)
+			m.resultViewport.SetContent(m.viewportContent)
+			m.resultViewport.Width = m.width - 4
+			lineCount := strings.Count(m.viewportContent, "\n") + 1
+			m.resultViewport.Height = min(lineCount, max(8, m.height-13))
+			m.resultViewport.YPosition = 0
+			m.resultViewport.GotoTop()
+			m.viewingResult = true
+			return m, spinnerCmd()
 		}
 
 		m.doneOp = completedLabel
