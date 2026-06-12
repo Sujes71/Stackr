@@ -1094,29 +1094,23 @@ func (m *QueueOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(keyMsg, queueOpsEnter):
-		paramName := m.paramsToPrompt[m.currentParamIdx]
-		m.paramValues[paramName] = m.paramInput.Value()
+		m.paramValues[m.paramsToPrompt[m.currentParamIdx]] = m.paramInput.Value()
 
-		if m.currentParamIdx == len(m.paramsToPrompt)-1 {
-			allFilled := true
-			for _, p := range m.paramsToPrompt {
-				if m.paramValues[p] == "" {
-					allFilled = false
-					break
-				}
+		// Check all fields filled before submitting
+		allFilled := true
+		for _, p := range m.paramsToPrompt {
+			if m.paramValues[p] == "" {
+				allFilled = false
+				break
 			}
-			if allFilled {
-				m.promptingParams = false
-				if m.promptingForCore {
-					m.confirmAction = true
-				} else {
-					m.confirmCustomAction = true
-				}
+		}
+		if allFilled {
+			m.promptingParams = false
+			if m.promptingForCore {
+				m.confirmAction = true
+			} else {
+				m.confirmCustomAction = true
 			}
-		} else {
-			m.currentParamIdx++
-			m.paramInput.SetValue(m.paramValues[m.paramsToPrompt[m.currentParamIdx]])
-			m.paramInput.Placeholder = m.paramsToPrompt[m.currentParamIdx]
 		}
 
 	default:
@@ -1777,14 +1771,10 @@ func (m *QueueOpsModel) viewParamPrompt() string {
 	}
 
 	b.WriteString("\n")
-	enterLabel := "next"
-	if m.currentParamIdx == len(m.paramsToPrompt)-1 {
-		enterLabel = "submit"
-	}
 	b.WriteString("  " + styles.InlineHelp(
 		styles.HelpItem("esc", "cancel"),
 		styles.HelpItem("↑ ↓", "navigate"),
-		styles.HelpItem("enter", enterLabel),
+		styles.HelpItem("enter", "submit"),
 	))
 	return b.String()
 }
