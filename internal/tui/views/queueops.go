@@ -242,7 +242,8 @@ func (m *QueueOpsModel) SetSize(w, h int) {
 	m.resultViewport.Width = w - 4
 	if m.viewingResult {
 		lineCount := strings.Count(m.viewportContent, "\n") + 1
-		m.resultViewport.Height = min(lineCount, max(8, h-10))
+		// +3 for title + blank lines outside the viewport
+		m.resultViewport.Height = min(lineCount, max(8, h-13))
 	} else {
 		m.resultViewport.Height = max(8, h-10)
 	}
@@ -969,11 +970,13 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewingResult = true
 		m.resultOutput = cleaned
 		m.resultTitle = completedLabel
-		m.viewportContent = styles.StyleHeader.Render(m.resultTitle) + "\n\n" + styles.StyleCode.Render(m.resultOutput)
+		// Only the code goes inside the viewport — title stays visible above.
+		m.viewportContent = styles.StyleCode.Render(m.resultOutput)
 		m.resultViewport.SetContent(m.viewportContent)
 		m.resultViewport.Width = m.width - 4
 		lineCount := strings.Count(m.viewportContent, "\n") + 1
-		m.resultViewport.Height = min(lineCount, max(8, m.height-10))
+		// +3 for title + blank line outside the viewport
+		m.resultViewport.Height = min(lineCount, max(8, m.height-13))
 		m.resultViewport.YPosition = 0
 		return m, spinnerCmd()
 
@@ -1723,7 +1726,8 @@ func (m *QueueOpsModel) viewActions() string {
 		case !atBottom:
 			scrollHint = "\n  " + styles.StyleHelp.Render("▼ down") + "\n"
 		}
-		return m.resultViewport.View() + scrollHint + "\n  " + styles.StyleHelp.Render("press any key to close")
+		titleLine := styles.StyleHeader.Render(m.resultTitle)
+		return titleLine + "\n\n" + m.resultViewport.View() + scrollHint + "\n  " + styles.StyleHelp.Render("press any key to close")
 	}
 
 	svc := m.currentService()

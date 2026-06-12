@@ -164,7 +164,13 @@ func (m *MockOpsModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
 	m.resultViewport.Width = w - 10
-	m.resultViewport.Height = min(h-12, 40)
+	if m.viewingResult {
+		lineCount := strings.Count(m.viewportContent, "\n") + 1
+		// +3 for title + blank lines outside the viewport
+		m.resultViewport.Height = min(lineCount, max(8, h-14))
+	} else {
+		m.resultViewport.Height = min(h-12, 40)
+	}
 }
 
 // ── Environment / Service helpers ──────────────────────────────────────────────
@@ -508,12 +514,13 @@ func (m *MockOpsModel) showItemDetail() (tea.Model, tea.Cmd) {
 	}
 	m.resultOutput = string(pretty)
 	m.resultTitle = fmt.Sprintf("%s — item %d/%d", m.itemListTitle, m.itemCursor+1, len(m.itemList))
-	m.viewportContent = styles.StyleHeader.Render("  "+m.resultTitle+"  —  result") + "\n\n" + styles.StyleCode.Render(m.resultOutput)
+	// Only the code goes inside the viewport — title stays visible above.
+	m.viewportContent = styles.StyleCode.Render(m.resultOutput)
 	m.resultViewport.SetContent(m.viewportContent)
 	m.resultViewport.Width = m.width - 4
 	lineCount := strings.Count(m.viewportContent, "\n") + 1
-	// +1 line for the help bar below the viewport
-	m.resultViewport.Height = min(lineCount, max(8, m.height-11))
+	// +3 for title + blank lines outside the viewport
+	m.resultViewport.Height = min(lineCount, max(8, m.height-14))
 	m.resultViewport.YPosition = 0
 	m.resultViewport.GotoTop()
 	m.viewingResult = true
@@ -612,14 +619,15 @@ func (m *MockOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Empty or non-array: fall through to viewport
 		}
 
-		// Show result in viewport
+		// Show result in viewport — title stays visible outside
 		m.resultOutput = msg.result
 		m.resultTitle = completedLabel
-		m.viewportContent = styles.StyleHeader.Render("  "+m.resultTitle+"  —  result") + "\n\n" + styles.StyleCode.Render(m.resultOutput)
+		m.viewportContent = styles.StyleCode.Render(m.resultOutput)
 		m.resultViewport.SetContent(m.viewportContent)
 		m.resultViewport.Width = m.width - 4
 		lineCount := strings.Count(m.viewportContent, "\n") + 1
-		m.resultViewport.Height = min(lineCount, max(8, m.height-10))
+		// +3 for title + blank lines outside the viewport
+		m.resultViewport.Height = min(lineCount, max(8, m.height-13))
 		m.resultViewport.YPosition = 0
 		m.resultViewport.GotoTop()
 		m.viewingResult = true
@@ -1205,7 +1213,8 @@ func (m *MockOpsModel) viewActions() string {
 		case !atBottom:
 			scrollHint = "\n  " + styles.StyleHelp.Render("▼ down") + "\n"
 		}
-		return m.resultViewport.View() + scrollHint + "\n  " + m.viewportHelp()
+		titleLine := styles.StyleHeader.Render("  " + m.resultTitle + "  —  result")
+		return titleLine + "\n\n" + m.resultViewport.View() + scrollHint + "\n  " + m.viewportHelp()
 	}
 
 	if m.viewingItemList {
