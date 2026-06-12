@@ -1056,7 +1056,7 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case readyRetryMsg:
 		container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
-		ready, _ := docker.QueueContainerRunning(container)
+		ready := docker.MockServerReady(container)
 		if ready {
 			m.spinnerFrame = 0
 			// Execute the pending action
