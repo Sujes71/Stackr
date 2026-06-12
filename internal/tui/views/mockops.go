@@ -1138,26 +1138,30 @@ func (m *MockOpsModel) viewParamPrompt() string {
 	filledStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 	emptyStyle := lipgloss.NewStyle().Foreground(styles.ColorMuted)
 
+	// Fixed width for param lines ensures old content is fully overwritten
+	// when switching between cursor/non-cursor views of the same line.
+	linePad := lipgloss.NewStyle().Width(60)
+
 	onBody := m.paramsToPrompt[m.currentParamIdx] == "body"
 
 	for i, param := range m.paramsToPrompt {
 		if i == m.currentParamIdx && onBody && param == "body" {
-			// Show the textarea when body is active — render above the param list
 			continue
 		}
 		if i == m.currentParamIdx {
-			b.WriteString("  " + cursorStyle.Render("> "+param+"  ") + m.paramInput.View() + "\n")
+			line := "  " + cursorStyle.Render("> "+param+"  ") + m.paramInput.View()
+			b.WriteString(linePad.Render(line) + "\n")
 		} else if v, ok := m.paramValues[param]; ok && v != "" {
-			b.WriteString("    " + param + "  " + filledStyle.Render(v) + "\n")
+			line := "    " + param + "  " + filledStyle.Render(v)
+			b.WriteString(linePad.Render(line) + "\n")
 		} else {
-			b.WriteString("    " + param + "  " + emptyStyle.Render("-") + "\n")
+			line := "    " + param + "  " + emptyStyle.Render("-")
+			b.WriteString(linePad.Render(line) + "\n")
 		}
 	}
 
 	if onBody {
-		// Show the body label with cursor
 		b.WriteString("  " + cursorStyle.Render("> body  ") + "\n\n")
-		// Render textarea inside a subtle box
 		ta := m.paramTextarea.View()
 		taStyle := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -1177,19 +1181,17 @@ func (m *MockOpsModel) viewParamPrompt() string {
 			styles.HelpItem("ctrl+f", "format"),
 			styles.HelpItem("ctrl+enter", "save"),
 		))
-		// Pad body view to ~same height as non-body view so switching
-		// between them doesn't leave stale terminal content visible.
-		b.WriteString(strings.Repeat("\n", 12))
 	} else {
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("enter", "save"),
 		))
-		// Pad non-body view to clear any textarea content from previous body view.
-		b.WriteString(strings.Repeat("\n", 24))
 	}
-	return b.String()
+
+	// Fixed height ensures both body and non-body views fill the same
+	// vertical space, preventing stale content from the previous view mode.
+	return lipgloss.NewStyle().Height(35).Render(b.String())
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
