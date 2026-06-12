@@ -1481,7 +1481,7 @@ func (m *MockOpsModel) viewActions() string {
 	// Param prompting
 	if m.promptingParams {
 		b.WriteString(m.viewParamPrompt())
-		return m.padView(b.String())
+		return b.String()
 	}
 
 	// Confirm destructive
@@ -1489,7 +1489,7 @@ func (m *MockOpsModel) viewActions() string {
 		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 		b.WriteString(styles.StyleError.Render("  ✗ This action clears ALL active expectations.") + "\n")
 		b.WriteString("  " + promptStyle.Render("▸ Continue?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
-		return m.padView(b.String())
+		return b.String()
 	}
 
 	// Action group sections
@@ -1559,25 +1559,11 @@ func (m *MockOpsModel) viewActions() string {
 
 	b.WriteString("\n")
 	b.WriteString("  " + styles.InlineHelp(
+		styles.HelpItem("esc", "back"),
 		styles.HelpItem("↑ ↓", "navigate"),
 		styles.HelpItem("↵", "execute"),
-		styles.HelpItem("esc", "back"),
 	))
-	return m.padView(b.String())
-}
-
-// padView fills to one line less than the available height, leaving
-// breathing room so the terminal does not scroll the header off-screen
-// when the frame exactly matches the terminal height.
-func (m *MockOpsModel) padView(view string) string {
-	target := m.height - 1 // leave 1 line of breathing room
-	if target > 0 {
-		lines := strings.Count(view, "\n") + 1
-		if lines < target {
-			view += strings.Repeat("\n", target-lines)
-		}
-	}
-	return view
+	return b.String()
 }
 
 // viewItemList renders a compact navigable list of items (expectations or requests).
