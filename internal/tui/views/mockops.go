@@ -249,6 +249,9 @@ func (m *MockOpsModel) mockAPICall(endpoint, httpMethod string, body interface{}
 				// Empty array/object → friendly message instead of "[]"
 				trimmed := strings.TrimSpace(string(respData))
 				if trimmed == "[]" {
+					if retrieveType := queryParams["type"]; retrieveType == "REQUESTS" {
+						return mockOpsDoneMsg{result: "No requests recorded yet.\nRequests appear when a client sends traffic to MockServer."}
+					}
 					return mockOpsDoneMsg{result: "No active expectations found.\nCreate one with 'Create expectation' above."}
 				}
 				if trimmed == "{}" {
