@@ -204,6 +204,47 @@ func (m *MockOpsModel) mockHostPort() string {
 
 // ── HTTP helper ────────────────────────────────────────────────────────────────
 
+// prettyMockResult tries to pretty-print JSON with nested JSON strings
+// unescaped, making MockServer API responses readable.
+func prettyMockResult(data []byte) string {
+	var raw interface{}
+	if json.Unmarshal(data, &raw) == nil {
+		raw = unescapeNestedJSON(raw)
+		if pretty, err := json.MarshalIndent(raw, "", "  "); err == nil {
+			return string(pretty)
+		}
+	}
+	// Fallback: simple indent
+	var pretty bytes.Buffer
+	if json.Indent(&pretty, data, "", "  ") == nil {
+		return pretty.String()
+	}
+	return string(data)
+}
+
+// unescapeNestedJSON recursively replaces string values that are themselves
+// valid JSON with their parsed representation, so they render as nested
+// pretty-printed objects instead of escaped strings.
+func unescapeNestedJSON(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		for k, child := range val {
+			val[k] = unescapeNestedJSON(child)
+		}
+	case []interface{}:
+		for i, child := range val {
+			val[i] = unescapeNestedJSON(child)
+		}
+	case string:
+		// Try to parse this string as JSON
+		var nested interface{}
+		if json.Unmarshal([]byte(val), &nested) == nil {
+			return unescapeNestedJSON(nested)
+		}
+	}
+	return v
+}
+
 // mockAPICall runs a MockServer REST API call from the host to localhost:<port>.
 // body is sent as JSON when non-nil; queryParams are added to the URL when non-nil.
 // Returns a tea.Cmd that sends mockOpsDoneMsg with the result.
@@ -264,11 +305,8 @@ func (m *MockOpsModel) mockAPICall(endpoint, httpMethod string, body interface{}
 				if trimmed == "{}" {
 					return mockOpsDoneMsg{result: "Empty response from MockServer."}
 				}
-				var pretty bytes.Buffer
-				if json.Indent(&pretty, respData, "", "  ") == nil {
-					return mockOpsDoneMsg{result: pretty.String()}
-				}
-				return mockOpsDoneMsg{result: string(respData)}
+				// Pretty-print with nested JSON unescaping
+				return mockOpsDoneMsg{result: prettyMockResult(respData)}
 			}
 
 			// No body — success with no meaningful output;
@@ -1015,6 +1053,10 @@ func (m *MockOpsModel) viewParamPrompt() string {
 			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("enter", "save"),
 		))
+		// Pad with blank lines to overwrite any leftover textarea content
+		// from the previous body view (prevents visual artifacts when
+		// navigating away from body).
+		b.WriteString(strings.Repeat("\n", 24))
 	}
 	return b.String()
 }
