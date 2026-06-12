@@ -932,7 +932,7 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch {
 		case key.Matches(msg, mockOpsBack):
-			if m.promptStartDaemon || len(m.pendingOps) > 0 {
+			if m.promptStartDaemon || m.promptStartService || len(m.pendingOps) > 0 {
 				break
 			}
 			return m, func() tea.Msg {
@@ -979,16 +979,124 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.confirmLabel = act.label
 						return m, nil
 					}
-					// Immediate action
+				// Immediate action
+				if act.execute != nil {
+					// Check if container is running before executing
+					if !m.ensureContainerRunning(act.label) {
+						return m, nil
+					}
+					m.lastResult = ""
+					m.doneOp = act.label
+					m.doneOpAt = time.Now()
+					m.pendingOps[act.label] = "running"
+					return m, tea.Batch(act.execute(), spinnerCmd())
+				}
+				}
+			}
+		}
+	}
+
+	// Docker service lifecycle messages
+	switch msg := msg.(type) {
+	case daemonStartedMsg:
+		m.daemonStarting = false
+		if !msg.available {
+			m.lastResult = styles.StyleError.Render("Docker daemon failed to start")
+			delete(m.pendingOps, m.pendingStartLabel)
+			m.pendingStartLabel = ""
+			return m, spinnerCmd()
+		}
+		// Docker started — now start the service
+		svc := m.currentService()
+		if svc == nil {
+			m.pendingOps = make(map[string]string)
+			m.lastResult = styles.StyleError.Render("Service not found.")
+			return m, nil
+		}
+		if m.pendingStartLabel != "" {
+			m.pendingOps[m.pendingStartLabel] = "starting"
+		}
+		return m, tea.Batch(
+			func() tea.Msg {
+				err := docker.UpService(m.profile.Name, m.envName, svc.ComposeName())
+				if err != nil {
+					return serviceStartedMsg{err: err}
+				}
+				// `docker compose up` creates ALL services in the compose file
+				// even though it only starts the target one. Stop the others.
+				statuses, _ := docker.Status(m.profile.Name, m.envName)
+				for _, s := range statuses {
+					if s.Name != svc.ComposeName() && s.State == "running" {
+						_ = docker.RmService(m.profile.Name, m.envName, s.Name)
+					}
+				}
+				return serviceStartedMsg{}
+			},
+			spinnerCmd(),
+		)
+
+	case serviceStartedMsg:
+		if msg.err != nil {
+			m.lastResult = styles.StyleError.Render("start service: " + msg.err.Error())
+			delete(m.pendingOps, m.pendingStartLabel)
+			m.pendingStartLabel = ""
+			return m, spinnerCmd()
+		}
+		// Service started — poll for readiness then execute pending action
+		for label, state := range m.pendingOps {
+			if state == "starting" {
+				return m, func() tea.Msg {
+					return readyRetryMsg{label: label, retry: 0}
+				}
+			}
+		}
+		m.pendingOps = make(map[string]string)
+		m.lastResult = styles.StyleError.Render("Could not find pending action")
+		return m, nil
+
+	case readyRetryMsg:
+		container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
+		ready, _ := docker.QueueContainerRunning(container)
+		if ready {
+			m.spinnerFrame = 0
+			// Execute the pending action
+			for _, act := range m.actions {
+				if act.label == msg.label && act.enabled {
+					m.pendingOps[msg.label] = "running"
+					m.pendingStartLabel = ""
+					// Actions with execute func (List, Retrieve)
 					if act.execute != nil {
-						m.lastResult = ""
-						m.doneOp = act.label
-						m.doneOpAt = time.Now()
-						m.pendingOps[act.label] = "running"
 						return m, tea.Batch(act.execute(), spinnerCmd())
+					}
+					// "Reset all" — direct API call
+					if act.label == "Reset all" {
+						return m, tea.Batch(
+							m.mockAPICall("/mockserver/reset", "PUT", nil, nil)(),
+							spinnerCmd(),
+						)
+					}
+					// Param-based actions (Create expectation, Verify request)
+					// paramValues are still populated from the earlier prompt
+					execCmd := m.execParamAction(act)
+					if execCmd != nil {
+						return m, tea.Batch(execCmd, spinnerCmd())
 					}
 				}
 			}
+			m.pendingOps = make(map[string]string)
+			m.pendingStartLabel = ""
+			m.lastResult = styles.StyleError.Render("Could not find pending action")
+			return m, nil
+		}
+		if msg.retry >= 30 {
+			m.lastResult = styles.StyleError.Render("container not ready after 30s")
+			delete(m.pendingOps, msg.label)
+			m.pendingStartLabel = ""
+			return m, spinnerCmd()
+		}
+		return m, func() tea.Msg {
+			time.Sleep(1 * time.Second)
+			return readyRetryMsg{label: msg.label, retry: msg.retry + 1}
 		}
 	}
 
@@ -1021,6 +1129,10 @@ func (m *MockOpsModel) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			label := m.confirmLabel
 			switch label {
 			case "Reset all":
+				// Check if container is running before executing
+				if !m.ensureContainerRunning(label) {
+					return m, nil
+				}
 				m.lastResult = ""
 				m.doneOp = label
 				m.doneOpAt = time.Now()
@@ -1179,20 +1291,26 @@ func (m *MockOpsModel) submitForm() (tea.Model, tea.Cmd) {
 	m.promptingParams = false
 	act := m.actions[m.actionCursor]
 	isEdit := m.editingOrigMethod != "" // capture before execParamAction clears it
+
+	label := act.label
+	if isEdit {
+		label = "Edit expectation"
+	}
+
+	// Check if container is running before executing
+	if !m.ensureContainerRunning(label) {
+		m.promptingParams = false // already cleared above
+		return m, nil
+	}
+
 	execCmd := m.execParamAction(act)
 	if execCmd == nil {
 		return m, nil
 	}
 	m.lastResult = ""
-	if isEdit {
-		m.doneOp = "Edit expectation"
-		m.doneOpAt = time.Now()
-		m.pendingOps["Edit expectation"] = "running"
-	} else {
-		m.doneOp = act.label
-		m.doneOpAt = time.Now()
-		m.pendingOps[act.label] = "running"
-	}
+	m.doneOp = label
+	m.doneOpAt = time.Now()
+	m.pendingOps[label] = "running"
 	return m, tea.Batch(execCmd, spinnerCmd())
 }
 
@@ -1826,6 +1944,24 @@ func (m *MockOpsModel) isContainerRunning(container string) bool {
 			return true
 		}
 	}
+	return false
+}
+
+// ensureContainerRunning checks whether the service container is running.
+// If it is not, it sets up the daemon/service start prompt and returns false.
+// The caller should return (m, nil) immediately when this returns false.
+// label is the action label to execute after the container starts.
+func (m *MockOpsModel) ensureContainerRunning(label string) bool {
+	container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
+	if m.isContainerRunning(container) {
+		return true
+	}
+	if !docker.DaemonAvailable() {
+		m.promptStartDaemon = true
+	} else {
+		m.promptStartService = true
+	}
+	m.pendingStartLabel = label
 	return false
 }
 
