@@ -829,22 +829,10 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 									"path":   path,
 								},
 							}
-							// Remove item from list; if last item, go back to menu
-							lastItem := len(m.itemList) == 1
-							if lastItem {
-								m.viewingItemList = false
-								m.itemList = nil
-								for i, act := range m.actions {
-									if act.label == m.itemListTitle {
-										m.actionCursor = i
-										break
-									}
-								}
-							} else {
-								m.itemList = append(m.itemList[:m.itemCursor], m.itemList[m.itemCursor+1:]...)
-								if m.itemCursor >= len(m.itemList) && m.itemCursor > 0 {
-									m.itemCursor--
-								}
+							// Remove item from list and stay in the same view
+							m.itemList = append(m.itemList[:m.itemCursor], m.itemList[m.itemCursor+1:]...)
+							if m.itemCursor > 0 && m.itemCursor >= len(m.itemList) {
+								m.itemCursor--
 							}
 							// Fire-and-forget: clear expectation without sending doneMsg
 							port := m.mockHostPort()
