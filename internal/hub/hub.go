@@ -245,7 +245,9 @@ var Catalog = []CatalogEntry{
 		DefaultTag:  "latest",
 		DefaultPorts: []string{"1080:1080"},
 		DefaultEnv: map[string]string{
-			"MOCKSERVER_LOG_LEVEL": "INFO",
+			"MOCKSERVER_LOG_LEVEL":                 "INFO",
+			"MOCKSERVER_PERSIST_EXPECTATIONS":      "true",
+			"MOCKSERVER_PERSISTED_EXPECTATIONS_PATH": "/config/persistedExpectations.json",
 		},
 		DefaultVolumeTarget: "/config",
 	},

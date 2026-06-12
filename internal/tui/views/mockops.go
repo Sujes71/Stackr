@@ -78,6 +78,7 @@ type MockOpsModel struct {
 	detailFromList  bool // true when viewingResult came from item list detail
 	editingOrigMethod string // set when editing from item list, to clear old expectation
 	editingOrigPath   string
+	editingOrigQueryParams string // original queryStringParameters when editing
 	deleteItemArmed   bool // double-press 'd' from item list to delete
 
 	// Item list (compact view for list endpoints)
@@ -93,6 +94,13 @@ type MockOpsModel struct {
 	currentParamIdx int
 	paramInput      textinput.Model
 	paramTextarea   textarea.Model
+
+	// Query param builder (sub-prompt for key/value pairs)
+	qpBuilding    bool       // in key=value builder mode
+	qpPairs       [][2]string // accumulated key-value pairs
+	qpPhase       int        // 0 = entering key, 1 = entering value
+	qpOrigVal     string     // original query_params value to restore on cancel
+	qpDeleteArmed bool       // double-press 'd' to delete last pair
 
 	// Confirm before execute (double confirmation)
 	confirmAction bool
@@ -366,7 +374,7 @@ func (m *MockOpsModel) buildActionsList() []actionItem {
 func (m *MockOpsModel) actionParams(act actionItem) []string {
 	switch act.label {
 	case "Create expectation":
-		return []string{"method", "path", "status_code", "content_type", "body"}
+		return []string{"method", "path", "query_params", "status_code", "content_type", "body"}
 	case "Verify request":
 		return []string{"method", "path", "at_least"}
 	}
@@ -395,11 +403,21 @@ func (m *MockOpsModel) execParamAction(act actionItem) tea.Cmd {
 	case "Create expectation":
 		statusCode := 200
 		fmt.Sscanf(m.paramValues["status_code"], "%d", &statusCode)
+
+		httpRequest := map[string]interface{}{
+			"method": m.paramValues["method"],
+			"path":   m.paramValues["path"],
+		}
+
+		// Parse query_string parameters from key=value&key2=value2 format
+		if qp := strings.TrimSpace(m.paramValues["query_params"]); qp != "" {
+			if parsed, err := url.ParseQuery(qp); err == nil {
+				httpRequest["queryStringParameters"] = map[string][]string(parsed)
+			}
+		}
+
 		body := map[string]interface{}{
-			"httpRequest": map[string]interface{}{
-				"method": m.paramValues["method"],
-				"path":   m.paramValues["path"],
-			},
+			"httpRequest":  httpRequest,
 			"httpResponse": map[string]interface{}{
 				"statusCode": statusCode,
 				"headers": map[string][]string{
@@ -415,9 +433,11 @@ func (m *MockOpsModel) execParamAction(act actionItem) tea.Cmd {
 		if m.editingOrigMethod != "" {
 			origMethod := m.editingOrigMethod
 			origPath := m.editingOrigPath
+			origQueryParams := m.editingOrigQueryParams
 			m.editingOrigMethod = ""
 			m.editingOrigPath = ""
-			return m.editThenCreateExpectation(body, origMethod, origPath)
+			m.editingOrigQueryParams = ""
+			return m.editThenCreateExpectation(body, origMethod, origPath, origQueryParams)
 		}
 
 		return m.mockAPICall("/mockserver/expectation", "PUT", body, nil)()
@@ -440,20 +460,27 @@ func (m *MockOpsModel) execParamAction(act actionItem) tea.Cmd {
 	return nil
 }
 
-// editThenCreateExpectation clears the old expectation by method+path then creates
-// the new one. MockServer's PUT does not replace by matcher — it appends — so we
-// must clear first to avoid duplicate expectations in the listing.
-func (m *MockOpsModel) editThenCreateExpectation(body map[string]interface{}, origMethod, origPath string) tea.Cmd {
+// editThenCreateExpectation clears the old expectation by method+path (+ optional
+// queryStringParameters) then creates the new one. MockServer's PUT does not
+// replace by matcher — it appends — so we must clear first to avoid duplicate
+// expectations in the listing.
+func (m *MockOpsModel) editThenCreateExpectation(body map[string]interface{}, origMethod, origPath, origQueryParams string) tea.Cmd {
 	return func() tea.Msg {
 		port := m.mockHostPort()
 		client := &http.Client{Timeout: 10 * time.Second}
 
 		// Step 1: Clear the old expectation
+		clearRequest := map[string]interface{}{
+			"method": origMethod,
+			"path":   origPath,
+		}
+		if qp := strings.TrimSpace(origQueryParams); qp != "" {
+			if parsed, err := url.ParseQuery(qp); err == nil {
+				clearRequest["queryStringParameters"] = map[string][]string(parsed)
+			}
+		}
 		clearBody := map[string]interface{}{
-			"httpRequest": map[string]interface{}{
-				"method": origMethod,
-				"path":   origPath,
-			},
+			"httpRequest": clearRequest,
 		}
 		clearJSON, err := json.Marshal(clearBody)
 		if err == nil {
@@ -542,6 +569,23 @@ func (m *MockOpsModel) prefillParamsFromItem(item map[string]interface{}) bool {
 		}
 		if v, ok := req["path"].(string); ok && v != "" {
 			vals["path"] = v
+		}
+		if qsp, ok := req["queryStringParameters"].(map[string]interface{}); ok {
+			// Convert map[string][]string back to query string
+			qsv := make(url.Values)
+			for k, v := range qsp {
+				switch val := v.(type) {
+				case []interface{}:
+					for _, sv := range val {
+						qsv.Add(k, fmt.Sprintf("%v", sv))
+					}
+				case string:
+					qsv.Add(k, val)
+				}
+			}
+			if enc := qsv.Encode(); enc != "" {
+				vals["query_params"] = enc
+			}
 		}
 	}
 
@@ -740,6 +784,7 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if item, ok := m.itemList[m.itemCursor].(map[string]interface{}); ok && m.prefillParamsFromItem(item) {
 						m.editingOrigMethod = m.paramValues["method"]
 						m.editingOrigPath = m.paramValues["path"]
+						m.editingOrigQueryParams = m.paramValues["query_params"]
 						// Keep itemList alive and mark detailFromList so the
 						// viewport close handler returns to the item list.
 						m.viewingItemList = false
@@ -751,7 +796,7 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 							}
 						}
 						m.promptingParams = true
-						m.paramsToPrompt = []string{"method", "path", "status_code", "content_type", "body"}
+						m.paramsToPrompt = []string{"method", "path", "query_params", "status_code", "content_type", "body"}
 						m.currentParamIdx = 0
 						m.refreshParamInput()
 						return m, nil
@@ -970,6 +1015,11 @@ func (m *MockOpsModel) refreshParamInput() {
 		}
 		m.setBodyTextareaHeight()
 		m.paramTextarea.CursorEnd()
+	} else if param == "query_params" {
+		// query_params uses the builder — blur inputs but show value in the label
+		m.paramInput.Blur()
+		m.paramInput.SetValue("")
+		m.paramTextarea.Blur()
 	} else {
 		m.paramTextarea.Blur()
 		m.paramInput.Focus()
@@ -993,6 +1043,10 @@ func (m *MockOpsModel) currentParamValue() string {
 
 func (m *MockOpsModel) setCurrentParamValue() {
 	param := m.paramsToPrompt[m.currentParamIdx]
+	// query_params is managed by the builder — never overwrite from input
+	if param == "query_params" {
+		return
+	}
 	val := m.currentParamValue()
 	if param != "body" {
 		val = strings.TrimSpace(val)
@@ -1002,11 +1056,58 @@ func (m *MockOpsModel) setCurrentParamValue() {
 
 func (m *MockOpsModel) allParamsFilled() bool {
 	for _, p := range m.paramsToPrompt {
+		if p == "query_params" {
+			continue // optional
+		}
 		if v, ok := m.paramValues[p]; !ok || v == "" {
 			return false
 		}
 	}
 	return true
+}
+
+// ── Query param builder ──────────────────────────────────────────────────────
+
+// enterQPBuilder initialises the sub-prompt for adding key=value pairs.
+func (m *MockOpsModel) enterQPBuilder() {
+	m.qpOrigVal = m.paramValues["query_params"]
+	m.qpPairs = nil
+
+	// Parse existing query_params into pairs for editing
+	if m.qpOrigVal != "" {
+		if parsed, err := url.ParseQuery(m.qpOrigVal); err == nil {
+			for k, vs := range parsed {
+				for _, v := range vs {
+					m.qpPairs = append(m.qpPairs, [2]string{k, v})
+				}
+			}
+		}
+	}
+
+	m.qpBuilding = true
+	m.qpPhase = 0 // start with key
+	m.paramInput.SetValue("")
+	m.paramInput.Focus()
+	m.paramInput.Placeholder = "key name (leave empty to finish)"
+	m.paramInput.CursorEnd()
+}
+
+// finishQPBuilder encodes the accumulated pairs into a query string and exits
+// builder mode. If pairs is empty, query_params is cleared.
+func (m *MockOpsModel) finishQPBuilder() {
+	if len(m.qpPairs) == 0 {
+		m.paramValues["query_params"] = ""
+	} else {
+		qsv := make(url.Values)
+		for _, p := range m.qpPairs {
+			qsv.Add(p[0], p[1])
+		}
+		m.paramValues["query_params"] = qsv.Encode()
+	}
+	m.qpBuilding = false
+	m.qpPairs = nil
+	m.paramInput.SetValue("")
+	m.paramInput.Placeholder = "value"
 }
 
 // submitForm executes the current action with all param values already saved.
@@ -1053,6 +1154,81 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		isBody := m.paramsToPrompt[m.currentParamIdx] == "body"
+		isQP := m.paramsToPrompt[m.currentParamIdx] == "query_params"
+
+		// Query param builder mode — handle key/value entry
+		if m.qpBuilding {
+			switch msg.String() {
+			case "esc":
+				// Cancel builder, restore original value
+				if m.qpOrigVal != "" {
+					m.paramValues["query_params"] = m.qpOrigVal
+				} else {
+					delete(m.paramValues, "query_params")
+				}
+				m.qpBuilding = false
+				m.qpPairs = nil
+				m.paramInput.SetValue("")
+				m.paramInput.Placeholder = "value"
+				m.refreshParamInput()
+				return m, nil
+
+			case "enter":
+				val := strings.TrimSpace(m.paramInput.Value())
+				m.paramInput.SetValue("")
+
+				if m.qpPhase == 0 {
+					// Entering key — empty key means finish
+					if val == "" {
+						m.finishQPBuilder()
+						if m.allParamsFilled() {
+							return m.submitForm()
+						}
+						m.refreshParamInput()
+						return m, nil
+					}
+					// Save key, move to value phase
+					m.qpPairs = append(m.qpPairs, [2]string{val, ""})
+					m.qpPhase = 1
+					m.paramInput.Placeholder = "value for " + val
+					m.paramInput.CursorEnd()
+				} else {
+					// Entering value — save to current pair
+					if len(m.qpPairs) > 0 {
+						m.qpPairs[len(m.qpPairs)-1][1] = val
+					}
+					m.qpPhase = 0
+					m.paramInput.Placeholder = "key name (leave empty to finish)"
+					m.paramInput.CursorEnd()
+				}
+				m.qpDeleteArmed = false
+				return m, nil
+
+			case "ctrl+d":
+				if len(m.qpPairs) == 0 || m.qpPhase != 0 {
+					m.qpDeleteArmed = false
+					break
+				}
+				if m.qpDeleteArmed {
+					// Second Ctrl+D — remove last pair
+					m.qpPairs = m.qpPairs[:len(m.qpPairs)-1]
+					m.qpDeleteArmed = false
+				} else {
+					m.qpDeleteArmed = true
+				}
+				return m, nil
+
+			default:
+				m.qpDeleteArmed = false
+				// Delegate text input to paramInput
+				if m.paramInput.Focused() {
+					var cmd tea.Cmd
+					m.paramInput, cmd = m.paramInput.Update(msg)
+					return m, cmd
+				}
+			}
+			return m, nil
+		}
 
 		switch msg.String() {
 		case "esc":
@@ -1064,6 +1240,7 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.promptingParams = false
 			m.editingOrigMethod = ""
 			m.editingOrigPath = ""
+			m.editingOrigQueryParams = ""
 			// Return to item list when cancelling an edit started from there
 			if m.detailFromList {
 				m.detailFromList = false
@@ -1106,6 +1283,11 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				break // Enter in edit mode → newline
+			}
+			if isQP {
+				// Enter query param builder mode
+				m.enterQPBuilder()
+				return m, nil
 			}
 			// Non-body: save current field and try to submit
 			m.setCurrentParamValue()
@@ -1404,6 +1586,44 @@ func (m *MockOpsModel) viewportHelp() string {
 
 func (m *MockOpsModel) viewParamPrompt() string {
 	var b strings.Builder
+
+	// Query param builder sub-view
+	if m.qpBuilding {
+		b.WriteString(styles.StyleSubtitle.Render("  Query parameters") + "\n\n")
+
+		pairStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent)
+		if len(m.qpPairs) > 0 {
+			b.WriteString("  " + styles.StyleHelp.Render("Current pairs:") + "\n")
+			for _, p := range m.qpPairs {
+				b.WriteString("    " + pairStyle.Render(p[0]) + "  →  " + p[1] + "\n")
+			}
+			b.WriteString("\n")
+		}
+
+		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+		if m.qpPhase == 0 {
+			b.WriteString("  " + promptStyle.Render("▸ Key") + "  (leave empty to finish)\n\n")
+		} else {
+			key := m.qpPairs[len(m.qpPairs)-1][0]
+			b.WriteString("  " + promptStyle.Render("▸ Value for "+key) + "\n\n")
+		}
+		b.WriteString("  " + m.paramInput.View() + "\n")
+
+		if m.qpDeleteArmed {
+			b.WriteString("\n  " + styles.StyleError.Render("Press Ctrl+D again to remove last pair") + "\n")
+		}
+
+		helpItems := []styles.HelpItemResult{
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("enter", "confirm"),
+		}
+		if len(m.qpPairs) > 0 && m.qpPhase == 0 {
+			helpItems = append(helpItems, styles.HelpItem("^d ^d", "delete last"))
+		}
+		b.WriteString("\n  " + styles.InlineHelp(helpItems...))
+		return b.String()
+	}
+
 	b.WriteString(styles.StyleSubtitle.Render("  Enter parameter values") + "\n\n")
 
 	cursorStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
@@ -1415,14 +1635,27 @@ func (m *MockOpsModel) viewParamPrompt() string {
 	linePad := lipgloss.NewStyle().Width(60)
 
 	onBody := m.paramsToPrompt[m.currentParamIdx] == "body"
+	isQP := m.paramsToPrompt[m.currentParamIdx] == "query_params"
 
 	for i, param := range m.paramsToPrompt {
 		if i == m.currentParamIdx && onBody && param == "body" {
 			continue
 		}
 		if i == m.currentParamIdx {
-			line := "  " + cursorStyle.Render("> "+param+"  ") + m.paramInput.View()
-			b.WriteString(linePad.Render(line) + "\n")
+			if isQP {
+				// Show the encoded value or a prompt to enter builder
+				display := m.paramValues["query_params"]
+				if display != "" {
+					line := "  " + cursorStyle.Render("> "+param+"  ") + display
+					b.WriteString(linePad.Render(line) + "\n")
+				} else {
+					line := "  " + cursorStyle.Render("> "+param+"  ") + emptyStyle.Render("press enter to add key=value pairs")
+					b.WriteString(linePad.Render(line) + "\n")
+				}
+			} else {
+				line := "  " + cursorStyle.Render("> "+param+"  ") + m.paramInput.View()
+				b.WriteString(linePad.Render(line) + "\n")
+			}
 		} else if v, ok := m.paramValues[param]; ok && v != "" {
 			display := v
 			// Truncate body inline so a large JSON doesn't wrap and break layout
@@ -1458,22 +1691,28 @@ func (m *MockOpsModel) viewParamPrompt() string {
 			styles.HelpItem("ctrl+f", "format"),
 			styles.HelpItem("ctrl+s", "save"),
 		))
+	} else if isQP {
+		b.WriteString("  " + styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↑ ↓", "navigate"),
+			styles.HelpItem("enter", "add pairs"),
+		))
 	} else {
 		// Dynamic label: "save" if just storing the field, "submit" if it triggers the action
 		willSubmit := false
-		if m.currentParamIdx == len(m.paramsToPrompt)-1 {
-			othersFilled := true
-			for i, p := range m.paramsToPrompt {
-				if i == m.currentParamIdx {
-					continue
+			if m.currentParamIdx == len(m.paramsToPrompt)-1 {
+				othersFilled := true
+				for i, p := range m.paramsToPrompt {
+					if i == m.currentParamIdx || p == "query_params" {
+						continue
+					}
+					if v, ok := m.paramValues[p]; !ok || v == "" {
+						othersFilled = false
+						break
+					}
 				}
-				if v, ok := m.paramValues[p]; !ok || v == "" {
-					othersFilled = false
-					break
-				}
+				willSubmit = othersFilled
 			}
-			willSubmit = othersFilled
-		}
 		enterLabel := "save"
 		if willSubmit {
 			enterLabel = "submit"
