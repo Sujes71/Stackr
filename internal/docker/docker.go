@@ -603,11 +603,26 @@ func ContainerReady(container, dbType string) bool {
 	}
 }
 
-// MockServerReady checks if MockServer is accepting HTTP requests on the given host port.
-// It tries to reach the /mockserver/status endpoint which returns 200 when ready.
-func MockServerReady(hostPort string) bool {
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://localhost:" + hostPort + "/mockserver/status")
+// MockServerReady checks if MockServer inside the container is accepting HTTP requests.
+// It uses docker exec to check from inside the container, avoiding port mapping issues.
+// Falls back to HTTP check from host if docker exec fails.
+func MockServerReady(containerName string) bool {
+	// Primary: check from inside the container using /dev/tcp (bash built-in)
+	// This is the most reliable method as it doesn't depend on port mapping
+	if exec.Command("docker", "exec", containerName,
+		"sh", "-c", "exec 3<>/dev/tcp/localhost/1080").Run() == nil {
+		return true
+	}
+	
+	// Fallback: try with nc (netcat) if available
+	if exec.Command("docker", "exec", containerName,
+		"nc", "-z", "localhost", "1080").Run() == nil {
+		return true
+	}
+	
+	// Last resort: HTTP check from host (requires port mapping to be working)
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://localhost:1080/mockserver/status")
 	if err != nil {
 		return false
 	}
