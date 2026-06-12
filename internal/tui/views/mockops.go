@@ -778,6 +778,9 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.SetSize(msg.Width, msg.Height-5)
+		return m, nil
 	case tea.KeyMsg:
 		if m.viewingItemList {
 			switch {
