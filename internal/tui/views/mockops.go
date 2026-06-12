@@ -923,16 +923,27 @@ func (m *MockOpsModel) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 // ── Param prompt handler ───────────────────────────────────────────────────────
 
 // refreshParamInput syncs the input's value and placeholder to the current param.
-// setBodyTextareaHeight auto-sizes the body textarea to fit content,
-// with a minimum of 6 lines and a cap at 20 lines.
+// setBodyTextareaHeight auto-sizes the body textarea to fit content.
+// The cap is dynamic so the total param-prompt view (builder prefix + param labels
+// + textarea border + help) stays within m.height. Without this the body overflows
+// the terminal and the header (rendered by App.View) scrolls off the top.
 // Content beyond the cap is scrollable inside the textarea.
 func (m *MockOpsModel) setBodyTextareaHeight() {
 	lines := len(strings.Split(m.paramTextarea.Value(), "\n"))
+	// Overhead outside the textarea + border when body is focused:
+	//   builder prefix (7) + viewParamPrompt non-body (6) + "> body" label (2)
+	//   + border (2) + trailing newlines (2) + help (1) = 20 lines
+	// Available = m.height − overhead → cap ensures total fits ≤ m.height.
+	maxVisible := m.height - 20
+	if maxVisible < 5 {
+		maxVisible = 5
+	}
 	switch {
 	case lines < 6:
-		m.paramTextarea.SetHeight(6)
-	case lines > 20:
-		m.paramTextarea.SetHeight(20)
+		// Never go below the min, but respect the cap if smaller
+		m.paramTextarea.SetHeight(min(6, maxVisible))
+	case lines > maxVisible:
+		m.paramTextarea.SetHeight(maxVisible)
 	default:
 		m.paramTextarea.SetHeight(lines)
 	}
@@ -1381,7 +1392,12 @@ func (m *MockOpsModel) viewParamPrompt() string {
 			line := "  " + cursorStyle.Render("> "+param+"  ") + m.paramInput.View()
 			b.WriteString(linePad.Render(line) + "\n")
 		} else if v, ok := m.paramValues[param]; ok && v != "" {
-			line := "    " + param + "  " + filledStyle.Render(v)
+			display := v
+			// Truncate body inline so a large JSON doesn't wrap and break layout
+			if param == "body" && len(display) > 60 {
+				display = display[:57] + "..."
+			}
+			line := "    " + param + "  " + filledStyle.Render(display)
 			b.WriteString(linePad.Render(line) + "\n")
 		} else {
 			line := "    " + param + "  " + emptyStyle.Render("-")
