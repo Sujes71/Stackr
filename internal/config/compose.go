@@ -42,6 +42,12 @@ func GenerateCompose(profile Profile, envName string) (string, error) {
 		b.WriteString(fmt.Sprintf("    image: %s\n", svc.FullImage()))
 		b.WriteString(fmt.Sprintf("    container_name: stackr-%s-%s-%s\n", profile.Name, envName, compName))
 
+		// MockServer runs as nonroot in the image but needs write access
+		// to the named volume for expectation persistence
+		if svc.MockType() == "mockserver" {
+			b.WriteString("    user: root\n")
+		}
+
 		if len(svc.Ports) > 0 {
 			b.WriteString("    ports:\n")
 			for _, p := range svc.Ports {

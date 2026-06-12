@@ -556,41 +556,47 @@ func (m *MockOpsModel) showItemDetail() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// prefillParamsFromItem extracts expectation fields into m.paramValues.
-// Returns true if the item looks like an editable expectation.
+// prefillParamsFromItem extracts expectation or request fields into m.paramValues.
+// For expectations it extracts both request and response fields.
+// For recorded requests it prefills method/path/query with default response values.
+// Returns true if the item has extractable request fields.
 func (m *MockOpsModel) prefillParamsFromItem(item map[string]interface{}) bool {
-	vals := make(map[string]string, 5)
-	hasHTTPReq := false
+	vals := make(map[string]string, 6)
+	hadContent := false
 
-	if req, ok := item["httpRequest"].(map[string]interface{}); ok {
-		hasHTTPReq = true
-		if v, ok := req["method"].(string); ok && v != "" {
-			vals["method"] = v
-		}
-		if v, ok := req["path"].(string); ok && v != "" {
-			vals["path"] = v
-		}
-		if qsp, ok := req["queryStringParameters"].(map[string]interface{}); ok {
-			// Convert map[string][]string back to query string
-			qsv := make(url.Values)
-			for k, v := range qsp {
-				switch val := v.(type) {
-				case []interface{}:
-					for _, sv := range val {
-						qsv.Add(k, fmt.Sprintf("%v", sv))
-					}
-				case string:
-					qsv.Add(k, val)
+	// Extract request fields (from httpRequest for expectations, top-level for requests)
+	req, hasHTTPReq := item["httpRequest"].(map[string]interface{})
+	if !hasHTTPReq {
+		req = item // try top-level fields (recorded requests)
+	}
+
+	if v, ok := req["method"].(string); ok && v != "" {
+		vals["method"] = v
+		hadContent = true
+	}
+	if v, ok := req["path"].(string); ok && v != "" {
+		vals["path"] = v
+		hadContent = true
+	}
+	if qsp, ok := req["queryStringParameters"].(map[string]interface{}); ok {
+		qsv := make(url.Values)
+		for k, v := range qsp {
+			switch val := v.(type) {
+			case []interface{}:
+				for _, sv := range val {
+					qsv.Add(k, fmt.Sprintf("%v", sv))
 				}
+			case string:
+				qsv.Add(k, val)
 			}
-			if enc := qsv.Encode(); enc != "" {
-				vals["query_params"] = enc
-			}
+		}
+		if enc := qsv.Encode(); enc != "" {
+			vals["query_params"] = enc
 		}
 	}
 
+	// Extract response fields (only for expectations, not recorded requests)
 	if res, ok := item["httpResponse"].(map[string]interface{}); ok {
-		hasHTTPReq = true
 		if v, ok := res["statusCode"].(float64); ok {
 			vals["status_code"] = fmt.Sprintf("%d", int(v))
 		}
@@ -611,7 +617,7 @@ func (m *MockOpsModel) prefillParamsFromItem(item map[string]interface{}) bool {
 		}
 	}
 
-	if !hasHTTPReq {
+	if !hadContent {
 		return false
 	}
 	m.paramValues = vals
@@ -801,31 +807,36 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.refreshParamInput()
 						return m, nil
 					}
+					// Silently skip non-expectation items (requests) — help text
+					// hides edit/delete for requests via isExpectationItem.
 				}
 			case msg.String() == "d":
 				if m.deleteItemArmed {
 					// Second 'd' — confirm delete via /mockserver/clear
 					m.deleteItemArmed = false
 					if item, ok := m.itemList[m.itemCursor].(map[string]interface{}); ok {
-						if req, ok := item["httpRequest"].(map[string]interface{}); ok {
-							method, _ := req["method"].(string)
-							path, _ := req["path"].(string)
-							if method != "" && path != "" {
-								clearBody := map[string]interface{}{
-									"httpRequest": map[string]interface{}{
-										"method": method,
-										"path":   path,
-									},
-								}
-								m.viewingItemList = false
-								m.itemList = nil
-								m.doneOp = "Delete expectation"
-								m.doneOpAt = time.Now()
-								m.pendingOps["Delete expectation"] = "running"
-								// The doneMsg handler shows the result in the viewport
-								// since "Delete expectation" doesn't match list/report labels.
-								return m, m.mockAPICall("/mockserver/clear", "PUT", clearBody, nil)()
+						// Support both expectations (httpRequest) and requests (top-level)
+						req, hasHTTPReq := item["httpRequest"].(map[string]interface{})
+						if !hasHTTPReq {
+							req = item
+						}
+						method, _ := req["method"].(string)
+						path, _ := req["path"].(string)
+						if method != "" && path != "" {
+							clearBody := map[string]interface{}{
+								"httpRequest": map[string]interface{}{
+									"method": method,
+									"path":   path,
+								},
 							}
+							m.viewingItemList = false
+							m.itemList = nil
+							m.doneOp = "Delete expectation"
+							m.doneOpAt = time.Now()
+							m.pendingOps["Delete expectation"] = "running"
+							// The doneMsg handler shows the result in the viewport
+							// since "Delete expectation" doesn't match list/report labels.
+							return m, m.mockAPICall("/mockserver/clear", "PUT", clearBody, nil)()
 						}
 					}
 				} else {
@@ -1540,14 +1551,38 @@ func (m *MockOpsModel) viewItemList() string {
 		b.WriteString("  " + styles.StyleError.Render("Press d again to delete this expectation") + "\n\n")
 	}
 
-	b.WriteString("  " + styles.InlineHelp(
+	// Only show edit/delete actions when the current item is an expectation
+	helpItems := []styles.HelpItemResult{
 		styles.HelpItem("↑ ↓", "navigate"),
 		styles.HelpItem("↵", "view"),
-		styles.HelpItem("e", "edit"),
-		styles.HelpItem("d", "delete"),
-		styles.HelpItem("esc", "back"),
-	))
+	}
+	if cur := m.currentItem(); cur != nil && isExpectationItem(cur) {
+		helpItems = append(helpItems,
+			styles.HelpItem("e", "edit"),
+			styles.HelpItem("d", "delete"),
+		)
+	}
+	helpItems = append(helpItems, styles.HelpItem("esc", "back"))
+
+	b.WriteString("  " + styles.InlineHelp(helpItems...))
 	return b.String()
+}
+
+// currentItem returns the item at the current cursor position, or nil.
+func (m *MockOpsModel) currentItem() interface{} {
+	if m.itemCursor >= 0 && m.itemCursor < len(m.itemList) {
+		return m.itemList[m.itemCursor]
+	}
+	return nil
+}
+
+// isExpectationItem returns true if the item has an httpRequest field.
+func isExpectationItem(item interface{}) bool {
+	if obj, ok := item.(map[string]interface{}); ok {
+		_, ok = obj["httpRequest"].(map[string]interface{})
+		return ok
+	}
+	return false
 }
 
 // mockItemLabel extracts a readable "METHOD /path" label from a parsed
