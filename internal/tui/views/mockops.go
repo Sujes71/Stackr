@@ -1177,15 +1177,16 @@ func (m *MockOpsModel) viewParamPrompt() string {
 			styles.HelpItem("ctrl+f", "format"),
 			styles.HelpItem("ctrl+enter", "save"),
 		))
+		// Pad body view to ~same height as non-body view so switching
+		// between them doesn't leave stale terminal content visible.
+		b.WriteString(strings.Repeat("\n", 12))
 	} else {
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("enter", "save"),
 		))
-		// Pad with blank lines to overwrite any leftover textarea content
-		// from the previous body view (prevents visual artifacts when
-		// navigating away from body).
+		// Pad non-body view to clear any textarea content from previous body view.
 		b.WriteString(strings.Repeat("\n", 24))
 	}
 	return b.String()
