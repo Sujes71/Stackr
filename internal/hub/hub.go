@@ -238,4 +238,15 @@ var Catalog = []CatalogEntry{
 		DefaultPorts: []string{"1025:1025", "8025:8025"},
 		DefaultEnv:  map[string]string{},
 	},
+	{
+		Name:        "MockServer",
+		Image:       "mockserver/mockserver",
+		Description: "HTTP mock server & proxy for API testing",
+		DefaultTag:  "latest",
+		DefaultPorts: []string{"1080:1080"},
+		DefaultEnv: map[string]string{
+			"MOCKSERVER_LOG_LEVEL": "INFO",
+		},
+		DefaultVolumeTarget: "/config",
+	},
 }
