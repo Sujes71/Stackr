@@ -1328,7 +1328,7 @@ func (m *MockOpsModel) viewItemList() string {
 
 	b.WriteString("  " + styles.InlineHelp(
 		styles.HelpItem("↑ ↓", "navigate"),
-		styles.HelpItem("↵", "view detail"),
+		styles.HelpItem("↵", "view"),
 		styles.HelpItem("e", "edit"),
 		styles.HelpItem("d", "delete"),
 		styles.HelpItem("esc", "back"),
