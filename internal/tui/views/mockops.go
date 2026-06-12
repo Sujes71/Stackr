@@ -829,16 +829,41 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 									"path":   path,
 								},
 							}
-							m.viewingItemList = false
-							m.itemList = nil
-							m.doneOp = "Delete expectation"
-							m.doneOpAt = time.Now()
-							m.pendingOps["Delete expectation"] = "running"
-							// The doneMsg handler shows the result in the viewport
-							// since "Delete expectation" doesn't match list/report labels.
-							return m, m.mockAPICall("/mockserver/clear", "PUT", clearBody, nil)()
+							// Remove item from list; if last item, go back to menu
+							lastItem := len(m.itemList) == 1
+							if lastItem {
+								m.viewingItemList = false
+								m.itemList = nil
+								for i, act := range m.actions {
+									if act.label == m.itemListTitle {
+										m.actionCursor = i
+										break
+									}
+								}
+							} else {
+								m.itemList = append(m.itemList[:m.itemCursor], m.itemList[m.itemCursor+1:]...)
+								if m.itemCursor >= len(m.itemList) && m.itemCursor > 0 {
+									m.itemCursor--
+								}
+							}
+							// Fire-and-forget: clear expectation without sending doneMsg
+							port := m.mockHostPort()
+							return m, func() tea.Msg {
+								go func() {
+									jsonBody, _ := json.Marshal(clearBody)
+									apiURL := fmt.Sprintf("http://localhost:%s/mockserver/clear", port)
+									req, _ := http.NewRequest("PUT", apiURL, bytes.NewReader(jsonBody))
+									req.Header.Set("Content-Type", "application/json")
+									client := &http.Client{Timeout: 10 * time.Second}
+									if resp, err := client.Do(req); err == nil {
+										resp.Body.Close()
+									}
+								}()
+								return nil
+							}
 						}
 					}
+					return m, nil
 				} else {
 					m.deleteItemArmed = true
 					return m, nil
@@ -1548,19 +1573,18 @@ func (m *MockOpsModel) viewItemList() string {
 	b.WriteString("\n")
 
 	if m.deleteItemArmed {
-		b.WriteString("  " + styles.StyleError.Render("Press d again to delete this expectation") + "\n\n")
+		b.WriteString("  " + styles.StyleError.Render("Press d again to delete this item") + "\n\n")
 	}
 
-	// Only show edit/delete actions when the current item is an expectation
 	helpItems := []styles.HelpItemResult{
 		styles.HelpItem("↑ ↓", "navigate"),
 		styles.HelpItem("↵", "view"),
 	}
+	// 'd' delete works on all items (expectations + recorded requests)
+	helpItems = append(helpItems, styles.HelpItem("d", "delete"))
+	// 'e' edit only makes sense for expectations
 	if cur := m.currentItem(); cur != nil && isExpectationItem(cur) {
-		helpItems = append(helpItems,
-			styles.HelpItem("e", "edit"),
-			styles.HelpItem("d", "delete"),
-		)
+		helpItems = append(helpItems, styles.HelpItem("e", "edit"))
 	}
 	helpItems = append(helpItems, styles.HelpItem("esc", "back"))
 
