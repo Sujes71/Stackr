@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"strings"
 	"time"
@@ -197,12 +198,22 @@ func (m *MockOpsModel) mockHostPort() string {
 // ── HTTP helper ────────────────────────────────────────────────────────────────
 
 // mockAPICall runs a MockServer REST API call from the host to localhost:<port>.
+// body is sent as JSON when non-nil; queryParams are added to the URL when non-nil.
 // Returns a tea.Cmd that sends mockOpsDoneMsg with the result.
-func (m *MockOpsModel) mockAPICall(endpoint, httpMethod string, body interface{}) func() tea.Cmd {
+func (m *MockOpsModel) mockAPICall(endpoint, httpMethod string, body interface{}, queryParams map[string]string) func() tea.Cmd {
 	return func() tea.Cmd {
 		return func() tea.Msg {
 			port := m.mockHostPort()
-			url := fmt.Sprintf("http://localhost:%s%s", port, endpoint)
+
+			// Build URL with query params
+			apiURL := fmt.Sprintf("http://localhost:%s%s", port, endpoint)
+			if len(queryParams) > 0 {
+				var params []string
+				for k, v := range queryParams {
+					params = append(params, url.QueryEscape(k)+"="+url.QueryEscape(v))
+				}
+				apiURL += "?" + strings.Join(params, "&")
+			}
 
 			var reqBody io.Reader
 			if body != nil {
@@ -213,7 +224,7 @@ func (m *MockOpsModel) mockAPICall(endpoint, httpMethod string, body interface{}
 				reqBody = bytes.NewReader(jsonBody)
 			}
 
-			req, err := http.NewRequest(httpMethod, url, reqBody)
+			req, err := http.NewRequest(httpMethod, apiURL, reqBody)
 			if err != nil {
 				return mockOpsDoneMsg{err: fmt.Errorf("request failed: %w", err)}
 			}
@@ -235,6 +246,14 @@ func (m *MockOpsModel) mockAPICall(endpoint, httpMethod string, body interface{}
 			}
 
 			if len(respData) > 0 {
+				// Empty array/object → friendly message instead of "[]"
+				trimmed := strings.TrimSpace(string(respData))
+				if trimmed == "[]" {
+					return mockOpsDoneMsg{result: "No active expectations found.\nCreate one with 'Create expectation' above."}
+				}
+				if trimmed == "{}" {
+					return mockOpsDoneMsg{result: "Empty response from MockServer."}
+				}
 				var pretty bytes.Buffer
 				if json.Indent(&pretty, respData, "", "  ") == nil {
 					return mockOpsDoneMsg{result: pretty.String()}
@@ -265,7 +284,7 @@ func (m *MockOpsModel) buildActionsList() []actionItem {
 		{label: "Create expectation", group: "Expectations", enabled: true,
 			execute: nil}, // params: method, path, status_code, content_type, body
 		{label: "List active expectations", group: "Expectations", enabled: true,
-			execute: m.mockAPICall("/mockserver/retrieve", "PUT", map[string]string{"type": "ACTIVE_EXPECTATIONS"})},
+			execute: m.mockAPICall("/mockserver/retrieve", "PUT", nil, map[string]string{"type": "ACTIVE_EXPECTATIONS"})},
 		{label: "Clear by path", group: "Expectations", enabled: true,
 			execute: nil}, // params: method, path
 		{label: "Reset all", group: "Expectations", enabled: true,
@@ -275,7 +294,7 @@ func (m *MockOpsModel) buildActionsList() []actionItem {
 		{label: "Verify request", group: "Verification", enabled: true,
 			execute: nil}, // params: method, path, at_least
 		{label: "Retrieve requests", group: "Verification", enabled: true,
-			execute: m.mockAPICall("/mockserver/retrieve", "PUT", map[string]string{"type": "REQUESTS"})},
+			execute: m.mockAPICall("/mockserver/retrieve", "PUT", nil, map[string]string{"type": "REQUESTS"})},
 	}
 }
 
@@ -328,7 +347,7 @@ func (m *MockOpsModel) execParamAction(act actionItem) tea.Cmd {
 				"body": m.paramValues["body"],
 			},
 		}
-		return m.mockAPICall("/mockserver/expectation", "PUT", body)()
+		return m.mockAPICall("/mockserver/expectation", "PUT", body, nil)()
 
 	case "Clear by path":
 		body := map[string]interface{}{
@@ -337,7 +356,7 @@ func (m *MockOpsModel) execParamAction(act actionItem) tea.Cmd {
 				"path":   m.paramValues["path"],
 			},
 		}
-		return m.mockAPICall("/mockserver/clear", "PUT", body)()
+		return m.mockAPICall("/mockserver/clear", "PUT", body, nil)()
 
 	case "Verify request":
 		atLeast := 1
@@ -352,7 +371,7 @@ func (m *MockOpsModel) execParamAction(act actionItem) tea.Cmd {
 				"atMost":  atLeast,
 			},
 		}
-		return m.mockAPICall("/mockserver/verify", "PUT", body)()
+		return m.mockAPICall("/mockserver/verify", "PUT", body, nil)()
 	}
 	return nil
 }
@@ -591,7 +610,7 @@ func (m *MockOpsModel) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.doneOpAt = time.Now()
 				m.pendingOps[label] = "running"
 				return m, tea.Batch(
-					m.mockAPICall("/mockserver/reset", "PUT", nil)(),
+					m.mockAPICall("/mockserver/reset", "PUT", nil, nil)(),
 					spinnerCmd(),
 				)
 			}
