@@ -588,14 +588,6 @@ func (m *MockOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.doneOp = completedLabel
 		m.doneOpAt = time.Now()
 
-		// After delete, auto-refresh the item list so the user sees the
-		// result (item removed) instead of being dumped at the action list.
-		if completedLabel == "Delete expectation" {
-			m.doneOp = "" // no checkmark for delete
-			m.pendingOps["List active expectations"] = "running"
-			return m, m.mockAPICall("/mockserver/retrieve", "PUT", nil, map[string]string{"type": "ACTIVE_EXPECTATIONS"})()
-		}
-
 		if msg.result == "" {
 			// No output — auto-generated success, just show the checkmark.
 			m.viewingResult = false
@@ -604,10 +596,8 @@ func (m *MockOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinnerCmd()
 		}
 
-		// List endpoints: parse as array and show compact item list.
-		// These are read-only — clear doneOp so no spurious checkmark appears.
+		// List endpoints: parse as array and show compact item list
 		if completedLabel == "List active expectations" || completedLabel == "Retrieve requests" {
-			m.doneOp = ""
 			var items []interface{}
 			if json.Unmarshal([]byte(msg.result), &items) == nil && len(items) > 0 {
 				m.itemList = items
@@ -932,20 +922,15 @@ func (m *MockOpsModel) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // refreshParamInput syncs the input's value and placeholder to the current param.
 // setBodyTextareaHeight auto-sizes the body textarea to fit content,
-// with a minimum of 6 lines and a dynamic cap based on available screen height.
+// with a minimum of 6 lines and a cap at 20 lines.
 // Content beyond the cap is scrollable inside the textarea.
 func (m *MockOpsModel) setBodyTextareaHeight() {
 	lines := len(strings.Split(m.paramTextarea.Value(), "\n"))
-	// Reserve ~18 lines for view chrome (title, param fields, help, spacing)
-	maxH := m.height - 18
-	if maxH < 6 {
-		maxH = 6
-	}
 	switch {
 	case lines < 6:
 		m.paramTextarea.SetHeight(6)
-	case lines > maxH:
-		m.paramTextarea.SetHeight(maxH)
+	case lines > 20:
+		m.paramTextarea.SetHeight(20)
 	default:
 		m.paramTextarea.SetHeight(lines)
 	}
@@ -1171,23 +1156,6 @@ func (m *MockOpsModel) View() string {
 	return m.viewActions()
 }
 
-// SubViewID returns a stable identifier for the currently active sub-view.
-// Used by App to detect sub-view transitions and force a full repaint.
-func (m *MockOpsModel) SubViewID() int {
-	switch {
-	case m.viewingResult:
-		return 1
-	case m.viewingItemList:
-		return 2
-	case m.promptingParams:
-		return 3
-	case m.confirmAction:
-		return 4
-	default:
-		return 5 // main action list
-	}
-}
-
 func (m *MockOpsModel) viewActions() string {
 	if m.viewingResult {
 		scrollHint := ""
@@ -1307,23 +1275,18 @@ func (m *MockOpsModel) viewActions() string {
 	return m.padView(b.String())
 }
 
-// padView fills remaining height with space-filled lines so every view
-// overwrites the full visible area. Replaces empty lines with spaces and
-// pads to exactly m.height lines — bare \n does not clear characters.
+// padView fills remaining terminal height with blank lines so every
+// builder-based view (action list, param prompt, confirm) overwrites the
+// full visible area. Does NOT pad viewport or item list — they handle
+// their own height internally.
 func (m *MockOpsModel) padView(view string) string {
-	if m.height <= 0 {
-		return view
-	}
-	lines := strings.Split(view, "\n")
-	for i, line := range lines {
-		if line == "" {
-			lines[i] = strings.Repeat(" ", m.width)
+	if m.height > 0 {
+		lines := strings.Count(view, "\n") + 1
+		if lines < m.height {
+			view += strings.Repeat("\n", m.height-lines)
 		}
 	}
-	for len(lines) < m.height {
-		lines = append(lines, strings.Repeat(" ", m.width))
-	}
-	return strings.Join(lines, "\n")
+	return view
 }
 
 // viewItemList renders a compact navigable list of items (expectations or requests).

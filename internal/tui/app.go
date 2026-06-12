@@ -140,13 +140,13 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 		a.home = views.NewHome(a.cfg)
 		a.home.SetSize(a.width, a.height)
 		a.home.SetCursor(a.homeCursor)
-		return a, tea.Sequence(tea.ClearScreen, a.home.Init())
+		return a, a.home.Init()
 
 	case views.NavNewProfile:
 		a.screen = ScreenNewProfile
 		a.newProfile = views.NewNewProfile(a.cfg)
 		a.newProfile.SetSize(a.width, a.height-5)
-		return a, tea.Sequence(tea.ClearScreen, a.newProfile.Init())
+		return a, a.newProfile.Init()
 
 	case views.NavProfileView:
 		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
@@ -159,12 +159,12 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 					a.profileView.RestoreNavState(state)
 				}
 				a.profileView.SetSize(a.width, a.height)
-				return a, tea.Sequence(tea.ClearScreen, a.profileView.Init())
+				return a, a.profileView.Init()
 			}
 			// Same profile — keep model alive (pending ops survive)
 			a.profileView.RestoreSelection(nav.EnvName, nav.ServiceName)
 			a.profileView.SetSize(a.width, a.height)
-			return a, tea.Sequence(tea.ClearScreen, a.profileView.ReShow(a.cfg))
+			return a, a.profileView.ReShow(a.cfg)
 		}
 
 	case views.NavAddService:
@@ -172,7 +172,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 			a.screen = ScreenAddService
 			a.addService = views.NewAddService(a.cfg, p, nav.EnvName)
 			a.addService.SetSize(a.width, a.height)
-			return a, tea.Sequence(tea.ClearScreen, a.addService.Init())
+			return a, a.addService.Init()
 		}
 
 	case views.NavDBOps:
@@ -181,12 +181,12 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 			if a.dbOps == nil || a.dbOps.ServiceKey() != nav.ServiceKey() {
 				a.dbOps = views.NewDBOps(a.cfg, p, nav.EnvName, nav.ServiceName)
 				a.dbOps.SetSize(a.width, a.height-5)
-				return a, tea.Sequence(tea.ClearScreen, a.dbOps.Init())
+				return a, a.dbOps.Init()
 			}
 			// Same service — keep model alive
 			a.dbOps.ReShow(a.cfg)
 			a.dbOps.SetSize(a.width, a.height-5)
-			return a, tea.Sequence(tea.ClearScreen, nil)
+			return a, nil
 		}
 
 	case views.NavQueueOps:
@@ -195,12 +195,12 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 			if a.queueOps == nil || a.queueOps.ServiceKey() != nav.ServiceKey() {
 				a.queueOps = views.NewQueueOps(a.cfg, p, nav.EnvName, nav.ServiceName)
 				a.queueOps.SetSize(a.width, a.height-5)
-				return a, tea.Sequence(tea.ClearScreen, a.queueOps.Init())
+				return a, a.queueOps.Init()
 			}
 			// Same service — keep model alive
 			a.queueOps.ReShow(a.cfg)
 			a.queueOps.SetSize(a.width, a.height-5)
-			return a, tea.Sequence(tea.ClearScreen, nil)
+			return a, nil
 		}
 
 	case views.NavMockOps:
@@ -209,12 +209,12 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 			if a.mockOps == nil || a.mockOps.ServiceKey() != nav.ServiceKey() {
 				a.mockOps = views.NewMockOps(a.cfg, p, nav.EnvName, nav.ServiceName)
 				a.mockOps.SetSize(a.width, a.height-5)
-				return a, tea.Sequence(tea.ClearScreen, a.mockOps.Init())
+				return a, a.mockOps.Init()
 			}
 			// Same service — keep model alive
 			a.mockOps.ReShow(a.cfg)
 			a.mockOps.SetSize(a.width, a.height-5)
-			return a, tea.Sequence(tea.ClearScreen, nil)
+			return a, nil
 		}
 
 	}
