@@ -1076,14 +1076,18 @@ func (m *QueueOpsModel) isTextareaParam(param string) bool {
 }
 
 // setMessageTextareaHeight auto-sizes the message textarea to fit content,
-// with a minimum of 6 lines and a cap at 20 lines.
+// with a minimum of 6 lines and a dynamic cap based on available screen height.
 func (m *QueueOpsModel) setMessageTextareaHeight() {
 	lines := len(strings.Split(m.paramTextarea.Value(), "\n"))
+	maxH := m.height - 18 // reserve ~18 lines for view chrome
+	if maxH < 6 {
+		maxH = 6
+	}
 	switch {
 	case lines < 6:
 		m.paramTextarea.SetHeight(6)
-	case lines > 20:
-		m.paramTextarea.SetHeight(20)
+	case lines > maxH:
+		m.paramTextarea.SetHeight(maxH)
 	default:
 		m.paramTextarea.SetHeight(lines)
 	}

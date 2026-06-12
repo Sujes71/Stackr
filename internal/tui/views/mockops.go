@@ -932,15 +932,20 @@ func (m *MockOpsModel) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // refreshParamInput syncs the input's value and placeholder to the current param.
 // setBodyTextareaHeight auto-sizes the body textarea to fit content,
-// with a minimum of 6 lines and a cap at 20 lines.
+// with a minimum of 6 lines and a dynamic cap based on available screen height.
 // Content beyond the cap is scrollable inside the textarea.
 func (m *MockOpsModel) setBodyTextareaHeight() {
 	lines := len(strings.Split(m.paramTextarea.Value(), "\n"))
+	// Reserve ~18 lines for view chrome (title, param fields, help, spacing)
+	maxH := m.height - 18
+	if maxH < 6 {
+		maxH = 6
+	}
 	switch {
 	case lines < 6:
 		m.paramTextarea.SetHeight(6)
-	case lines > 20:
-		m.paramTextarea.SetHeight(20)
+	case lines > maxH:
+		m.paramTextarea.SetHeight(maxH)
 	default:
 		m.paramTextarea.SetHeight(lines)
 	}
@@ -1166,6 +1171,23 @@ func (m *MockOpsModel) View() string {
 	return m.viewActions()
 }
 
+// SubViewID returns a stable identifier for the currently active sub-view.
+// Used by App to detect sub-view transitions and force a full repaint.
+func (m *MockOpsModel) SubViewID() int {
+	switch {
+	case m.viewingResult:
+		return 1
+	case m.viewingItemList:
+		return 2
+	case m.promptingParams:
+		return 3
+	case m.confirmAction:
+		return 4
+	default:
+		return 5 // main action list
+	}
+}
+
 func (m *MockOpsModel) viewActions() string {
 	if m.viewingResult {
 		scrollHint := ""
@@ -1200,7 +1222,7 @@ func (m *MockOpsModel) viewActions() string {
 	// Param prompting
 	if m.promptingParams {
 		b.WriteString(m.viewParamPrompt())
-		return b.String()
+		return m.padView(b.String())
 	}
 
 	// Confirm destructive
@@ -1208,7 +1230,7 @@ func (m *MockOpsModel) viewActions() string {
 		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 		b.WriteString(styles.StyleError.Render("  ✗ This action clears ALL active expectations.") + "\n")
 		b.WriteString("  " + promptStyle.Render("▸ Continue?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
-		return b.String()
+		return m.padView(b.String())
 	}
 
 	// Action group sections
@@ -1282,22 +1304,26 @@ func (m *MockOpsModel) viewActions() string {
 		styles.HelpItem("↵", "execute"),
 		styles.HelpItem("esc", "back"),
 	))
-	return b.String()
+	return m.padView(b.String())
 }
 
-// padView fills remaining terminal height with blank lines so every
-// builder-based view (action list, param prompt, confirm) overwrites the
-// full visible area. Does NOT pad viewport or item list — they handle
-// their own height internally.
-// DEPRECATED: height padding is now handled centrally by App.renderBody()/fillBody().
+// padView fills remaining height with space-filled lines so every view
+// overwrites the full visible area. Replaces empty lines with spaces and
+// pads to exactly m.height lines — bare \n does not clear characters.
 func (m *MockOpsModel) padView(view string) string {
-	if m.height > 0 {
-		lines := strings.Count(view, "\n") + 1
-		if lines < m.height {
-			view += strings.Repeat("\n", m.height-lines)
+	if m.height <= 0 {
+		return view
+	}
+	lines := strings.Split(view, "\n")
+	for i, line := range lines {
+		if line == "" {
+			lines[i] = strings.Repeat(" ", m.width)
 		}
 	}
-	return view
+	for len(lines) < m.height {
+		lines = append(lines, strings.Repeat(" ", m.width))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // viewItemList renders a compact navigable list of items (expectations or requests).
