@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -329,23 +330,52 @@ func (a *App) breadcrumb() string {
 }
 
 func (a *App) renderBody() string {
+	var body string
 	switch a.screen {
 	case ScreenHome:
-		return a.home.View()
+		body = a.home.View()
 	case ScreenProfileView:
-		return a.profileView.View()
+		body = a.profileView.View()
 	case ScreenNewProfile:
-		return a.newProfile.View()
+		body = a.newProfile.View()
 	case ScreenAddService:
-		return a.addService.View()
+		body = a.addService.View()
 	case ScreenDBOps:
-		return a.dbOps.View()
+		body = a.dbOps.View()
 	case ScreenQueueOps:
-		return a.queueOps.View()
+		body = a.queueOps.View()
 	case ScreenMockOps:
-		return a.mockOps.View()
+		body = a.mockOps.View()
 	}
-	return ""
+	// Every empty line is padded to full width with spaces so any old content
+	// at that terminal position is overwritten (bare \n does not clear chars).
+	// Extra lines are also added to fill the body area, ensuring the new frame
+	// is at least as tall as the previous one.
+	if a.width > 0 && a.height > 6 {
+		body = fillBody(body, a.width, a.height-6)
+	}
+	return body
+}
+
+// fillBody ensures every line has at least w chars and the body reaches at
+// least h lines. This prevents old frame content from persisting at
+// positions where the new frame has empty or fewer lines.
+func fillBody(s string, w, h int) string {
+	lines := strings.Split(s, "\n")
+
+	// Pad every empty line to full width with spaces
+	for i, line := range lines {
+		if line == "" {
+			lines[i] = strings.Repeat(" ", w)
+		}
+	}
+
+	// Pad to minimum height so the new frame covers the previous one
+	for len(lines) < h {
+		lines = append(lines, strings.Repeat(" ", w))
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 func (a *App) renderFooter() string {

@@ -588,6 +588,14 @@ func (m *MockOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.doneOp = completedLabel
 		m.doneOpAt = time.Now()
 
+		// After delete, auto-refresh the item list so the user sees the
+		// result (item removed) instead of being dumped at the action list.
+		if completedLabel == "Delete expectation" {
+			m.doneOp = "" // no checkmark for delete
+			m.pendingOps["List active expectations"] = "running"
+			return m, m.mockAPICall("/mockserver/retrieve", "PUT", nil, map[string]string{"type": "ACTIVE_EXPECTATIONS"})()
+		}
+
 		if msg.result == "" {
 			// No output — auto-generated success, just show the checkmark.
 			m.viewingResult = false
@@ -596,8 +604,10 @@ func (m *MockOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinnerCmd()
 		}
 
-		// List endpoints: parse as array and show compact item list
+		// List endpoints: parse as array and show compact item list.
+		// These are read-only — clear doneOp so no spurious checkmark appears.
 		if completedLabel == "List active expectations" || completedLabel == "Retrieve requests" {
+			m.doneOp = ""
 			var items []interface{}
 			if json.Unmarshal([]byte(msg.result), &items) == nil && len(items) > 0 {
 				m.itemList = items
@@ -1190,7 +1200,7 @@ func (m *MockOpsModel) viewActions() string {
 	// Param prompting
 	if m.promptingParams {
 		b.WriteString(m.viewParamPrompt())
-		return m.padView(b.String())
+		return b.String()
 	}
 
 	// Confirm destructive
@@ -1198,7 +1208,7 @@ func (m *MockOpsModel) viewActions() string {
 		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 		b.WriteString(styles.StyleError.Render("  ✗ This action clears ALL active expectations.") + "\n")
 		b.WriteString("  " + promptStyle.Render("▸ Continue?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
-		return m.padView(b.String())
+		return b.String()
 	}
 
 	// Action group sections
@@ -1272,13 +1282,14 @@ func (m *MockOpsModel) viewActions() string {
 		styles.HelpItem("↵", "execute"),
 		styles.HelpItem("esc", "back"),
 	))
-	return m.padView(b.String())
+	return b.String()
 }
 
 // padView fills remaining terminal height with blank lines so every
 // builder-based view (action list, param prompt, confirm) overwrites the
 // full visible area. Does NOT pad viewport or item list — they handle
 // their own height internally.
+// DEPRECATED: height padding is now handled centrally by App.renderBody()/fillBody().
 func (m *MockOpsModel) padView(view string) string {
 	if m.height > 0 {
 		lines := strings.Count(view, "\n") + 1
