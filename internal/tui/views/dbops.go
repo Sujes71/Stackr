@@ -1301,14 +1301,20 @@ func (m *DBOpsModel) viewCustomForm() string {
 		b.WriteString("  " + taStyle.Render(ta) + "\n\n")
 	}
 
-	// Always show the same help structure so Bubble Tea's Myers diff never
-	// matches old vs new as "close enough" and leaves both on screen.
-	b.WriteString("  " + styles.InlineHelp(
-		styles.HelpItem("esc", "cancel"),
-		styles.HelpItem("↑ ↓", "field"),
-		styles.HelpItem("enter", "newline"),
-		styles.HelpItem("ctrl+s", "save"),
-	))
+	if m.customFormFocus == 1 {
+		b.WriteString("  " + styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↑ ↓", "field"),
+			styles.HelpItem("enter", "newline"),
+			styles.HelpItem("ctrl+s", "save"),
+		))
+	} else {
+		b.WriteString("  " + styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↑ ↓", "field"),
+			styles.HelpItem("↵", "save"),
+		))
+	}
 	return b.String()
 }
 

@@ -1437,15 +1437,21 @@ func (m *MockOpsModel) viewParamPrompt() string {
 
 	b.WriteString("\n")
 
-	// Always show identical help text regardless of onBody so Bubble Tea's
-	// Myers diff never matches old vs new as "close enough" and leaves both.
-	b.WriteString("  " + styles.InlineHelp(
-		styles.HelpItem("esc", "cancel"),
-		styles.HelpItem("↑ ↓", "navigate"),
-		styles.HelpItem("enter", "newline"),
-		styles.HelpItem("ctrl+f", "format"),
-		styles.HelpItem("ctrl+s", "save"),
-	))
+	if onBody {
+		b.WriteString("  " + styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↑ ↓", "navigate"),
+			styles.HelpItem("enter", "newline"),
+			styles.HelpItem("ctrl+f", "format"),
+			styles.HelpItem("ctrl+s", "save"),
+		))
+	} else {
+		b.WriteString("  " + styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↑ ↓", "navigate"),
+			styles.HelpItem("enter", "save"),
+		))
+	}
 
 	return b.String()
 }

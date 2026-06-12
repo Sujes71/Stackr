@@ -1926,15 +1926,21 @@ func (m *QueueOpsModel) viewParamPrompt() string {
 
 	b.WriteString("\n")
 
-	// Always show identical help text so Bubble Tea's Myers diff never
-	// matches old vs new as "close enough" and leaves both on screen.
-	b.WriteString("  " + styles.InlineHelp(
-		styles.HelpItem("esc", "cancel"),
-		styles.HelpItem("↑ ↓", "navigate"),
-		styles.HelpItem("enter", "newline"),
-		styles.HelpItem("ctrl+f", "format"),
-		styles.HelpItem("ctrl+s", "save"),
-	))
+	if onMessage {
+		b.WriteString("  " + styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↑ ↓", "navigate"),
+			styles.HelpItem("enter", "newline"),
+			styles.HelpItem("ctrl+f", "format"),
+			styles.HelpItem("ctrl+s", "save"),
+		))
+	} else {
+		b.WriteString("  " + styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↑ ↓", "navigate"),
+			styles.HelpItem("enter", "save"),
+		))
+	}
 	return b.String()
 }
 
