@@ -455,6 +455,7 @@ func (m *MockOpsModel) showItemDetail() (tea.Model, tea.Cmd) {
 	m.resultViewport.GotoTop()
 	m.viewingResult = true
 	m.detailFromList = true
+	m.viewingItemList = false
 	return m, nil
 }
 
