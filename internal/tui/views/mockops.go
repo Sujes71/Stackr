@@ -690,6 +690,30 @@ func (m *MockOpsModel) setCurrentParamValue() {
 	m.paramValues[param] = val
 }
 
+func (m *MockOpsModel) allParamsFilled() bool {
+	for _, p := range m.paramsToPrompt {
+		if v, ok := m.paramValues[p]; !ok || v == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// submitForm executes the current action with all param values already saved.
+func (m *MockOpsModel) submitForm() (tea.Model, tea.Cmd) {
+	m.promptingParams = false
+	act := m.actions[m.actionCursor]
+	execCmd := m.execParamAction(act)
+	if execCmd == nil {
+		return m, nil
+	}
+	m.lastResult = ""
+	m.doneOp = act.label
+	m.doneOpAt = time.Now()
+	m.pendingOps[act.label] = "running"
+	return m, tea.Batch(execCmd, spinnerCmd())
+}
+
 func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -701,9 +725,6 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "up":
-			if isBody && m.paramTextarea.Line() > 0 {
-				break // let textarea handle cursor up
-			}
 			if m.currentParamIdx > 0 {
 				m.setCurrentParamValue()
 				m.currentParamIdx--
@@ -712,9 +733,6 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "down":
-			if isBody && m.paramTextarea.Line() < len(strings.Split(m.paramTextarea.Value(), "\n"))-1 {
-				break // let textarea handle cursor down
-			}
 			if m.currentParamIdx < len(m.paramsToPrompt)-1 {
 				m.setCurrentParamValue()
 				m.currentParamIdx++
@@ -726,11 +744,19 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if isBody {
 				break // let textarea add newline
 			}
-			return m.submitCurrentParam()
+			// Non-body: save current field and try to submit
+			m.setCurrentParamValue()
+			if m.allParamsFilled() {
+				return m.submitForm()
+			}
+			return m, nil
 
 		case "ctrl+enter":
 			if isBody {
-				return m.submitCurrentParam()
+				m.setCurrentParamValue()
+				if m.allParamsFilled() {
+					return m.submitForm()
+				}
 			}
 			return m, nil
 		}
@@ -943,17 +969,15 @@ func (m *MockOpsModel) viewParamPrompt() string {
 	if onBody {
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↑ ↓", "navigate"),
+			styles.HelpItem("enter", "newline"),
 			styles.HelpItem("ctrl+enter", "submit"),
 		))
 	} else {
-		enterLabel := "next"
-		if m.currentParamIdx == len(m.paramsToPrompt)-1 {
-			enterLabel = "submit"
-		}
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "navigate"),
-			styles.HelpItem("enter", enterLabel),
+			styles.HelpItem("enter", "submit"),
 		))
 	}
 	return b.String()
