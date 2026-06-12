@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -602,24 +603,16 @@ func ContainerReady(container, dbType string) bool {
 	}
 }
 
-// MockServerReady checks if MockServer inside the container is accepting HTTP requests.
+// MockServerReady checks if MockServer is accepting HTTP requests on localhost:1080.
 // It tries to reach the /mockserver/status endpoint which returns 200 when ready.
 func MockServerReady(containerName string) bool {
-	// Try curl first (most reliable)
-	if _, err := ContainerExec(containerName, "which", "curl"); err == nil {
-		return exec.Command("docker", "exec", containerName,
-			"curl", "-s", "-f", "-m", "2",
-			"http://localhost:1080/mockserver/status").Run() == nil
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://localhost:1080/mockserver/status")
+	if err != nil {
+		return false
 	}
-	// Fallback to wget
-	if _, err := ContainerExec(containerName, "which", "wget"); err == nil {
-		return exec.Command("docker", "exec", containerName,
-			"wget", "-q", "-O", "-", "--timeout=2",
-			"http://localhost:1080/mockserver/status").Run() == nil
-	}
-	// Last resort: check if port 1080 is listening using /dev/tcp
-	return exec.Command("docker", "exec", containerName,
-		"sh", "-c", "echo > /dev/tcp/localhost/1080").Run() == nil
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 // HasDumpFile returns true if any file matching the given glob pattern exists in the directory.
