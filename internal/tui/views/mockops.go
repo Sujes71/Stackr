@@ -171,11 +171,12 @@ func (m *MockOpsModel) IsBusy() bool {
 func (m *MockOpsModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
-	m.resultViewport.Width = w - 10
+	// Must match the dimension formulas used in doneMsg/error handlers to
+	// avoid visual jumps on resize.
+	m.resultViewport.Width = w - 4
 	if m.viewingResult {
 		lineCount := strings.Count(m.viewportContent, "\n") + 1
-		// +3 for title + blank lines outside the viewport
-		m.resultViewport.Height = min(lineCount, max(8, h-14))
+		m.resultViewport.Height = min(lineCount, max(8, h-13))
 	} else {
 		m.resultViewport.Height = min(h-12, 40)
 	}
