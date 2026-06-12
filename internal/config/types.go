@@ -144,6 +144,14 @@ func (s Service) QueueType() string {
 	}
 }
 
+// MockType returns "mockserver" if the service image is a MockServer, or "" otherwise.
+func (s Service) MockType() string {
+	if containsFold(s.Image, "mockserver") {
+		return "mockserver"
+	}
+	return ""
+}
+
 // FindSyncEnv finds a SyncEnv by name, or returns nil if not found.
 func (s Service) FindSyncEnv(name string) *SyncEnv {
 	for i := range s.SyncEnvs {

@@ -20,6 +20,7 @@ const (
 	ScreenAddService
 	ScreenDBOps
 	ScreenQueueOps
+	ScreenMockOps
 )
 
 // App is the root Bubble Tea model.
@@ -38,6 +39,7 @@ type App struct {
 	addService  *views.AddServiceModel
 	dbOps       *views.DBOpsModel
 	queueOps    *views.QueueOpsModel
+	mockOps     *views.MockOpsModel
 	err string
 }
 
@@ -109,6 +111,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if a.screen != ScreenQueueOps && a.queueOps != nil && a.queueOps.IsBusy() {
 			_, c := a.queueOps.Update(msg)
+			extra = append(extra, c)
+		}
+		if a.screen != ScreenMockOps && a.mockOps != nil && a.mockOps.IsBusy() {
+			_, c := a.mockOps.Update(msg)
 			extra = append(extra, c)
 		}
 		if len(extra) > 0 {
@@ -197,6 +203,20 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+	case views.NavMockOps:
+		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
+			a.screen = ScreenMockOps
+			if a.mockOps == nil || a.mockOps.ServiceKey() != nav.ServiceKey() {
+				a.mockOps = views.NewMockOps(a.cfg, p, nav.EnvName, nav.ServiceName)
+				a.mockOps.SetSize(a.width, a.height-5)
+				return a, a.mockOps.Init()
+			}
+			// Same service — keep model alive
+			a.mockOps.ReShow(a.cfg)
+			a.mockOps.SetSize(a.width, a.height-5)
+			return a, nil
+		}
+
 	}
 	return a, nil
 }
@@ -241,6 +261,10 @@ func (a *App) updateActive(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ScreenQueueOps:
 		m, c := a.queueOps.Update(msg)
 		a.queueOps = m.(*views.QueueOpsModel)
+		cmd = c
+	case ScreenMockOps:
+		m, c := a.mockOps.Update(msg)
+		a.mockOps = m.(*views.MockOpsModel)
 		cmd = c
 	}
 	return a, cmd
@@ -296,6 +320,10 @@ func (a *App) breadcrumb() string {
 		if a.queueOps != nil {
 			return "profiles / " + a.queueOps.ProfileName() + " / " + a.queueOps.EnvName() + " / " + a.queueOps.ServiceName() + " / queue ops"
 		}
+	case ScreenMockOps:
+		if a.mockOps != nil {
+			return "profiles / " + a.mockOps.ProfileName() + " / " + a.mockOps.EnvName() + " / " + a.mockOps.ServiceName() + " / mock ops"
+		}
 	}
 	return ""
 }
@@ -314,6 +342,8 @@ func (a *App) renderBody() string {
 		return a.dbOps.View()
 	case ScreenQueueOps:
 		return a.queueOps.View()
+	case ScreenMockOps:
+		return a.mockOps.View()
 	}
 	return ""
 }

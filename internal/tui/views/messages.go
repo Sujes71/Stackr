@@ -12,6 +12,7 @@ const (
 	NavAddService
 	NavDBOps
 	NavQueueOps
+	NavMockOps
 )
 
 // NavigateTo is a tea.Msg that tells the root App to switch screens.
@@ -34,6 +35,12 @@ type ProfileSavedMsg struct {
 
 // queueOpsDoneMsg is sent when a queue operation action completes.
 type queueOpsDoneMsg struct {
+	result string
+	err    error
+}
+
+// mockOpsDoneMsg is sent when a MockServer operation action completes.
+type mockOpsDoneMsg struct {
 	result string
 	err    error
 }
