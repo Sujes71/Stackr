@@ -105,6 +105,7 @@ type DBOpsModel struct {
 	addingCustomAction bool
 	editingCustomIdx   int // -1 = adding new, >= 0 = editing index
 	customFormFocus    int // 0=name, 1=command
+	commandEditMode    bool // true = textarea focused, false = preview (blurred)
 	customNameInput    textinput.Model
 	customCmdInput     textinput.Model
 	customCmdTextarea  textarea.Model
@@ -588,10 +589,11 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.actionCursor < len(m.actions) {
 				act := m.actions[m.actionCursor]
 				if act.enabled {
-					if act.isAddAction {
-						m.addingCustomAction = true
-						m.editingCustomIdx = -1
-						m.customFormFocus = 0
+				if act.isAddAction {
+					m.addingCustomAction = true
+					m.editingCustomIdx = -1
+					m.customFormFocus = 0
+					m.commandEditMode = true // name field focused
 			m.customNameInput.SetValue("")
 			m.customCmdTextarea.SetValue("")
 			return m, nil
@@ -643,9 +645,10 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if se == nil || act.customIdx >= len(se.CustomActions) {
 						return m, nil
 					}
-					m.addingCustomAction = true
-					m.editingCustomIdx = act.customIdx
-					m.customFormFocus = 0
+				m.addingCustomAction = true
+				m.editingCustomIdx = act.customIdx
+				m.customFormFocus = 0
+				m.commandEditMode = true // name field focused
 			m.customNameInput.SetValue(se.CustomActions[act.customIdx].Name)
 			m.customCmdTextarea.SetValue(se.CustomActions[act.customIdx].Command)
 				}
@@ -975,38 +978,52 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case key.Matches(keyMsg, dbOpsBack):
+		if m.customFormFocus == 1 && m.commandEditMode {
+			// First esc on command → exit edit mode
+			m.commandEditMode = false
+			return m, nil
+		}
 		m.addingCustomAction = false
 
 	case key.Matches(keyMsg, dbOpsUp):
-		if m.customFormFocus == 1 {
+		if m.customFormFocus == 1 && m.commandEditMode {
 			if m.customCmdTextarea.Line() > 0 {
-				break // let textarea handle cursor up
+				break // textarea handles cursor up within text
 			}
 		}
 		if m.customFormFocus > 0 {
 			m.customFormFocus--
+			m.commandEditMode = true // name field is always editable
 		}
 
 	case key.Matches(keyMsg, dbOpsDown):
-		if m.customFormFocus == 1 {
+		if m.customFormFocus == 0 {
+			// Going from name to command → start in preview mode
+			m.customFormFocus = 1
+			m.commandEditMode = false
+			return m, nil
+		}
+		if m.customFormFocus == 1 && m.commandEditMode {
 			totalLines := len(strings.Split(m.customCmdTextarea.Value(), "\n"))
 			if m.customCmdTextarea.Line() < totalLines-1 {
-				break // let textarea handle cursor down
+				break // textarea handles cursor down within text
 			}
-		}
-		if m.customFormFocus < 1 {
-			m.customFormFocus++
 		}
 
 	case key.Matches(keyMsg, dbOpsEnter):
 		if m.customFormFocus == 1 {
-			break // let textarea add newline
+			if !m.commandEditMode {
+				// Enter on preview → enter edit mode
+				m.commandEditMode = true
+				return m, nil
+			}
+			break // Enter in edit mode → newline
 		}
 		// Name field (textinput): save and submit
 		return saveForm()
 
 	case keyMsg.String() == "ctrl+s":
-		if m.customFormFocus == 1 {
+		if m.customFormFocus == 1 && m.commandEditMode {
 			return saveForm()
 		}
 		return m, nil
@@ -1016,7 +1033,7 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		if m.customFormFocus == 0 {
 			m.customNameInput, cmd = m.customNameInput.Update(msg)
-		} else {
+		} else if m.commandEditMode {
 			m.customCmdTextarea, cmd = m.customCmdTextarea.Update(msg)
 			m.setCustomCmdTextareaHeight()
 		}
@@ -1304,7 +1321,7 @@ func (m *DBOpsModel) viewCustomForm() string {
 	}
 
 	// Command field
-	if m.customFormFocus == 1 {
+	if m.customFormFocus == 1 && m.commandEditMode {
 		m.customCmdTextarea.Focus()
 		m.customNameInput.Blur()
 		b.WriteString("  " + focusStyle.Render("Command: ") + "\n\n")
@@ -1312,6 +1329,17 @@ func (m *DBOpsModel) viewCustomForm() string {
 		taStyle := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(styles.ColorPrimary).
+			Padding(0, 1)
+		b.WriteString("  " + taStyle.Render(ta) + "\n\n")
+	} else if m.customFormFocus == 1 {
+		// Preview mode — blurred, muted border
+		m.customCmdTextarea.Blur()
+		m.customNameInput.Blur()
+		b.WriteString("  " + normalStyle.Render("Command: ") + "\n\n")
+		ta := m.customCmdTextarea.View()
+		taStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(styles.ColorMuted).
 			Padding(0, 1)
 		b.WriteString("  " + taStyle.Render(ta) + "\n\n")
 	} else {

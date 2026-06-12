@@ -953,7 +953,8 @@ func (m *MockOpsModel) refreshParamInput() {
 	param := m.paramsToPrompt[m.currentParamIdx]
 	if param == "body" {
 		m.paramInput.Blur()
-		m.paramTextarea.Focus()
+		// Start in preview mode — blurred; Enter to edit, esc to navigate params
+		m.paramTextarea.Blur()
 		if v, ok := m.paramValues[param]; ok && v != "" {
 			m.paramTextarea.SetValue(v)
 		} else {
@@ -1047,6 +1048,11 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "esc":
+			if isBody && m.paramTextarea.Focused() {
+				// First esc on body → exit edit mode, back to param navigation
+				m.paramTextarea.Blur()
+				return m, nil
+			}
 			m.promptingParams = false
 			m.editingOrigMethod = ""
 			m.editingOrigPath = ""
@@ -1058,8 +1064,10 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "up":
-			if isBody && m.paramTextarea.Line() > 0 {
-				break // let textarea handle cursor up
+			if isBody && m.paramTextarea.Focused() {
+				if m.paramTextarea.Line() > 0 {
+					break // textarea handles cursor up within text
+				}
 			}
 			if m.currentParamIdx > 0 {
 				m.setCurrentParamValue()
@@ -1069,10 +1077,10 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "down":
-			if isBody {
+			if isBody && m.paramTextarea.Focused() {
 				totalLines := len(strings.Split(m.paramTextarea.Value(), "\n"))
 				if m.paramTextarea.Line() < totalLines-1 {
-					break // let textarea handle cursor down
+					break // textarea handles cursor down within text
 				}
 			}
 			if m.currentParamIdx < len(m.paramsToPrompt)-1 {
@@ -1084,7 +1092,12 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "enter":
 			if isBody {
-				break // let textarea add newline
+				if !m.paramTextarea.Focused() {
+					// Enter on preview → enter edit mode
+					m.paramTextarea.Focus()
+					return m, nil
+				}
+				break // Enter in edit mode → newline
 			}
 			// Non-body: save current field and try to submit
 			m.setCurrentParamValue()
@@ -1095,12 +1108,18 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "ctrl+f":
 			if isBody {
+				if !m.paramTextarea.Focused() {
+					break // ignore when not in edit mode
+				}
 				m.formatBody()
 			}
 			return m, nil
 
 		case "ctrl+s":
 			if isBody {
+				if !m.paramTextarea.Focused() {
+					break // ignore when not in edit mode
+				}
 				m.setCurrentParamValue()
 				m.formatBody()
 				m.paramValues["body"] = m.paramTextarea.Value()
@@ -1111,12 +1130,16 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Delegate to active input
+		// Delegate to focused input
 		if isBody {
-			var cmd tea.Cmd
-			m.paramTextarea, cmd = m.paramTextarea.Update(msg)
-			m.setBodyTextareaHeight()
-			return m, cmd
+			if m.paramTextarea.Focused() {
+				var cmd tea.Cmd
+				m.paramTextarea, cmd = m.paramTextarea.Update(msg)
+				m.setBodyTextareaHeight()
+				return m, cmd
+			}
+			// Preview mode: ignore non-navigation keys
+			return m, nil
 		}
 		if m.paramInput.Focused() {
 			var cmd tea.Cmd

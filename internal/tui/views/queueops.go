@@ -1098,7 +1098,8 @@ func (m *QueueOpsModel) refreshParamInput() {
 	param := m.paramsToPrompt[m.currentParamIdx]
 	if m.isTextareaParam(param) {
 		m.paramInput.Blur()
-		m.paramTextarea.Focus()
+		// Start in preview mode — blurred; Enter to edit, esc to navigate params
+		m.paramTextarea.Blur()
 		if v, ok := m.paramValues[param]; ok && v != "" {
 			m.paramTextarea.SetValue(v)
 		} else {
@@ -1180,11 +1181,18 @@ func (m *QueueOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case key.Matches(keyMsg, queueOpsBack):
+		if isMessage && m.paramTextarea.Focused() {
+			// First esc on message → exit edit mode, back to param navigation
+			m.paramTextarea.Blur()
+			return m, nil
+		}
 		m.promptingParams = false
 
 	case key.Matches(keyMsg, queueOpsUp):
-		if isMessage && m.paramTextarea.Line() > 0 {
-			break // let textarea handle cursor up
+		if isMessage && m.paramTextarea.Focused() {
+			if m.paramTextarea.Line() > 0 {
+				break // textarea handles cursor up within text
+			}
 		}
 		if m.currentParamIdx > 0 {
 			m.setCurrentParamValue()
@@ -1194,10 +1202,10 @@ func (m *QueueOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(keyMsg, queueOpsDown):
-		if isMessage {
+		if isMessage && m.paramTextarea.Focused() {
 			totalLines := len(strings.Split(m.paramTextarea.Value(), "\n"))
 			if m.paramTextarea.Line() < totalLines-1 {
-				break // let textarea handle cursor down
+				break // textarea handles cursor down within text
 			}
 		}
 		if m.currentParamIdx < len(m.paramsToPrompt)-1 {
@@ -1209,7 +1217,12 @@ func (m *QueueOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(keyMsg, queueOpsEnter):
 		if isMessage {
-			break // let textarea add newline
+			if !m.paramTextarea.Focused() {
+				// Enter on preview → enter edit mode
+				m.paramTextarea.Focus()
+				return m, nil
+			}
+			break // Enter in edit mode → newline
 		}
 		// Non-message: save current field and try to submit
 		m.setCurrentParamValue()
@@ -1220,12 +1233,18 @@ func (m *QueueOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case keyMsg.String() == "ctrl+f":
 		if isMessage {
+			if !m.paramTextarea.Focused() {
+				break // ignore when not in edit mode
+			}
 			m.formatMessage()
 		}
 		return m, nil
 
 	case keyMsg.String() == "ctrl+s":
 		if isMessage {
+			if !m.paramTextarea.Focused() {
+				break // ignore when not in edit mode
+			}
 			m.setCurrentParamValue()
 			m.formatMessage()
 			m.paramValues[m.paramsToPrompt[m.currentParamIdx]] = m.paramTextarea.Value()
@@ -1236,12 +1255,16 @@ func (m *QueueOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Delegate to active input
+	// Delegate to focused input
 	if isMessage {
-		var cmd tea.Cmd
-		m.paramTextarea, cmd = m.paramTextarea.Update(msg)
-		m.setMessageTextareaHeight()
-		return m, cmd
+		if m.paramTextarea.Focused() {
+			var cmd tea.Cmd
+			m.paramTextarea, cmd = m.paramTextarea.Update(msg)
+			m.setMessageTextareaHeight()
+			return m, cmd
+		}
+		// Preview mode: ignore non-navigation keys
+		return m, nil
 	}
 	if m.paramInput.Focused() {
 		var cmd tea.Cmd
