@@ -675,6 +675,13 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if item, ok := m.itemList[m.itemCursor].(map[string]interface{}); ok && m.prefillParamsFromItem(item) {
 						m.viewingResult = false
 						m.detailFromList = false
+						// Find or create "Create expectation" action for the PUT request
+						for i, act := range m.actions {
+							if act.label == "Create expectation" {
+								m.actionCursor = i
+								break
+							}
+						}
 						m.promptingParams = true
 						m.paramsToPrompt = []string{"method", "path", "status_code", "content_type", "body"}
 						m.currentParamIdx = 0
@@ -1017,7 +1024,16 @@ func (m *MockOpsModel) submitCurrentParam() (tea.Model, tea.Cmd) {
 // ── View ───────────────────────────────────────────────────────────────────────
 
 func (m *MockOpsModel) View() string {
-	return m.viewActions()
+	view := m.viewActions()
+	// Pad to terminal height so every view overwrites the full visible area,
+	// preventing stale content from the previous view in the scrollback buffer.
+	if m.height > 0 {
+		lines := strings.Count(view, "\n") + 1
+		if lines < m.height {
+			view += strings.Repeat("\n", m.height-lines)
+		}
+	}
+	return view
 }
 
 func (m *MockOpsModel) viewActions() string {
@@ -1255,7 +1271,7 @@ func (m *MockOpsModel) viewParamPrompt() string {
 			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("enter", "newline"),
 			styles.HelpItem("ctrl+f", "format"),
-			styles.HelpItem("ctrl+enter", "save"),
+			styles.HelpItem("ctrl+s", "save"),
 		))
 	} else {
 		b.WriteString("  " + styles.InlineHelp(
@@ -1265,9 +1281,7 @@ func (m *MockOpsModel) viewParamPrompt() string {
 		))
 	}
 
-	// Fixed height ensures both body and non-body views fill the same
-	// vertical space, preventing stale content from the previous view mode.
-	return lipgloss.NewStyle().Height(35).Render(b.String())
+	return b.String()
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
