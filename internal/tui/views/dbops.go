@@ -252,6 +252,28 @@ func (m *DBOpsModel) SetSize(w, h int) {
 	m.height = max(0, h)
 }
 
+// setCustomCmdTextareaHeight auto-sizes the SQL command textarea to fit content.
+// The cap is dynamic so the total custom-form view (builder prefix + form chrome
+// + textarea border + help) stays within m.height, keeping the header visible.
+func (m *DBOpsModel) setCustomCmdTextareaHeight() {
+	lines := len(strings.Split(m.customCmdTextarea.Value(), "\n"))
+	// Overhead outside textarea + border when command field is focused:
+	//   builder prefix (7) + form chrome (10: title, name, command label,
+	//   help, trailing blank) = 17 lines
+	maxVisible := m.height - 17
+	if maxVisible < 6 {
+		maxVisible = 6
+	}
+	switch {
+	case lines < 6:
+		m.customCmdTextarea.SetHeight(6)
+	case lines > maxVisible:
+		m.customCmdTextarea.SetHeight(maxVisible)
+	default:
+		m.customCmdTextarea.SetHeight(lines)
+	}
+}
+
 // ── Update dispatch ───────────────────────────────────────────────────────────
 
 func (m *DBOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -913,6 +935,7 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.customNameInput, cmd = m.customNameInput.Update(msg)
 		} else {
 			m.customCmdTextarea, cmd = m.customCmdTextarea.Update(msg)
+			m.setCustomCmdTextareaHeight()
 		}
 		return m, cmd
 	}
@@ -995,6 +1018,7 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.customNameInput, cmd = m.customNameInput.Update(msg)
 		} else {
 			m.customCmdTextarea, cmd = m.customCmdTextarea.Update(msg)
+			m.setCustomCmdTextareaHeight()
 		}
 		return m, cmd
 	}
