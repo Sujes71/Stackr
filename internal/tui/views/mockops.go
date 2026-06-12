@@ -115,7 +115,7 @@ func NewMockOps(cfg *config.Config, p *config.Profile, envName, serviceName stri
 	vp.KeyMap.HalfPageUp.SetKeys()
 	vp.KeyMap.HalfPageDown.SetKeys()
 	m.paramInput.Placeholder = "value"
-	m.paramTextarea.SetHeight(8)
+	m.paramTextarea.SetHeight(6)
 	m.paramTextarea.ShowLineNumbers = false
 	m.paramTextarea.Placeholder = "{\n  \"key\": \"value\"\n}"
 	m.paramTextarea.CharLimit = 0
@@ -633,6 +633,21 @@ func (m *MockOpsModel) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 // ── Param prompt handler ───────────────────────────────────────────────────────
 
 // refreshParamInput syncs the input's value and placeholder to the current param.
+// setBodyTextareaHeight auto-sizes the body textarea to fit content,
+// with a minimum of 6 lines and a cap at 20 lines.
+// Content beyond the cap is scrollable inside the textarea.
+func (m *MockOpsModel) setBodyTextareaHeight() {
+	lines := len(strings.Split(m.paramTextarea.Value(), "\n"))
+	switch {
+	case lines < 6:
+		m.paramTextarea.SetHeight(6)
+	case lines > 20:
+		m.paramTextarea.SetHeight(20)
+	default:
+		m.paramTextarea.SetHeight(lines)
+	}
+}
+
 func (m *MockOpsModel) refreshParamInput() {
 	param := m.paramsToPrompt[m.currentParamIdx]
 	if param == "body" {
@@ -643,6 +658,7 @@ func (m *MockOpsModel) refreshParamInput() {
 		} else {
 			m.paramTextarea.SetValue("")
 		}
+		m.setBodyTextareaHeight()
 		m.paramTextarea.CursorEnd()
 	} else {
 		m.paramTextarea.Blur()
@@ -723,6 +739,7 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if isBody {
 			var cmd tea.Cmd
 			m.paramTextarea, cmd = m.paramTextarea.Update(msg)
+			m.setBodyTextareaHeight()
 			return m, cmd
 		}
 		if m.paramInput.Focused() {
