@@ -1289,7 +1289,7 @@ func (m *DBOpsModel) viewParamPrompt() string {
 	b.WriteString("\n")
 	b.WriteString("  " + styles.InlineHelp(
 		styles.HelpItem("esc", "cancel"),
-		styles.HelpItem("enter", "next"),
+		styles.HelpItem("enter", "save"),
 	))
 	return b.String()
 }

@@ -1774,7 +1774,7 @@ func (m *QueueOpsModel) viewParamPrompt() string {
 	b.WriteString("  " + styles.InlineHelp(
 		styles.HelpItem("esc", "cancel"),
 		styles.HelpItem("↑ ↓", "navigate"),
-		styles.HelpItem("enter", "submit"),
+		styles.HelpItem("enter", "save"),
 	))
 	return b.String()
 }

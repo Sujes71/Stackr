@@ -971,13 +971,13 @@ func (m *MockOpsModel) viewParamPrompt() string {
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("enter", "newline"),
-			styles.HelpItem("ctrl+enter", "submit"),
+			styles.HelpItem("ctrl+enter", "save"),
 		))
 	} else {
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "navigate"),
-			styles.HelpItem("enter", "submit"),
+			styles.HelpItem("enter", "save"),
 		))
 	}
 	return b.String()
