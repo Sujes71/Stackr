@@ -829,10 +829,32 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 									"path":   path,
 								},
 							}
-							// Remove item from list and stay in the same view
-							m.itemList = append(m.itemList[:m.itemCursor], m.itemList[m.itemCursor+1:]...)
-							if m.itemCursor > 0 && m.itemCursor >= len(m.itemList) {
-								m.itemCursor--
+							// If last item, show empty-state message like first-time entry
+							if len(m.itemList) == 1 {
+								m.viewingItemList = false
+								m.itemList = nil
+								switch m.itemListTitle {
+								case "Retrieve requests":
+									m.resultOutput = "No requests recorded yet.\nRequests appear when a client sends traffic to MockServer."
+								case "List active expectations":
+									m.resultOutput = "No active expectations found.\nCreate one with 'Create expectation' above."
+								default:
+									m.resultOutput = "No items."
+								}
+								m.resultTitle = m.itemListTitle
+								m.viewportContent = styles.StyleCode.Render(m.resultOutput)
+								m.resultViewport.SetContent(m.viewportContent)
+								m.resultViewport.Width = m.width - 4
+								lineCount := strings.Count(m.viewportContent, "\n") + 1
+								m.resultViewport.Height = min(lineCount, max(8, m.height-13))
+								m.resultViewport.YPosition = 0
+								m.resultViewport.GotoTop()
+								m.viewingResult = true
+							} else {
+								m.itemList = append(m.itemList[:m.itemCursor], m.itemList[m.itemCursor+1:]...)
+								if m.itemCursor > 0 && m.itemCursor >= len(m.itemList) {
+									m.itemCursor--
+								}
 							}
 							// Fire-and-forget: clear expectation without sending doneMsg
 							port := m.mockHostPort()
