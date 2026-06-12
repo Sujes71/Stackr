@@ -242,11 +242,9 @@ func (m *MockOpsModel) mockAPICall(endpoint, httpMethod string, body interface{}
 				return mockOpsDoneMsg{result: string(respData)}
 			}
 
-			statusText := http.StatusText(resp.StatusCode)
-			if statusText == "" {
-				statusText = fmt.Sprintf("HTTP %d", resp.StatusCode)
-			}
-			return mockOpsDoneMsg{result: fmt.Sprintf("✓ %s", statusText)}
+			// No body — success with no meaningful output;
+			// auto-dismiss and just show the checkmark.
+			return mockOpsDoneMsg{result: ""}
 		}
 	}
 }
@@ -381,17 +379,23 @@ func (m *MockOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.doneOpAt = time.Now()
 
 		if msg.result == "" {
-			// No output — just checkmark
-			return m, nil
+			// No output — auto-generated success, just show the checkmark.
+			m.viewingResult = false
+			m.resultOutput = ""
+			return m, spinnerCmd()
 		}
 		// Show result in viewport
 		m.resultOutput = msg.result
-		m.resultTitle = fmt.Sprintf("  %s  —  result", m.doneOp)
-		m.viewportContent = msg.result
-		m.resultViewport.SetContent(msg.result)
+		m.resultTitle = completedLabel
+		m.viewportContent = styles.StyleHeader.Render("  "+m.resultTitle+"  —  result") + "\n\n" + styles.StyleCode.Render(m.resultOutput)
+		m.resultViewport.SetContent(m.viewportContent)
+		m.resultViewport.Width = m.width - 4
+		lineCount := strings.Count(m.viewportContent, "\n") + 1
+		m.resultViewport.Height = min(lineCount, max(8, m.height-10))
+		m.resultViewport.YPosition = 0
 		m.resultViewport.GotoTop()
 		m.viewingResult = true
-		return m, nil
+		return m, spinnerCmd()
 	}
 
 	// Delegate to the actions screen
@@ -485,7 +489,8 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.resultViewport.LineDown(1)
 			default:
 				m.viewingResult = false
-				return m, nil
+				// Return spinner so the checkmark timer stays alive
+				return m, spinnerCmd()
 			}
 			return m, nil
 		}
@@ -529,13 +534,7 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.paramsToPrompt = params
 						m.paramValues = make(map[string]string)
 						m.currentParamIdx = 0
-						m.paramInput.SetValue("")
-						// Pre-fill with default
-						def := m.paramDefault(params[0])
-						m.paramInput.Placeholder = def
-						if def != "" {
-							m.paramInput.SetValue(def)
-						}
+						m.refreshParamInput()
 						m.paramInput.Focus()
 						return m, nil
 					}
@@ -605,6 +604,18 @@ func (m *MockOpsModel) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // ── Param prompt handler ───────────────────────────────────────────────────────
 
+// refreshParamInput syncs the input's value and placeholder to the current param.
+func (m *MockOpsModel) refreshParamInput() {
+	param := m.paramsToPrompt[m.currentParamIdx]
+	if v, ok := m.paramValues[param]; ok && v != "" {
+		m.paramInput.SetValue(v)
+	} else {
+		m.paramInput.SetValue("")
+	}
+	m.paramInput.Placeholder = m.paramDefault(param)
+	m.paramInput.CursorEnd()
+}
+
 func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -614,39 +625,28 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "up":
-			m.currentParamIdx--
-			if m.currentParamIdx < 0 {
-				m.currentParamIdx = 0
+			if m.currentParamIdx > 0 {
+				m.paramValues[m.paramsToPrompt[m.currentParamIdx]] = m.paramInput.Value()
+				m.currentParamIdx--
+				m.refreshParamInput()
 			}
-			m.paramInput.SetValue(m.paramValues[m.paramsToPrompt[m.currentParamIdx]])
-			m.paramInput.CursorEnd()
 			return m, nil
 
 		case "down":
-			m.currentParamIdx++
-			if m.currentParamIdx >= len(m.paramsToPrompt) {
-				m.currentParamIdx = len(m.paramsToPrompt) - 1
+			if m.currentParamIdx < len(m.paramsToPrompt)-1 {
+				m.paramValues[m.paramsToPrompt[m.currentParamIdx]] = m.paramInput.Value()
+				m.currentParamIdx++
+				m.refreshParamInput()
 			}
-			m.paramInput.SetValue(m.paramValues[m.paramsToPrompt[m.currentParamIdx]])
-			m.paramInput.CursorEnd()
 			return m, nil
 
 		case "enter":
-			// Save current value
 			param := m.paramsToPrompt[m.currentParamIdx]
 			m.paramValues[param] = strings.TrimSpace(m.paramInput.Value())
 
 			if m.currentParamIdx < len(m.paramsToPrompt)-1 {
-				// Next param
 				m.currentParamIdx++
-				next := m.paramsToPrompt[m.currentParamIdx]
-				if v, ok := m.paramValues[next]; ok && v != "" {
-					m.paramInput.SetValue(v)
-				} else {
-					def := m.paramDefault(next)
-					m.paramInput.SetValue(def)
-				}
-				m.paramInput.CursorEnd()
+				m.refreshParamInput()
 				return m, nil
 			}
 
