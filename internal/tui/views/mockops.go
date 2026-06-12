@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -80,6 +81,7 @@ type MockOpsModel struct {
 	paramValues     map[string]string
 	currentParamIdx int
 	paramInput      textinput.Model
+	paramTextarea   textarea.Model
 
 	// Confirm before execute (double confirmation)
 	confirmAction bool
@@ -102,6 +104,7 @@ func NewMockOps(cfg *config.Config, p *config.Profile, envName, serviceName stri
 		serviceName: serviceName,
 		pendingOps:  make(map[string]string),
 		paramInput:  textinput.New(),
+		paramTextarea: textarea.New(),
 		resultViewport: viewport.New(0, 0),
 	}
 	vp := &m.resultViewport
@@ -112,6 +115,10 @@ func NewMockOps(cfg *config.Config, p *config.Profile, envName, serviceName stri
 	vp.KeyMap.HalfPageUp.SetKeys()
 	vp.KeyMap.HalfPageDown.SetKeys()
 	m.paramInput.Placeholder = "value"
+	m.paramTextarea.SetHeight(8)
+	m.paramTextarea.ShowLineNumbers = false
+	m.paramTextarea.Placeholder = "{\n  \"key\": \"value\"\n}"
+	m.paramTextarea.CharLimit = 0
 	// Resolve service index for mutations
 	for i, svc := range m.currentEnv().Services {
 		if svc.Name == serviceName {
@@ -557,7 +564,6 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.paramValues = make(map[string]string)
 						m.currentParamIdx = 0
 						m.refreshParamInput()
-						m.paramInput.Focus()
 						return m, nil
 					}
 					// Destructive actions need confirmation
@@ -629,64 +635,96 @@ func (m *MockOpsModel) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 // refreshParamInput syncs the input's value and placeholder to the current param.
 func (m *MockOpsModel) refreshParamInput() {
 	param := m.paramsToPrompt[m.currentParamIdx]
-	if v, ok := m.paramValues[param]; ok && v != "" {
-		m.paramInput.SetValue(v)
+	if param == "body" {
+		m.paramInput.Blur()
+		m.paramTextarea.Focus()
+		if v, ok := m.paramValues[param]; ok && v != "" {
+			m.paramTextarea.SetValue(v)
+		} else {
+			m.paramTextarea.SetValue("")
+		}
+		m.paramTextarea.CursorEnd()
 	} else {
-		m.paramInput.SetValue("")
+		m.paramTextarea.Blur()
+		m.paramInput.Focus()
+		if v, ok := m.paramValues[param]; ok && v != "" {
+			m.paramInput.SetValue(v)
+		} else {
+			m.paramInput.SetValue("")
+		}
+		m.paramInput.Placeholder = m.paramDefault(param)
+		m.paramInput.CursorEnd()
 	}
-	m.paramInput.Placeholder = m.paramDefault(param)
-	m.paramInput.CursorEnd()
+}
+
+func (m *MockOpsModel) currentParamValue() string {
+	param := m.paramsToPrompt[m.currentParamIdx]
+	if param == "body" {
+		return m.paramTextarea.Value()
+	}
+	return m.paramInput.Value()
+}
+
+func (m *MockOpsModel) setCurrentParamValue() {
+	param := m.paramsToPrompt[m.currentParamIdx]
+	val := m.currentParamValue()
+	if param != "body" {
+		val = strings.TrimSpace(val)
+	}
+	m.paramValues[param] = val
 }
 
 func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		isBody := m.paramsToPrompt[m.currentParamIdx] == "body"
+
 		switch msg.String() {
 		case "esc":
 			m.promptingParams = false
 			return m, nil
 
 		case "up":
+			if isBody && m.paramTextarea.Line() > 0 {
+				break // let textarea handle cursor up
+			}
 			if m.currentParamIdx > 0 {
-				m.paramValues[m.paramsToPrompt[m.currentParamIdx]] = m.paramInput.Value()
+				m.setCurrentParamValue()
 				m.currentParamIdx--
 				m.refreshParamInput()
 			}
 			return m, nil
 
 		case "down":
+			if isBody && m.paramTextarea.Line() < len(strings.Split(m.paramTextarea.Value(), "\n"))-1 {
+				break // let textarea handle cursor down
+			}
 			if m.currentParamIdx < len(m.paramsToPrompt)-1 {
-				m.paramValues[m.paramsToPrompt[m.currentParamIdx]] = m.paramInput.Value()
+				m.setCurrentParamValue()
 				m.currentParamIdx++
 				m.refreshParamInput()
 			}
 			return m, nil
 
 		case "enter":
-			param := m.paramsToPrompt[m.currentParamIdx]
-			m.paramValues[param] = strings.TrimSpace(m.paramInput.Value())
-
-			if m.currentParamIdx < len(m.paramsToPrompt)-1 {
-				m.currentParamIdx++
-				m.refreshParamInput()
-				return m, nil
+			if isBody {
+				break // let textarea add newline
 			}
+			return m.submitCurrentParam()
 
-			// All params filled — execute
-			m.promptingParams = false
-			act := m.actions[m.actionCursor]
-			execCmd := m.execParamAction(act)
-			if execCmd == nil {
-				return m, nil
+		case "ctrl+enter":
+			if isBody {
+				return m.submitCurrentParam()
 			}
-			m.lastResult = ""
-			m.doneOp = act.label
-			m.doneOpAt = time.Now()
-			m.pendingOps[act.label] = "running"
-			return m, tea.Batch(execCmd, spinnerCmd())
+			return m, nil
 		}
 
-		// Delegate to text input for value editing
+		// Delegate to active input
+		if isBody {
+			var cmd tea.Cmd
+			m.paramTextarea, cmd = m.paramTextarea.Update(msg)
+			return m, cmd
+		}
 		if m.paramInput.Focused() {
 			var cmd tea.Cmd
 			m.paramInput, cmd = m.paramInput.Update(msg)
@@ -694,6 +732,30 @@ func (m *MockOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// submitCurrentParam saves the current param and either advances or executes.
+func (m *MockOpsModel) submitCurrentParam() (tea.Model, tea.Cmd) {
+	m.setCurrentParamValue()
+
+	if m.currentParamIdx < len(m.paramsToPrompt)-1 {
+		m.currentParamIdx++
+		m.refreshParamInput()
+		return m, nil
+	}
+
+	// All params filled — execute
+	m.promptingParams = false
+	act := m.actions[m.actionCursor]
+	execCmd := m.execParamAction(act)
+	if execCmd == nil {
+		return m, nil
+	}
+	m.lastResult = ""
+	m.doneOp = act.label
+	m.doneOpAt = time.Now()
+	m.pendingOps[act.label] = "running"
+	return m, tea.Batch(execCmd, spinnerCmd())
 }
 
 // ── View ───────────────────────────────────────────────────────────────────────
@@ -830,7 +892,13 @@ func (m *MockOpsModel) viewParamPrompt() string {
 	filledStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 	emptyStyle := lipgloss.NewStyle().Foreground(styles.ColorMuted)
 
+	onBody := m.paramsToPrompt[m.currentParamIdx] == "body"
+
 	for i, param := range m.paramsToPrompt {
+		if i == m.currentParamIdx && onBody && param == "body" {
+			// Show the textarea when body is active — render above the param list
+			continue
+		}
 		if i == m.currentParamIdx {
 			b.WriteString("  " + cursorStyle.Render("> "+param+"  ") + m.paramInput.View() + "\n")
 		} else if v, ok := m.paramValues[param]; ok && v != "" {
@@ -840,16 +908,37 @@ func (m *MockOpsModel) viewParamPrompt() string {
 		}
 	}
 
-	b.WriteString("\n")
-	enterLabel := "next"
-	if m.currentParamIdx == len(m.paramsToPrompt)-1 {
-		enterLabel = "submit"
+	if onBody {
+		// Show the body label with cursor
+		b.WriteString("  " + cursorStyle.Render("> body  ") + "\n\n")
+		// Render textarea inside a subtle box
+		ta := m.paramTextarea.View()
+		taStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(styles.ColorPrimary).
+			Padding(0, 1)
+		b.WriteString(taStyle.Render(ta))
+		b.WriteString("\n")
 	}
-	b.WriteString("  " + styles.InlineHelp(
-		styles.HelpItem("esc", "cancel"),
-		styles.HelpItem("↑ ↓", "navigate"),
-		styles.HelpItem("enter", enterLabel),
-	))
+
+	b.WriteString("\n")
+
+	if onBody {
+		b.WriteString("  " + styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("ctrl+enter", "submit"),
+		))
+	} else {
+		enterLabel := "next"
+		if m.currentParamIdx == len(m.paramsToPrompt)-1 {
+			enterLabel = "submit"
+		}
+		b.WriteString("  " + styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↑ ↓", "navigate"),
+			styles.HelpItem("enter", enterLabel),
+		))
+	}
 	return b.String()
 }
 
