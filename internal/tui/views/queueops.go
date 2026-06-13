@@ -117,6 +117,10 @@ type QueueOpsModel struct {
 	promptStartDaemon  bool
 	daemonStarting     bool
 	pendingStartLabel  string
+
+	// readySince tracks when the container was first detected as running after
+	// a start event. Used for the ActiveMQ KahaDB recovery grace period.
+	readySince time.Time
 }
 
 // ── Constructor ───────────────────────────────────────────────────────────────
@@ -721,6 +725,7 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.lastResult = styles.StyleError.Render("Service not found.")
 					return m, nil
 				}
+				m.readySince = time.Time{} // reset on fresh start
 				if m.pendingStartLabel != "" {
 					m.pendingOps[m.pendingStartLabel] = "starting"
 				}
@@ -1051,6 +1056,24 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
 		ready, _ := docker.QueueContainerRunning(container)
 		if ready {
+			// ActiveMQ KahaDB grace period: after the container starts, the broker
+			// needs ~3s to recover persisted queue data from KahaDB journal before
+			// dstat returns the full destination list. If we execute too early,
+			// we get an empty header-only result.
+			if m.currentQueueType() == "activemq" {
+				if m.readySince.IsZero() {
+					m.readySince = time.Now()
+				}
+				if time.Since(m.readySince) < 3*time.Second {
+					return m, tea.Batch(
+						func() tea.Msg {
+							time.Sleep(1 * time.Second)
+							return readyRetryMsg{label: msg.label, retry: msg.retry + 1}
+						},
+						spinnerCmd(),
+					)
+				}
+			}
 			m.spinnerFrame = 0
 			// Execute pending action
 			if m.pendingCustomCmd != "" {
@@ -1066,6 +1089,7 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastResult = styles.StyleError.Render("Could not find pending action")
 			return m, nil
 		}
+		m.readySince = time.Time{} // container went down during poll
 		if msg.retry >= 30 {
 			m.pendingOps = make(map[string]string)
 			m.lastResult = formatErrorMsg("container not ready after 30s")
