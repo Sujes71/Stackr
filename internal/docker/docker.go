@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -551,27 +550,6 @@ func QueueContainerRunning(containerName string) (bool, error) {
 		return false, nil
 	}
 	return strings.TrimSpace(string(out)) == "true", nil
-}
-
-// ContainerPortListening checks if a TCP port inside the container is accepting
-// connections from the host. Uses docker inspect to get the host port mapping,
-// then tries a TCP dial with a 2s timeout.
-func ContainerPortListening(containerName, containerPort string) bool {
-	tmpl := fmt.Sprintf("{{(index .NetworkSettings.Ports %q 0).HostPort}}", containerPort+"/tcp")
-	out, err := exec.Command("docker", "inspect", "--format", tmpl, containerName).Output()
-	if err != nil {
-		return false
-	}
-	hostPort := strings.TrimSpace(string(out))
-	if hostPort == "" || hostPort == "<no value>" {
-		return false
-	}
-	conn, err := net.DialTimeout("tcp", "localhost:"+hostPort, 2*time.Second)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
 }
 
 // ContainerReady checks if the database inside the container is accepting connections.

@@ -1051,18 +1051,6 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
 		ready, _ := docker.QueueContainerRunning(container)
 		if ready {
-			// For JVM-based brokers (ActiveMQ), also wait for the OpenWire port
-			// to accept connections, not just for the container process to start.
-			// The JVM takes extra seconds to boot, register JMX MBeans, and open ports.
-			if m.currentQueueType() == "activemq" && !docker.ContainerPortListening(container, "61616") {
-				return m, tea.Batch(
-					func() tea.Msg {
-						time.Sleep(1 * time.Second)
-						return readyRetryMsg{label: msg.label, retry: msg.retry + 1}
-					},
-					spinnerCmd(),
-				)
-			}
 			m.spinnerFrame = 0
 			// Execute pending action
 			if m.pendingCustomCmd != "" {
