@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -32,13 +31,7 @@ const (
 
 // ── Key bindings ───────────────────────────────────────────────────────────────
 
-var (
-	mockOpsUp    = key.NewBinding(key.WithKeys("up"))
-	mockOpsDown  = key.NewBinding(key.WithKeys("down"))
-	mockOpsEnter = key.NewBinding(key.WithKeys("enter"))
-	mockOpsBack  = key.NewBinding(key.WithKeys("esc"))
-	mockOpsEdit  = key.NewBinding(key.WithKeys("e"))
-)
+// Key bindings are defined in ops_common.go (opsKeyUp, opsKeyDown, etc.).
 
 // ── Model ──────────────────────────────────────────────────────────────────────
 
@@ -189,33 +182,11 @@ func (m *MockOpsModel) SetSize(w, h int) {
 // ── Environment / Service helpers ──────────────────────────────────────────────
 
 func (m *MockOpsModel) currentEnv() *config.Environment {
-	for i := range m.profile.Environments {
-		if m.profile.Environments[i].Name == m.envName {
-			return &m.profile.Environments[i]
-		}
-	}
-	return nil
+	return opsCurrentEnv(m.profile, m.envName)
 }
 
 func (m *MockOpsModel) currentService() *config.Service {
-	env := m.currentEnv()
-	if env == nil {
-		return nil
-	}
-	if m.serviceIdx >= 0 && m.serviceIdx < len(env.Services) {
-		svc := &env.Services[m.serviceIdx]
-		if svc.Name == m.serviceName || svc.ComposeName() == m.serviceName {
-			return svc
-		}
-	}
-	for i := range env.Services {
-		svc := &env.Services[i]
-		if svc.Name == m.serviceName || svc.ComposeName() == m.serviceName {
-			m.serviceIdx = i
-			return svc
-		}
-	}
-	return nil
+	return opsCurrentService(m.currentEnv(), m.serviceName, &m.serviceIdx)
 }
 
 // mockHostPort returns the host port mapped to the MockServer container port 1080.
@@ -788,21 +759,21 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.viewingItemList {
 			switch {
-			case key.Matches(msg, mockOpsUp):
+			case key.Matches(msg, opsKeyUp):
 				m.deleteItemArmed = false
 				if m.itemCursor > 0 {
 					m.itemCursor--
 				}
-			case key.Matches(msg, mockOpsDown):
+			case key.Matches(msg, opsKeyDown):
 				m.deleteItemArmed = false
 				if m.itemCursor < len(m.itemList)-1 {
 					m.itemCursor++
 				}
-			case key.Matches(msg, mockOpsEnter):
+			case key.Matches(msg, opsKeyEnter):
 				m.deleteItemArmed = false
 				// Show selected item detail in viewport
 				return m.showItemDetail()
-			case key.Matches(msg, mockOpsEdit):
+			case key.Matches(msg, opsKeyEdit):
 				m.deleteItemArmed = false
 				// Edit the selected item — pre-fill param form from its JSON
 				if m.itemCursor >= 0 && m.itemCursor < len(m.itemList) {
@@ -900,7 +871,7 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.deleteItemArmed = true
 					return m, nil
 				}
-			case key.Matches(msg, mockOpsBack):
+			case key.Matches(msg, opsKeyBack):
 				m.deleteItemArmed = false
 				m.viewingItemList = false
 				m.itemList = nil
@@ -918,9 +889,9 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.viewingResult {
 			switch {
-			case key.Matches(msg, mockOpsUp):
+			case key.Matches(msg, opsKeyUp):
 				m.resultViewport.LineUp(1)
-			case key.Matches(msg, mockOpsDown):
+			case key.Matches(msg, opsKeyDown):
 				m.resultViewport.LineDown(1)
 			default:
 				m.viewingResult = false
@@ -935,7 +906,7 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch {
-		case key.Matches(msg, mockOpsBack):
+		case key.Matches(msg, opsKeyBack):
 			if m.promptStartDaemon || m.promptStartService || len(m.pendingOps) > 0 {
 				break
 			}
@@ -948,7 +919,7 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, mockOpsUp) && len(m.pendingOps) == 0 && !m.promptStartService:
+		case key.Matches(msg, opsKeyUp) && len(m.pendingOps) == 0 && !m.promptStartService:
 			for i := m.actionCursor - 1; i >= 0; i-- {
 				if m.actions[i].enabled {
 					m.actionCursor = i
@@ -956,7 +927,7 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, mockOpsDown) && len(m.pendingOps) == 0 && !m.promptStartService:
+		case key.Matches(msg, opsKeyDown) && len(m.pendingOps) == 0 && !m.promptStartService:
 			for i := m.actionCursor + 1; i < len(m.actions); i++ {
 				if m.actions[i].enabled {
 					m.actionCursor = i
@@ -964,7 +935,7 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, mockOpsEnter) && len(m.pendingOps) == 0 && !m.promptStartService:
+		case key.Matches(msg, opsKeyEnter) && len(m.pendingOps) == 0 && !m.promptStartService:
 			if m.actionCursor < len(m.actions) {
 				act := m.actions[m.actionCursor]
 				if act.enabled {
@@ -1121,7 +1092,7 @@ func (m *MockOpsModel) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case key.Matches(msg, mockOpsEnter):
+		case key.Matches(msg, opsKeyEnter):
 			m.confirmAction = false
 			label := m.confirmLabel
 			switch label {
@@ -1950,30 +1921,15 @@ func (m *MockOpsModel) viewParamPrompt() string {
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 func (m *MockOpsModel) renderSpinnerDot(op string) string {
-	frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
-	return lipgloss.NewStyle().Foreground(styles.ColorAccent).Render(fmt.Sprintf("%s %s", frame, op))
+	return opsRenderSpinnerDot(m.spinnerFrame, op)
 }
 
 func (m *MockOpsModel) firstEnabledAction() int {
-	for i, act := range m.actions {
-		if act.enabled {
-			return i
-		}
-	}
-	return 0
+	return opsFirstEnabledAction(m.actions)
 }
 
 func (m *MockOpsModel) isContainerRunning(container string) bool {
-	statuses, err := docker.Status(m.profile.Name, m.envName)
-	if err != nil {
-		return false
-	}
-	for _, s := range statuses {
-		if s.Name == container && s.State == "running" {
-			return true
-		}
-	}
-	return false
+	return opsIsContainerRunning(m.profile.Name, m.envName, container)
 }
 
 // ensureContainerRunning checks whether the service container is running.
@@ -1995,13 +1951,5 @@ func (m *MockOpsModel) ensureContainerRunning(label string) bool {
 }
 
 func (m *MockOpsModel) launchDockerCmd() tea.Cmd {
-	return func() tea.Msg {
-		if _, err := exec.LookPath("colima"); err == nil {
-			_ = exec.Command("colima", "start").Run()
-		} else {
-			_ = exec.Command("open", "-a", "Docker").Run()
-		}
-		time.Sleep(2 * time.Second)
-		return daemonStartedMsg{available: docker.DaemonAvailable()}
-	}
+	return opsLaunchDockerCmd()
 }

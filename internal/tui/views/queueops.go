@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 	"time"
@@ -32,15 +31,7 @@ const (
 
 // ── Key bindings ──────────────────────────────────────────────────────────────
 
-var (
-	queueOpsUp     = key.NewBinding(key.WithKeys("up"))
-	queueOpsDown   = key.NewBinding(key.WithKeys("down"))
-	queueOpsEnter  = key.NewBinding(key.WithKeys("enter"))
-	queueOpsBack   = key.NewBinding(key.WithKeys("esc"))
-	queueOpsAdd    = key.NewBinding(key.WithKeys("a"))
-	queueOpsEdit   = key.NewBinding(key.WithKeys("e"))
-	queueOpsDelete = key.NewBinding(key.WithKeys("d"))
-)
+// Key bindings are defined in ops_common.go (opsKeyUp, opsKeyDown, etc.).
 
 // ── Queue Ops specific messages ───────────────────────────────────────────────
 
@@ -193,33 +184,11 @@ func (m *QueueOpsModel) IsBusy() bool {
 // ── Environment / Service helpers ─────────────────────────────────────────────
 
 func (m *QueueOpsModel) currentEnv() *config.Environment {
-	for i := range m.profile.Environments {
-		if m.profile.Environments[i].Name == m.envName {
-			return &m.profile.Environments[i]
-		}
-	}
-	return nil
+	return opsCurrentEnv(m.profile, m.envName)
 }
 
 func (m *QueueOpsModel) currentService() *config.Service {
-	env := m.currentEnv()
-	if env == nil {
-		return nil
-	}
-	if m.serviceIdx >= 0 && m.serviceIdx < len(env.Services) {
-		svc := &env.Services[m.serviceIdx]
-		if svc.Name == m.serviceName || svc.ComposeName() == m.serviceName {
-			return svc
-		}
-	}
-	for i := range env.Services {
-		svc := &env.Services[i]
-		if svc.Name == m.serviceName || svc.ComposeName() == m.serviceName {
-			m.serviceIdx = i
-			return svc
-		}
-	}
-	return nil
+	return opsCurrentService(m.currentEnv(), m.serviceName, &m.serviceIdx)
 }
 
 func (m *QueueOpsModel) currentQueueType() string {
@@ -301,7 +270,7 @@ func (m *QueueOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case key.Matches(msg, queueOpsBack):
+		case key.Matches(msg, opsKeyBack):
 			m.deleteArmed = false
 			return m, func() tea.Msg {
 				return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name, EnvName: m.envName, ServiceName: m.serviceName}
@@ -317,13 +286,13 @@ func (m *QueueOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		maxCursor := len(queueSyncEnvs)
 
 		switch {
-		case key.Matches(msg, queueOpsUp) && m.listCursor > 0 && !m.deleteArmed:
+		case key.Matches(msg, opsKeyUp) && m.listCursor > 0 && !m.deleteArmed:
 			m.listCursor--
 
-		case key.Matches(msg, queueOpsDown) && m.listCursor < maxCursor && !m.deleteArmed:
+		case key.Matches(msg, opsKeyDown) && m.listCursor < maxCursor && !m.deleteArmed:
 			m.listCursor++
 
-		case key.Matches(msg, queueOpsEnter):
+		case key.Matches(msg, opsKeyEnter):
 			if m.listCursor == 0 {
 				// Local entry
 				m.targetSyncEnv = false
@@ -342,12 +311,12 @@ func (m *QueueOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = queueScreenActions
 			m.deleteArmed = false
 
-		case key.Matches(msg, queueOpsAdd):
+		case key.Matches(msg, opsKeyAdd):
 			m.deleteArmed = false
 			m.wizardModel = NewAddQueueSyncEnv(m.cfg, m.profile, m.envName, m.serviceName, true, nil)
 			m.screen = queueScreenWizard
 
-		case key.Matches(msg, queueOpsEdit):
+		case key.Matches(msg, opsKeyEdit):
 			if m.listCursor > 0 && m.listCursor <= len(queueSyncEnvs) {
 				qse := &queueSyncEnvs[m.listCursor-1]
 				m.wizardModel = NewAddQueueSyncEnv(m.cfg, m.profile, m.envName, m.serviceName, false, qse)
@@ -355,7 +324,7 @@ func (m *QueueOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.deleteArmed = false
 			}
 
-		case key.Matches(msg, queueOpsDelete):
+		case key.Matches(msg, opsKeyDelete):
 			if m.listCursor == 0 {
 				break // can't delete local entry
 			}
@@ -796,9 +765,9 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.viewingResult {
 			switch {
-			case key.Matches(msg, queueOpsUp):
+			case key.Matches(msg, opsKeyUp):
 				m.resultViewport.LineUp(1)
-			case key.Matches(msg, queueOpsDown):
+			case key.Matches(msg, opsKeyDown):
 				m.resultViewport.LineDown(1)
 			default:
 				m.viewingResult = false
@@ -807,7 +776,7 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch {
-		case key.Matches(msg, queueOpsBack):
+		case key.Matches(msg, opsKeyBack):
 			if m.promptStartDaemon || len(m.pendingOps) > 0 {
 				if m.promptStartDaemon {
 					m.promptStartDaemon = false
@@ -821,7 +790,7 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selectedEnv = ""
 			m.actions = nil
 
-		case key.Matches(msg, queueOpsUp) && len(m.pendingOps) == 0 && !m.promptStartService:
+		case key.Matches(msg, opsKeyUp) && len(m.pendingOps) == 0 && !m.promptStartService:
 			for i := m.actionCursor - 1; i >= 0; i-- {
 				if m.actions[i].enabled {
 					m.actionCursor = i
@@ -829,7 +798,7 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, queueOpsDown) && len(m.pendingOps) == 0 && !m.promptStartService:
+		case key.Matches(msg, opsKeyDown) && len(m.pendingOps) == 0 && !m.promptStartService:
 			for i := m.actionCursor + 1; i < len(m.actions); i++ {
 				if m.actions[i].enabled {
 					m.actionCursor = i
@@ -837,7 +806,7 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, queueOpsEnter) && len(m.pendingOps) == 0 && !m.promptStartService:
+		case key.Matches(msg, opsKeyEnter) && len(m.pendingOps) == 0 && !m.promptStartService:
 			m.deleteActionArmed = false
 			if m.actionCursor < len(m.actions) {
 				act := m.actions[m.actionCursor]
@@ -895,7 +864,7 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, queueOpsEdit) && len(m.pendingOps) == 0 && !m.promptStartService:
+		case key.Matches(msg, opsKeyEdit) && len(m.pendingOps) == 0 && !m.promptStartService:
 			m.deleteActionArmed = false
 			if m.actionCursor < len(m.actions) {
 				act := m.actions[m.actionCursor]
@@ -916,7 +885,7 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, queueOpsDelete) && len(m.pendingOps) == 0 && !m.promptStartService:
+		case key.Matches(msg, opsKeyDelete) && len(m.pendingOps) == 0 && !m.promptStartService:
 			if m.actionCursor < len(m.actions) {
 				act := m.actions[m.actionCursor]
 				if act.isCustom {
@@ -1215,7 +1184,7 @@ func (m *QueueOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 	isMessage := m.isTextareaParam(m.paramsToPrompt[m.currentParamIdx])
 
 	switch {
-	case key.Matches(keyMsg, queueOpsBack):
+	case key.Matches(keyMsg, opsKeyBack):
 		if isMessage && m.paramTextarea.Focused() {
 			// First esc on message → exit edit mode, back to param navigation
 			m.paramTextarea.Blur()
@@ -1223,7 +1192,7 @@ func (m *QueueOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.promptingParams = false
 
-	case key.Matches(keyMsg, queueOpsUp):
+	case key.Matches(keyMsg, opsKeyUp):
 		if isMessage && m.paramTextarea.Focused() {
 			if m.paramTextarea.Line() > 0 {
 				break // textarea handles cursor up within text
@@ -1236,7 +1205,7 @@ func (m *QueueOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case key.Matches(keyMsg, queueOpsDown):
+	case key.Matches(keyMsg, opsKeyDown):
 		if isMessage && m.paramTextarea.Focused() {
 			totalLines := len(strings.Split(m.paramTextarea.Value(), "\n"))
 			if m.paramTextarea.Line() < totalLines-1 {
@@ -1250,7 +1219,7 @@ func (m *QueueOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case key.Matches(keyMsg, queueOpsEnter):
+	case key.Matches(keyMsg, opsKeyEnter):
 		if isMessage {
 			if !m.paramTextarea.Focused() {
 				// Enter on preview → enter edit mode
@@ -1315,7 +1284,7 @@ func (m *QueueOpsModel) updateCustomConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case key.Matches(msg, queueOpsEnter):
+		case key.Matches(msg, opsKeyEnter):
 			container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
 			if !m.isContainerRunning(container) && m.targetSyncEnv == false {
 				m.confirmCustomAction = false
@@ -1335,7 +1304,7 @@ func (m *QueueOpsModel) updateCustomConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.pendingOps[label] = "running"
 			return m, tea.Batch(m.customActionExecCmd(m.pendingCustomCmd), spinnerCmd())
-		case key.Matches(msg, queueOpsBack):
+		case key.Matches(msg, opsKeyBack):
 			m.confirmCustomAction = false
 		default:
 			m.confirmCustomAction = false
@@ -1350,7 +1319,7 @@ func (m *QueueOpsModel) updateCoreConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case key.Matches(msg, queueOpsEnter):
+		case key.Matches(msg, opsKeyEnter):
 			m.confirmAction = false
 			act := m.actions[m.actionCursor]
 
@@ -1613,20 +1582,20 @@ func (m *QueueOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch {
-	case key.Matches(keyMsg, queueOpsBack):
+	case key.Matches(keyMsg, opsKeyBack):
 		m.addingCustomAction = false
 
-	case key.Matches(keyMsg, queueOpsUp):
+	case key.Matches(keyMsg, opsKeyUp):
 		if m.customFormFocus > 0 {
 			m.customFormFocus--
 		}
 
-	case key.Matches(keyMsg, queueOpsDown):
+	case key.Matches(keyMsg, opsKeyDown):
 		if m.customFormFocus < 1 {
 			m.customFormFocus++
 		}
 
-	case key.Matches(keyMsg, queueOpsEnter):
+	case key.Matches(keyMsg, opsKeyEnter):
 		return m.saveCustomForm()
 
 	case keyMsg.String() == "ctrl+s":
@@ -2099,42 +2068,19 @@ func (m *QueueOpsModel) queueOpsWindow(total, cursor, itemHeight, overhead int) 
 }
 
 func (m *QueueOpsModel) renderSpinnerDot(op string) string {
-	frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
-	return lipgloss.NewStyle().Foreground(styles.ColorAccent).Render(fmt.Sprintf("%s %s", frame, op))
+	return opsRenderSpinnerDot(m.spinnerFrame, op)
 }
 
 func (m *QueueOpsModel) firstEnabledAction() int {
-	for i, act := range m.actions {
-		if act.enabled {
-			return i
-		}
-	}
-	return 0
+	return opsFirstEnabledAction(m.actions)
 }
 
 func (m *QueueOpsModel) isContainerRunning(container string) bool {
-	statuses, err := docker.Status(m.profile.Name, m.envName)
-	if err != nil {
-		return false
-	}
-	for _, s := range statuses {
-		if s.Name == container && s.State == "running" {
-			return true
-		}
-	}
-	return false
+	return opsIsContainerRunning(m.profile.Name, m.envName, container)
 }
 
 func (m *QueueOpsModel) launchDockerCmd() tea.Cmd {
-	return func() tea.Msg {
-		if _, err := exec.LookPath("colima"); err == nil {
-			_ = exec.Command("colima", "start").Run()
-		} else {
-			_ = exec.Command("open", "-a", "Docker").Run()
-		}
-		time.Sleep(2 * time.Second)
-		return daemonStartedMsg{available: docker.DaemonAvailable()}
-	}
+	return opsLaunchDockerCmd()
 }
 
 // cleanActiveMQOutput strips JVM startup noise and internal advisory queues

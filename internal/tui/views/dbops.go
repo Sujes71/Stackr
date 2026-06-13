@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -39,21 +38,7 @@ type dbOpsDoneMsg struct {
 	err    error
 }
 
-// serviceStartedMsg is sent when docker.UpService completes for the prompt flow.
-type serviceStartedMsg struct {
-	err error
-}
-
-// daemonStartedMsg is sent when Docker daemon launch completes.
-type daemonStartedMsg struct {
-	available bool
-}
-
-// readyRetryMsg is sent on each retry while waiting for the container to be ready.
-type readyRetryMsg struct {
-	label string
-	retry int
-}
+// serviceStartedMsg, daemonStartedMsg, readyRetryMsg are defined in ops_common.go.
 
 // ── Model ─────────────────────────────────────────────────────────────────────
 
@@ -129,29 +114,11 @@ type DBOpsModel struct {
 	pendingCustomCmd   string
 }
 
-// actionItem describes a single action in the actions screen.
-type actionItem struct {
-	label          string
-	group          string // panel group label: "Export", "Import", "Functions"
-	enabled        bool
-	disabledReason string
-	execute        tea.Cmd
-	isCustom       bool
-	isAddAction    bool
-	customIdx      int // index into se.CustomActions (valid when isCustom)
-}
+// actionItem is defined in ops_common.go.
 
 // ── Key bindings ──────────────────────────────────────────────────────────────
 
-var (
-	dbOpsUp     = key.NewBinding(key.WithKeys("up"))
-	dbOpsDown   = key.NewBinding(key.WithKeys("down"))
-	dbOpsEnter  = key.NewBinding(key.WithKeys("enter"))
-	dbOpsBack   = key.NewBinding(key.WithKeys("esc"))
-	dbOpsAdd    = key.NewBinding(key.WithKeys("a"))
-	dbOpsEdit   = key.NewBinding(key.WithKeys("e"))
-	dbOpsDelete = key.NewBinding(key.WithKeys("d"))
-)
+// Key bindings are defined in ops_common.go (opsKeyUp, opsKeyDown, etc.).
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
@@ -213,33 +180,11 @@ func (m *DBOpsModel) IsBusy() bool {
 // ── Environment / Service helpers ─────────────────────────────────────────────
 
 func (m *DBOpsModel) currentEnv() *config.Environment {
-	for i := range m.profile.Environments {
-		if m.profile.Environments[i].Name == m.envName {
-			return &m.profile.Environments[i]
-		}
-	}
-	return nil
+	return opsCurrentEnv(m.profile, m.envName)
 }
 
 func (m *DBOpsModel) currentService() *config.Service {
-	env := m.currentEnv()
-	if env == nil {
-		return nil
-	}
-	if m.serviceIdx >= 0 && m.serviceIdx < len(env.Services) {
-		svc := &env.Services[m.serviceIdx]
-		if svc.Name == m.serviceName || svc.ComposeName() == m.serviceName {
-			return svc
-		}
-	}
-	for i := range env.Services {
-		svc := &env.Services[i]
-		if svc.Name == m.serviceName || svc.ComposeName() == m.serviceName {
-			m.serviceIdx = i
-			return svc
-		}
-	}
-	return nil
+	return opsCurrentService(m.currentEnv(), m.serviceName, &m.serviceIdx)
 }
 
 func (m *DBOpsModel) dumpDir(se *config.SyncEnv) string {
@@ -328,7 +273,7 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case key.Matches(msg, dbOpsBack):
+		case key.Matches(msg, opsKeyBack):
 			m.deleteArmed = false
 			return m, func() tea.Msg {
 				return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name, EnvName: m.envName, ServiceName: m.serviceName}
@@ -343,13 +288,13 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch {
 
-		case key.Matches(msg, dbOpsUp) && m.listCursor > 0 && !m.deleteArmed:
+		case key.Matches(msg, opsKeyUp) && m.listCursor > 0 && !m.deleteArmed:
 			m.listCursor--
 
-		case key.Matches(msg, dbOpsDown) && m.listCursor < len(syncEnvs)-1 && !m.deleteArmed:
+		case key.Matches(msg, opsKeyDown) && m.listCursor < len(syncEnvs)-1 && !m.deleteArmed:
 			m.listCursor++
 
-		case key.Matches(msg, dbOpsEnter):
+		case key.Matches(msg, opsKeyEnter):
 			if len(syncEnvs) > 0 {
 				se := &syncEnvs[m.listCursor]
 				m.selectedEnv = se.Name
@@ -359,12 +304,12 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.deleteArmed = false
 			}
 
-		case key.Matches(msg, dbOpsAdd):
+		case key.Matches(msg, opsKeyAdd):
 			m.deleteArmed = false
 			m.wizardModel = NewAddSyncEnv(m.cfg, m.profile, m.envName, m.serviceName, true, nil)
 			m.screen = dbScreenWizard
 
-		case key.Matches(msg, dbOpsEdit):
+		case key.Matches(msg, opsKeyEdit):
 			if len(syncEnvs) > 0 {
 				se := &syncEnvs[m.listCursor]
 				m.wizardModel = NewAddSyncEnv(m.cfg, m.profile, m.envName, m.serviceName, false, se)
@@ -372,7 +317,7 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.deleteArmed = false
 			}
 
-		case key.Matches(msg, dbOpsDelete):
+		case key.Matches(msg, opsKeyDelete):
 			if len(syncEnvs) == 0 {
 				break
 			}
@@ -598,7 +543,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case key.Matches(msg, dbOpsBack):
+		case key.Matches(msg, opsKeyBack):
 			if m.promptStartDaemon || len(m.pendingOps) > 0 {
 				if m.promptStartDaemon {
 					m.promptStartDaemon = false
@@ -612,7 +557,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selectedEnv = ""
 			m.actions = nil
 
-		case key.Matches(msg, dbOpsUp) && len(m.pendingOps) == 0 && !m.promptStartService:
+		case key.Matches(msg, opsKeyUp) && len(m.pendingOps) == 0 && !m.promptStartService:
 			for i := m.actionCursor - 1; i >= 0; i-- {
 				if m.actions[i].enabled {
 					m.actionCursor = i
@@ -620,7 +565,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, dbOpsDown) && len(m.pendingOps) == 0 && !m.promptStartService:
+		case key.Matches(msg, opsKeyDown) && len(m.pendingOps) == 0 && !m.promptStartService:
 			for i := m.actionCursor + 1; i < len(m.actions); i++ {
 				if m.actions[i].enabled {
 					m.actionCursor = i
@@ -628,7 +573,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, dbOpsEnter) && len(m.pendingOps) == 0 && !m.promptStartService:
+		case key.Matches(msg, opsKeyEnter) && len(m.pendingOps) == 0 && !m.promptStartService:
 			m.deleteActionArmed = false
 			if m.actionCursor < len(m.actions) {
 				act := m.actions[m.actionCursor]
@@ -676,7 +621,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, dbOpsEdit) && len(m.pendingOps) == 0 && !m.promptStartService:
+		case key.Matches(msg, opsKeyEdit) && len(m.pendingOps) == 0 && !m.promptStartService:
 			m.deleteActionArmed = false
 			if m.actionCursor < len(m.actions) {
 				act := m.actions[m.actionCursor]
@@ -698,7 +643,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case key.Matches(msg, dbOpsDelete) && len(m.pendingOps) == 0 && !m.promptStartService:
+		case key.Matches(msg, opsKeyDelete) && len(m.pendingOps) == 0 && !m.promptStartService:
 			if m.actionCursor < len(m.actions) {
 				act := m.actions[m.actionCursor]
 				if act.isCustom {
@@ -880,9 +825,9 @@ func (m *DBOpsModel) updateParamPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch {
-	case key.Matches(keyMsg, dbOpsBack):
+	case key.Matches(keyMsg, opsKeyBack):
 		m.promptingParams = false
-	case key.Matches(keyMsg, dbOpsEnter):
+	case key.Matches(keyMsg, opsKeyEnter):
 		if m.paramInput.Value() != "" {
 			paramName := m.paramsToPrompt[m.currentParamIdx]
 			m.paramValues[paramName] = m.paramInput.Value()
@@ -908,7 +853,7 @@ func (m *DBOpsModel) updateCustomConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case key.Matches(msg, dbOpsEnter):
+		case key.Matches(msg, opsKeyEnter):
 			container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
 			if !m.isContainerRunning(container) {
 				m.confirmCustomAction = false
@@ -928,7 +873,7 @@ func (m *DBOpsModel) updateCustomConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.pendingOps[label] = "running"
 			return m, tea.Batch(m.customActionExecCmd(m.pendingCustomCmd), spinnerCmd())
-		case key.Matches(msg, dbOpsBack):
+		case key.Matches(msg, opsKeyBack):
 			m.confirmCustomAction = false
 		default:
 			m.confirmCustomAction = false
@@ -943,7 +888,7 @@ func (m *DBOpsModel) updateCoreConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case key.Matches(msg, dbOpsEnter):
+		case key.Matches(msg, opsKeyEnter):
 			m.confirmAction = false
 			act := m.actions[m.actionCursor]
 			if act.group == "Import" || act.group == "Export" || strings.Contains(act.label, "Truncate") {
@@ -1018,7 +963,7 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch {
-	case key.Matches(keyMsg, dbOpsBack):
+	case key.Matches(keyMsg, opsKeyBack):
 		if m.customFormFocus == 1 && m.commandEditMode {
 			// First esc on command → exit edit mode
 			m.commandEditMode = false
@@ -1026,7 +971,7 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.addingCustomAction = false
 
-	case key.Matches(keyMsg, dbOpsUp):
+	case key.Matches(keyMsg, opsKeyUp):
 		if m.customFormFocus == 1 && m.commandEditMode {
 			if m.customCmdTextarea.Line() > 0 {
 				break // textarea handles cursor up within text
@@ -1037,7 +982,7 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.commandEditMode = true // name field is always editable
 		}
 
-	case key.Matches(keyMsg, dbOpsDown):
+	case key.Matches(keyMsg, opsKeyDown):
 		if m.customFormFocus == 0 {
 			// Going from name to command → start in preview mode
 			m.customFormFocus = 1
@@ -1051,7 +996,7 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case key.Matches(keyMsg, dbOpsEnter):
+	case key.Matches(keyMsg, opsKeyEnter):
 		if m.customFormFocus == 1 {
 			if !m.commandEditMode {
 				// Enter on preview → enter edit mode
@@ -1165,28 +1110,7 @@ func (m *DBOpsModel) customActionExecCmd(cmd string) tea.Cmd {
 
 // ── Param extraction ──────────────────────────────────────────────────────────
 
-var paramRe = regexp.MustCompile(`\{(\w+)\}`)
-
-// autoVars are built-in placeholders replaced automatically (not prompted).
-var autoVarNames = map[string]bool{
-	"host": true, "user": true, "password": true,
-	"database": true, "db": true, "env": true,
-	"local_user": true, "local_pass": true, "local_db": true,
-}
-
-func extractParams(cmd string) []string {
-	matches := paramRe.FindAllStringSubmatch(cmd, -1)
-	var params []string
-	seen := map[string]bool{}
-	for _, m := range matches {
-		name := m[1]
-		if !seen[name] && !autoVarNames[name] {
-			seen[name] = true
-			params = append(params, name)
-		}
-	}
-	return params
-}
+// paramRe, autoVarNames, and extractParams are defined in ops_common.go.
 
 // ── View: Actions screen ──────────────────────────────────────────────────────
 
@@ -1743,28 +1667,11 @@ func (m *DBOpsModel) truncateTables(se *config.SyncEnv) tea.Cmd {
 // isContainerRunning checks if the given container is running via docker status.
 // launchDockerCmd tries to start the Docker daemon via Colima or Docker Desktop.
 func (m *DBOpsModel) launchDockerCmd() tea.Cmd {
-	return func() tea.Msg {
-		if _, err := exec.LookPath("colima"); err == nil {
-			_ = exec.Command("colima", "start").Run()
-		} else {
-			_ = exec.Command("open", "-a", "Docker").Run()
-		}
-		time.Sleep(2 * time.Second)
-		return daemonStartedMsg{available: docker.DaemonAvailable()}
-	}
+	return opsLaunchDockerCmd()
 }
 
 func (m *DBOpsModel) isContainerRunning(container string) bool {
-	statuses, err := docker.Status(m.profile.Name, m.envName)
-	if err != nil {
-		return false
-	}
-	for _, s := range statuses {
-		if s.Name == container && s.State == "running" {
-			return true
-		}
-	}
-	return false
+	return opsIsContainerRunning(m.profile.Name, m.envName, container)
 }
 
 // fetchMSSQLPort reads the MSSQL container's mapped port from docker inspect.
@@ -1900,76 +1807,18 @@ func dbOpsWindow(total, cursor, avail int) itemWindow {
 }
 
 func (m *DBOpsModel) renderSpinnerDot(op string) string {
-	frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
-	return lipgloss.NewStyle().Foreground(styles.ColorAccent).Render(fmt.Sprintf("%s %s", frame, op))
+	return opsRenderSpinnerDot(m.spinnerFrame, op)
 }
 
 func ts() string {
 	return time.Now().Format("20060102-150405")
 }
 
-// disabledIf returns reason when cond is true, or empty string when false.
-func disabledIf(cond bool, reason string) string {
-	if cond {
-		return reason
-	}
-	return ""
-}
-
-// wordWrap splits s into lines of at most width characters,
-// breaking at word boundaries. Words longer than width are placed
-// on their own line without breaking.
-func wordWrap(s string, width int) []string {
-	var lines []string
-	for _, para := range strings.Split(s, "\n") {
-		if len(para) <= width {
-			lines = append(lines, para)
-			continue
-		}
-		var current string
-		for _, word := range strings.Fields(para) {
-			if current == "" {
-				current = word
-			} else if len(current)+1+len(word) <= width {
-				current += " " + word
-			} else {
-				lines = append(lines, current)
-				current = word
-			}
-		}
-		if current != "" {
-			lines = append(lines, current)
-		}
-	}
-	return lines
-}
-
-// formatErrorMsg formats an error string with a line break between the action
-// prefix and the underlying error detail, word-wrapping the detail at ~80 chars.
-func formatErrorMsg(err string) string {
-	idx := strings.Index(err, ": ")
-	if idx == -1 {
-		return styles.StyleError.Render("\u2717 " + err)
-	}
-	prefix := err[:idx]
-	detail := err[idx+2:]
-	wrapped := wordWrap(detail, 80)
-	var b strings.Builder
-	b.WriteString("\u2717 " + prefix + ":\n")
-	for _, line := range wrapped {
-		b.WriteString("  " + line + "\n")
-	}
-	return styles.StyleError.Render(strings.TrimSuffix(b.String(), "\n"))
-}
+// disabledIf, wordWrap, and formatErrorMsg are defined in ops_common.go.
 
 // firstEnabledAction returns the index of the first enabled action, or 0 if all are disabled.
 func (m *DBOpsModel) firstEnabledAction() int {
-	for i, act := range m.actions {
-		if act.enabled {
-			return i
-		}
-	}
-	return 0
+	return opsFirstEnabledAction(m.actions)
 }
 
 // hasImportPrefix returns true when label matches any "Import" action.
