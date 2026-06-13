@@ -765,9 +765,12 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.actions = m.buildActionsList(se)
 				for pendingLabel, state := range m.pendingOps {
 					if state == "starting" {
-						return m, func() tea.Msg {
-							return readyRetryMsg{label: pendingLabel, retry: 0}
-						}
+						return m, tea.Batch(
+							func() tea.Msg {
+								return readyRetryMsg{label: pendingLabel, retry: 0}
+							},
+							spinnerCmd(),
+						)
 					}
 				}
 			}
@@ -806,10 +809,13 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastResult = formatErrorMsg("container not ready after 30s")
 			return m, nil
 		}
-		return m, func() tea.Msg {
-			time.Sleep(1 * time.Second)
-			return readyRetryMsg{label: msg.label, retry: msg.retry + 1}
-		}
+		return m, tea.Batch(
+			func() tea.Msg {
+				time.Sleep(1 * time.Second)
+				return readyRetryMsg{label: msg.label, retry: msg.retry + 1}
+			},
+			spinnerCmd(),
+		)
 	}
 	return m, nil
 }

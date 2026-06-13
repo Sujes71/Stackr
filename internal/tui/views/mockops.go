@@ -1016,9 +1016,12 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Service started — poll for readiness then execute pending action
 		for label, state := range m.pendingOps {
 			if state == "starting" {
-				return m, func() tea.Msg {
-					return readyRetryMsg{label: label, retry: 0}
-				}
+				return m, tea.Batch(
+					func() tea.Msg {
+						return readyRetryMsg{label: label, retry: 0}
+					},
+					spinnerCmd(),
+				)
 			}
 		}
 		m.pendingOps = make(map[string]string)
@@ -1062,10 +1065,13 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingStartLabel = ""
 			return m, spinnerCmd()
 		}
-		return m, func() tea.Msg {
-			time.Sleep(1 * time.Second)
-			return readyRetryMsg{label: msg.label, retry: msg.retry + 1}
-		}
+		return m, tea.Batch(
+			func() tea.Msg {
+				time.Sleep(1 * time.Second)
+				return readyRetryMsg{label: msg.label, retry: msg.retry + 1}
+			},
+			spinnerCmd(),
+		)
 	}
 
 	// Spinner tick — advance frame
