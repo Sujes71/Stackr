@@ -247,11 +247,22 @@ func (m *QueueOpsModel) SetSize(w, h int) {
 	} else {
 		m.resultViewport.Height = max(8, h-10)
 	}
+	// Recalculate textarea height if param prompting with a textarea param
+	if m.promptingParams && m.currentParamIdx < len(m.paramsToPrompt) {
+		if m.isTextareaParam(m.paramsToPrompt[m.currentParamIdx]) {
+			m.setMessageTextareaHeight()
+		}
+	}
 }
 
 // ── Update dispatch ───────────────────────────────────────────────────────────
 
 func (m *QueueOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if wsMsg, ok := msg.(tea.WindowSizeMsg); ok {
+		m.SetSize(wsMsg.Width, wsMsg.Height-5)
+		return m, nil
+	}
+
 	if _, ok := msg.(SpinnerTickMsg); ok {
 		if len(m.pendingOps) > 0 {
 			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
@@ -399,14 +410,53 @@ func (m *QueueOpsModel) viewSyncEnvList() string {
 
 	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 
-	// Virtual "(local)" entry at index 0
-	localLine := fmt.Sprintf("    %s  %s  %s", "(local)", m.currentQueueType(), "(docker exec)")
-	if m.listCursor == 0 {
-		b.WriteString(selStyle.Render("  > " + localLine))
-	} else {
-		b.WriteString("    " + localLine)
+	// Build all items as strings for windowing
+	totalItems := 1 + len(queueSyncEnvs) // local + remote envs
+	overhead := 14                        // title, subtitle, help, margins
+	if m.deleteArmed {
+		overhead++
 	}
-	b.WriteString("\n")
+	if m.lastResult != "" {
+		overhead += 2
+	}
+	win := m.queueOpsWindow(totalItems, m.listCursor, 1, overhead)
+
+	if win.hasAbove {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
+		b.WriteString("\n")
+	}
+
+	for idx := win.start; idx < win.end; idx++ {
+		if idx == 0 {
+			// Virtual "(local)" entry
+			localLine := fmt.Sprintf("    %s  %s  %s", "(local)", m.currentQueueType(), "(docker exec)")
+			if m.listCursor == 0 {
+				b.WriteString(selStyle.Render("  > " + localLine))
+			} else {
+				b.WriteString("    " + localLine)
+			}
+			b.WriteString("\n")
+		} else {
+			qse := queueSyncEnvs[idx-1]
+			prefix := "    "
+			if idx == m.listCursor {
+				prefix = "  > "
+			}
+			line := fmt.Sprintf("%s%s  %s  %s:%s",
+				prefix, qse.Name, qse.QueueType, qse.Host, qse.Port)
+			if idx == m.listCursor {
+				b.WriteString(selStyle.Render(line))
+			} else {
+				b.WriteString(line)
+			}
+			b.WriteString("\n")
+		}
+	}
+
+	if win.hasBelow {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", totalItems-win.end)))
+		b.WriteString("\n")
+	}
 
 	if len(queueSyncEnvs) == 0 {
 		b.WriteString("\n")
@@ -414,22 +464,6 @@ func (m *QueueOpsModel) viewSyncEnvList() string {
 		b.WriteString("\n")
 		b.WriteString(styles.StyleSubtitle.Render("  Press a to add one."))
 		b.WriteString("\n")
-	} else {
-		for i, qse := range queueSyncEnvs {
-			cursorIdx := i + 1 // offset by local entry
-			prefix := "    "
-			if cursorIdx == m.listCursor {
-				prefix = "  > "
-			}
-			line := fmt.Sprintf("%s%s  %s  %s:%s",
-				prefix, qse.Name, qse.QueueType, qse.Host, qse.Port)
-			if cursorIdx == m.listCursor {
-				b.WriteString(selStyle.Render(line))
-			} else {
-				b.WriteString(line)
-			}
-			b.WriteString("\n")
-		}
 	}
 
 	if m.deleteArmed {
@@ -504,21 +538,19 @@ func (m *QueueOpsModel) buildActionsList(qse *config.QueueSyncEnv) []actionItem 
 	container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
 
 	// helper: return the right exec function
-	qExec := func(program string, args ...string) func() tea.Cmd {
-		return func() tea.Cmd {
-			return func() tea.Msg {
-				var out string
-				var err error
-				if qse != nil {
-					out, err = docker.QueueExecRemote(qse, program, args...)
-				} else {
-					out, err = docker.QueueExecLocal(container, program, args...)
-				}
-				if err != nil {
-					return queueOpsDoneMsg{err: err}
-				}
-				return queueOpsDoneMsg{result: out}
+	qExec := func(program string, args ...string) tea.Cmd {
+		return func() tea.Msg {
+			var out string
+			var err error
+			if qse != nil {
+				out, err = docker.QueueExecRemote(qse, program, args...)
+			} else {
+				out, err = docker.QueueExecLocal(container, program, args...)
 			}
+			if err != nil {
+				return queueOpsDoneMsg{err: err}
+			}
+			return queueOpsDoneMsg{result: out}
 		}
 	}
 
@@ -613,7 +645,7 @@ func (m *QueueOpsModel) buildActionsList(qse *config.QueueSyncEnv) []actionItem 
 		// reliably find destination MBeans inside the container — --jmxurl
 		// via RMI/JMX remote works consistently.
 		// The flags MUST come AFTER the subcommand (CLI syntax: task [task-options]).
-		jmxExec := func(args ...string) func() tea.Cmd {
+		jmxExec := func(args ...string) tea.Cmd {
 			jmxURL := "service:jmx:rmi:///jndi/rmi://localhost:1099/jmxrmi"
 			if qse != nil {
 				jmxURL = "service:jmx:rmi:///jndi/rmi://" + qse.Host + ":1099/jmxrmi"
@@ -1051,7 +1083,7 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for _, act := range m.actions {
 				if act.label == msg.label && act.enabled && act.execute != nil {
 					m.pendingOps[msg.label] = "running"
-					return m, tea.Batch(act.execute(), spinnerCmd())
+					return m, tea.Batch(act.execute, spinnerCmd())
 				}
 			}
 			m.pendingOps = make(map[string]string)
@@ -1339,7 +1371,7 @@ func (m *QueueOpsModel) updateCoreConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Build execute closure for pre-defined actions with params
 			var execCmd tea.Cmd
 			if act.execute != nil {
-				execCmd = act.execute()
+				execCmd = act.execute
 			} else if params := m.actionParams(act); len(params) > 0 {
 				// Build dynamic execution for param-based actions
 				execCmd = m.buildParamActionCmd(act)
@@ -1534,6 +1566,40 @@ INNEREOF`,
 
 // ── Custom form update ────────────────────────────────────────────────────────
 
+// saveCustomForm validates and persists the custom action form (add or edit).
+func (m *QueueOpsModel) saveCustomForm() (tea.Model, tea.Cmd) {
+	if m.customNameInput.Value() == "" || m.customCmdInput.Value() == "" {
+		return m, nil
+	}
+	svc := m.currentService()
+	if svc == nil {
+		return m, nil
+	}
+	qse := svc.FindQueueSyncEnv(m.selectedEnv)
+	if qse == nil {
+		return m, nil
+	}
+	name := strings.TrimSpace(m.customNameInput.Value())
+	cmd := strings.TrimSpace(m.customCmdInput.Value())
+	if m.editingCustomIdx >= 0 && m.editingCustomIdx < len(qse.CustomActions) {
+		qse.CustomActions[m.editingCustomIdx].Name = name
+		qse.CustomActions[m.editingCustomIdx].Command = cmd
+	} else {
+		qse.CustomActions = append(qse.CustomActions, config.CustomAction{Name: name, Command: cmd})
+	}
+	m.profile.UpdatedAt = time.Now()
+	if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+		m.lastResult = formatErrorMsg(err.Error())
+		return m, nil
+	}
+	m.addingCustomAction = false
+	m.actions = m.buildActionsList(qse)
+	if m.actionCursor >= len(m.actions) {
+		m.actionCursor = len(m.actions) - 1
+	}
+	return m, nil
+}
+
 func (m *QueueOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	keyMsg, isKey := msg.(tea.KeyMsg)
 	if !isKey {
@@ -1561,35 +1627,10 @@ func (m *QueueOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(keyMsg, queueOpsEnter):
-		if m.customNameInput.Value() != "" && m.customCmdInput.Value() != "" {
-			svc := m.currentService()
-			if svc == nil {
-				return m, nil
-			}
-			qse := svc.FindQueueSyncEnv(m.selectedEnv)
-			if qse == nil {
-				return m, nil
-			}
-			name := strings.TrimSpace(m.customNameInput.Value())
-			cmd := strings.TrimSpace(m.customCmdInput.Value())
-			if m.editingCustomIdx >= 0 && m.editingCustomIdx < len(qse.CustomActions) {
-				qse.CustomActions[m.editingCustomIdx].Name = name
-				qse.CustomActions[m.editingCustomIdx].Command = cmd
-			} else {
-				qse.CustomActions = append(qse.CustomActions, config.CustomAction{Name: name, Command: cmd})
-			}
-			m.profile.UpdatedAt = time.Now()
-			if err := m.cfg.UpdateProfile(*m.profile); err != nil {
-				m.lastResult = formatErrorMsg(err.Error())
-				return m, nil
-			}
-			m.addingCustomAction = false
-			m.actions = m.buildActionsList(qse)
-			if m.actionCursor >= len(m.actions) {
-				m.actionCursor = len(m.actions) - 1
-			}
-			return m, nil
-		}
+		return m.saveCustomForm()
+
+	case keyMsg.String() == "ctrl+s":
+		return m.saveCustomForm()
 
 	default:
 		var cmd tea.Cmd
@@ -1777,8 +1818,31 @@ func (m *QueueOpsModel) viewActions() string {
 		Foreground(styles.ColorPrimary).
 		Bold(true)
 
+	// Windowing for actions list
+	totalActions := len(m.actions)
+	overhead := 12 // title, subtitle, help, margins
+	if m.lastResult != "" {
+		overhead += 2
+	}
+	if m.deleteActionArmed {
+		overhead++
+	}
+	if m.promptStartDaemon || m.promptStartService {
+		overhead += 3
+	}
+	if m.confirmAction || m.confirmCustomAction {
+		overhead += 2
+	}
+	win := m.queueOpsWindow(totalActions, m.actionCursor, 2, overhead)
+
+	if win.hasAbove {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
+		b.WriteString("\n")
+	}
+
 	currentGroup := ""
-	for i, act := range m.actions {
+	for i := win.start; i < win.end; i++ {
+		act := m.actions[i]
 		if act.group != currentGroup {
 			currentGroup = act.group
 			if i > 0 {
@@ -1822,6 +1886,11 @@ func (m *QueueOpsModel) viewActions() string {
 		} else {
 			b.WriteString("      " + act.label + "\n")
 		}
+	}
+
+	if win.hasBelow {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", totalActions-win.end)))
+		b.WriteString("\n")
 	}
 
 	b.WriteString("\n")
@@ -1903,6 +1972,7 @@ func (m *QueueOpsModel) viewCustomForm() string {
 		styles.HelpItem("esc", "cancel"),
 		styles.HelpItem("↑ ↓", "field"),
 		styles.HelpItem("↵", "save"),
+		styles.HelpItem("ctrl+s", "save"),
 	))
 	return b.String()
 }
@@ -1991,6 +2061,42 @@ func (m *QueueOpsModel) viewParamPrompt() string {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// queueOpsWindow calculates the visible item range given total items, cursor
+// position, terminal height, and per-item height estimate.
+func (m *QueueOpsModel) queueOpsWindow(total, cursor, itemHeight, overhead int) itemWindow {
+	w := itemWindow{start: 0, end: total}
+	if total == 0 || m.height <= 0 {
+		return w
+	}
+	avail := m.height - overhead
+	if avail <= 0 {
+		return itemWindow{start: cursor, end: min(cursor+1, total), hasAbove: cursor > 0, hasBelow: cursor+1 < total}
+	}
+	fit := avail / itemHeight
+	if fit <= 0 {
+		fit = 1
+	}
+	if total <= fit {
+		return w
+	}
+	half := fit / 2
+	start := cursor - half
+	if start < 0 {
+		start = 0
+	}
+	end := start + fit
+	if end > total {
+		end = total
+		start = total - fit
+	}
+	return itemWindow{
+		start:    start,
+		end:      end,
+		hasAbove: start > 0,
+		hasBelow: end < total,
+	}
+}
 
 func (m *QueueOpsModel) renderSpinnerDot(op string) string {
 	frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]

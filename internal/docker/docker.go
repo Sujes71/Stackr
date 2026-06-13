@@ -490,7 +490,9 @@ func QueueExecLocal(containerName, program string, args ...string) (string, erro
 		cmdArgs = append(cmdArgs, program)
 		cmdArgs = append(cmdArgs, args...)
 	}
-	cmd := exec.Command("docker", cmdArgs...)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", cmdArgs...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%s: %s: %w", program, strings.TrimSpace(string(out)), err)
@@ -525,7 +527,9 @@ func detectActiveMQJmxPort(containerName string) string {
 func QueueExecRemote(qse *config.QueueSyncEnv, program string, args ...string) (string, error) {
 	image := QueueToolImage(qse)
 	cmdArgs := append([]string{"run", "--rm", image, program}, args...)
-	cmd := exec.Command("docker", cmdArgs...)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", cmdArgs...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%s: %s: %w", program, strings.TrimSpace(string(out)), err)

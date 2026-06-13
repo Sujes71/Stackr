@@ -1,6 +1,7 @@
 package views
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -90,12 +91,14 @@ type DBOpsModel struct {
 	// Running state — per-action inline spinners
 	pendingOps   map[string]string // action label → "starting" | "running"
 	lastResult string
-	doneOp     string // briefly set to completed action label for checkmark feedback
+	doneOp     string    // briefly set to completed action label for checkmark feedback
+	doneOpAt   time.Time // timestamp of when doneOp was set
 
 	// Spinner
 	spinnerFrame int
 
 	// Viewport
+	width  int
 	height int
 
 	// Wizard (delegated)
@@ -132,7 +135,7 @@ type actionItem struct {
 	group          string // panel group label: "Export", "Import", "Functions"
 	enabled        bool
 	disabledReason string
-	execute        func() tea.Cmd
+	execute        tea.Cmd
 	isCustom       bool
 	isAddAction    bool
 	customIdx      int // index into se.CustomActions (valid when isCustom)
@@ -250,7 +253,11 @@ func (m *DBOpsModel) Init() tea.Cmd {
 }
 
 func (m *DBOpsModel) SetSize(w, h int) {
+	m.width = max(0, w)
 	m.height = max(0, h)
+	if m.addingCustomAction {
+		m.setCustomCmdTextareaHeight()
+	}
 }
 
 // setCustomCmdTextareaHeight auto-sizes the SQL command textarea to fit content.
@@ -278,12 +285,29 @@ func (m *DBOpsModel) setCustomCmdTextareaHeight() {
 // ── Update dispatch ───────────────────────────────────────────────────────────
 
 func (m *DBOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if msg, ok := msg.(tea.WindowSizeMsg); ok {
+		m.SetSize(msg.Width, msg.Height-5)
+		return m, nil
+	}
+
 	if _, ok := msg.(SpinnerTickMsg); ok {
 		if len(m.pendingOps) > 0 {
 			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
 			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 				return SpinnerTickMsg{}
 			})
+		}
+		// Keep spinner running while doneOp is active to trigger re-renders
+		if m.doneOp != "" {
+			if time.Since(m.doneOpAt) >= 5*time.Second {
+				m.doneOp = ""
+				m.doneOpAt = time.Time{}
+			} else {
+				m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
+				return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+					return SpinnerTickMsg{}
+				})
+			}
 		}
 		return m, nil
 	}
@@ -370,16 +394,13 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		default:
-			// Any other key disarms delete
-			if m.deleteArmed {
-				m.deleteArmed = false
-			}
+	default:
+		// Any other key disarms delete
+		if m.deleteArmed {
+			m.deleteArmed = false
 		}
+	}
 
-	case ClearActionMsg:
-		m.lastResult = ""
-		m.doneOp = ""
 	}
 
 	return m, nil
@@ -414,13 +435,32 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 		b.WriteString("\n")
 	} else {
 		selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
-		for i, se := range syncEnvs {
+		// Window the list: overhead = title(3) + subtitle(2) + deleteArmed(2) + lastResult(2) + help(4) = ~13
+		overhead := 13
+		if m.deleteArmed {
+			overhead += 0 // already counted
+		}
+		if m.lastResult == "" {
+			overhead -= 2
+		}
+		avail := m.height - overhead
+		if avail < 1 {
+			avail = 1
+		}
+		total := len(syncEnvs)
+		win := dbOpsWindow(total, m.listCursor, avail)
+		if win.hasAbove {
+			b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
+			b.WriteString("\n")
+		}
+		for i := win.start; i < win.end; i++ {
+			se := &syncEnvs[i]
 			prefix := "    "
 			if i == m.listCursor {
 				prefix = "  > "
 			}
 			dumpIndicator := ""
-			if m.hasDumpsFor(&se) {
+			if m.hasDumpsFor(se) {
 				dumpIndicator = styles.StyleSubtitle.Render("  [dump]")
 			}
 			line := fmt.Sprintf("%s%s  %s  %s:%s%s",
@@ -430,6 +470,10 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 			} else {
 				b.WriteString(line)
 			}
+			b.WriteString("\n")
+		}
+		if win.hasBelow {
+			b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", total-win.end)))
 			b.WriteString("\n")
 		}
 	}
@@ -720,11 +764,8 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Show brief checkmark feedback
 		m.doneOp = completedLabel
-		return m, ClearActionAfter(2 * time.Second)
-
-	case ClearActionMsg:
-		m.lastResult = ""
-		m.doneOp = ""
+		m.doneOpAt = time.Now()
+		return m, spinnerCmd()
 
 	case daemonStartedMsg:
 		m.daemonStarting = false
@@ -808,7 +849,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if act.isCustom {
 						return m, tea.Batch(m.customActionExecCmd(m.pendingCustomCmd), spinnerCmd())
 					}
-					return m, tea.Batch(act.execute(), spinnerCmd())
+					return m, tea.Batch(act.execute, spinnerCmd())
 				}
 			}
 			m.pendingOps = make(map[string]string)
@@ -919,7 +960,7 @@ func (m *DBOpsModel) updateCoreConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.pendingOps[act.label] = "running"
 			m.lastResult = ""
-			return m, tea.Batch(act.execute(), spinnerCmd())
+			return m, tea.Batch(act.execute, spinnerCmd())
 		default:
 			m.confirmAction = false
 		}
@@ -1111,7 +1152,9 @@ func (m *DBOpsModel) customActionExecCmd(cmd string) tea.Cmd {
 			}
 		}
 
-		dockerCmd := exec.Command("docker", "exec", "-i", container, "sh", "-c", shellCmd)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		dockerCmd := exec.CommandContext(ctx, "docker", "exec", "-i", container, "sh", "-c", shellCmd)
 		out, err := dockerCmd.CombinedOutput()
 		if err != nil {
 			return dbOpsDoneMsg{err: fmt.Errorf("custom action: %s: %w", strings.TrimSpace(string(out)), err)}
@@ -1203,13 +1246,41 @@ func (m *DBOpsModel) viewActions() string {
 		Foreground(styles.ColorPrimary).
 		Bold(true)
 
+	// Window the actions list: overhead = title(3) + connInfo(2) + password(1) +
+	// trailing(8: blank, lastResult, deleteArmed, prompts, help) = ~16
+	overhead := 16
+	avail := m.height - overhead
+	if avail < 1 {
+		avail = 1
+	}
+	total := len(m.actions)
+	// Estimate ~2 lines per action (some have disabled reason, group headers)
+	itemHeight := 2
+	fit := avail / itemHeight
+	if fit < 1 {
+		fit = 1
+	}
+	win := dbOpsWindow(total, m.actionCursor, fit)
+
+	if win.hasAbove {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
+		b.WriteString("\n")
+	}
+
+	// Initialize currentGroup from the item before the window so group headers render correctly
 	currentGroup := ""
-	for i, act := range m.actions {
+	if win.start > 0 {
+		currentGroup = m.actions[win.start-1].group
+	}
+	firstVisibleGroup := true
+	for i := win.start; i < win.end; i++ {
+		act := m.actions[i]
 		if act.group != currentGroup {
 			currentGroup = act.group
-			if i > 0 {
+			if !firstVisibleGroup {
 				b.WriteString("\n")
 			}
+			firstVisibleGroup = false
 			b.WriteString("  " + groupHeaderStyle.Render(currentGroup))
 			switch currentGroup {
 			case "Export":
@@ -1234,7 +1305,7 @@ func (m *DBOpsModel) viewActions() string {
 			b.WriteString("    " + m.renderSpinnerDot(state) + "\n")
 			continue
 		}
-		if m.doneOp == act.label {
+		if m.doneOp == act.label && time.Since(m.doneOpAt) < 5*time.Second {
 			b.WriteString("    " + styles.StyleSuccess.Render("✓") + " " + act.label + "\n")
 			continue
 		}
@@ -1254,6 +1325,11 @@ func (m *DBOpsModel) viewActions() string {
 		} else {
 			b.WriteString("      " + act.label + "\n")
 		}
+	}
+
+	if win.hasBelow {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", total-win.end)))
+		b.WriteString("\n")
 	}
 
 	b.WriteString("\n")
@@ -1424,7 +1500,7 @@ func (m *DBOpsModel) viewParamPrompt() string {
 // checking dump file existence at render time.
 func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 	dDir := m.dumpDir(se)
-		truncate := func() tea.Cmd { return m.truncateTables(se) }
+		truncate := m.truncateTables(se)
 
 	var actions []actionItem
 	switch se.DBType {
@@ -1432,34 +1508,34 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 		hasSchema := docker.HasDumpFile(dDir, "schema-*.sql")
 		hasData := docker.HasDumpFile(dDir, "data-*.sql")
 		actions = []actionItem{
-			{label: "Export schema", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportSchema(se) }},
-			{label: "Export data", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
-			{label: "Import schema", group: "Import", enabled: hasSchema, disabledReason: disabledIf(!hasSchema, "no schema dump"), execute: func() tea.Cmd { return m.importSchema(se) }},
-			{label: "Import data", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no data dump"), execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Export schema", group: "Export", enabled: true, execute: m.exportSchema(se)},
+			{label: "Export data", group: "Export", enabled: true, execute: m.exportData(se)},
+			{label: "Import schema", group: "Import", enabled: hasSchema, disabledReason: disabledIf(!hasSchema, "no schema dump"), execute: m.importSchema(se)},
+			{label: "Import data", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no data dump"), execute: m.importData(se)},
 			{label: "Truncate tables", group: "Functions", enabled: true, execute: truncate},
 		}
 
 	case "mongo":
 		hasData := m.hasMongoDump(dDir)
 		actions = []actionItem{
-			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
-			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump"), execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Export", group: "Export", enabled: true, execute: m.exportData(se)},
+			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump"), execute: m.importData(se)},
 			{label: "Truncate tables", group: "Functions", enabled: true, execute: truncate},
 		}
 
 	case "mysql":
 		hasData := docker.HasDumpFile(dDir, "data-*.sql")
 		actions = []actionItem{
-			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
-			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump file"), execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Export", group: "Export", enabled: true, execute: m.exportData(se)},
+			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump file"), execute: m.importData(se)},
 			{label: "Truncate tables", group: "Functions", enabled: true, execute: truncate},
 		}
 
 	case "mssql":
 		hasData := docker.HasDumpFile(dDir, "data-*.bacpac")
 		actions = []actionItem{
-			{label: "Export", group: "Export", enabled: true, execute: func() tea.Cmd { return m.exportData(se) }},
-			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no .bacpac file"), execute: func() tea.Cmd { return m.importData(se) }},
+			{label: "Export", group: "Export", enabled: true, execute: m.exportData(se)},
+			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no .bacpac file"), execute: m.importData(se)},
 			{label: "Truncate tables", group: "Functions", enabled: true, execute: truncate},
 		}
 	}
@@ -1796,6 +1872,32 @@ func (m *DBOpsModel) hasMongoDump(dumpDir string) bool {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// dbOpsWindow calculates the visible item range for a cursor-based list.
+func dbOpsWindow(total, cursor, avail int) itemWindow {
+	if total == 0 {
+		return itemWindow{}
+	}
+	if total <= avail {
+		return itemWindow{start: 0, end: total}
+	}
+	half := avail / 2
+	start := cursor - half
+	if start < 0 {
+		start = 0
+	}
+	end := start + avail
+	if end > total {
+		end = total
+		start = total - avail
+	}
+	return itemWindow{
+		start:    start,
+		end:      end,
+		hasAbove: start > 0,
+		hasBelow: end < total,
+	}
+}
 
 func (m *DBOpsModel) renderSpinnerDot(op string) string {
 	frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]

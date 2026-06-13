@@ -58,7 +58,6 @@ type MockOpsModel struct {
 
 	// Running state — per-action inline spinners
 	pendingOps map[string]string
-	lastResult string
 	doneOp     string
 	doneOpAt   time.Time
 
@@ -180,6 +179,11 @@ func (m *MockOpsModel) SetSize(w, h int) {
 	} else {
 		m.resultViewport.Height = min(h-12, 40)
 	}
+	// Recalculate textarea height if a param prompt is active so the
+	// body field doesn't overflow after a terminal resize.
+	if m.promptingParams {
+		m.setBodyTextareaHeight()
+	}
 }
 
 // ── Environment / Service helpers ──────────────────────────────────────────────
@@ -274,9 +278,8 @@ func unescapeNestedJSON(v interface{}) interface{} {
 // mockAPICall runs a MockServer REST API call from the host to localhost:<port>.
 // body is sent as JSON when non-nil; queryParams are added to the URL when non-nil.
 // Returns a tea.Cmd that sends mockOpsDoneMsg with the result.
-func (m *MockOpsModel) mockAPICall(endpoint, httpMethod string, body interface{}, queryParams map[string]string) func() tea.Cmd {
-	return func() tea.Cmd {
-		return func() tea.Msg {
+func (m *MockOpsModel) mockAPICall(endpoint, httpMethod string, body interface{}, queryParams map[string]string) tea.Cmd {
+	return func() tea.Msg {
 			port := m.mockHostPort()
 
 			// Build URL with query params
@@ -338,7 +341,6 @@ func (m *MockOpsModel) mockAPICall(endpoint, httpMethod string, body interface{}
 			// No body — success with no meaningful output;
 			// auto-dismiss and just show the checkmark.
 			return mockOpsDoneMsg{result: ""}
-		}
 	}
 }
 
@@ -441,7 +443,7 @@ func (m *MockOpsModel) execParamAction(act actionItem) tea.Cmd {
 			return m.editThenCreateExpectation(body, origMethod, origPath, origQueryParams)
 		}
 
-		return m.mockAPICall("/mockserver/expectation", "PUT", body, nil)()
+		return m.mockAPICall("/mockserver/expectation", "PUT", body, nil)
 
 	case "Verify request":
 		atLeast := 1
@@ -456,7 +458,7 @@ func (m *MockOpsModel) execParamAction(act actionItem) tea.Cmd {
 				"atMost":  atLeast,
 			},
 		}
-		return m.mockAPICall("/mockserver/verify", "PUT", body, nil)()
+		return m.mockAPICall("/mockserver/verify", "PUT", body, nil)
 	}
 	return nil
 }
@@ -628,6 +630,13 @@ func (m *MockOpsModel) prefillParamsFromItem(item map[string]interface{}) bool {
 // ── Update ─────────────────────────────────────────────────────────────────────
 
 func (m *MockOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Handle resize FIRST — before any state delegation — so dimensions
+	// are never stale regardless of which screen/state is active.
+	if wm, ok := msg.(tea.WindowSizeMsg); ok {
+		m.SetSize(wm.Width, wm.Height-5)
+		return m, nil
+	}
+
 	// Handle messages from completed actions
 	switch msg := msg.(type) {
 	case mockOpsDoneMsg:
@@ -643,7 +652,7 @@ func (m *MockOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// diffs are huge and break the action list layout.
 			m.resultOutput = msg.err.Error()
 			m.resultTitle = completedLabel
-			m.viewportContent = styles.StyleError.Render(m.resultOutput)
+			m.viewportContent = formatErrorMsg(m.resultOutput)
 			m.resultViewport.SetContent(m.viewportContent)
 			m.resultViewport.Width = m.width - 4
 			lineCount := strings.Count(m.viewportContent, "\n") + 1
@@ -709,7 +718,6 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "y", "Y":
 				m.promptStartDaemon = false
 				m.daemonStarting = true
-				m.lastResult = ""
 				if m.pendingStartLabel != "" {
 					m.pendingOps[m.pendingStartLabel] = "starting"
 				}
@@ -744,7 +752,6 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				svc := m.currentService()
 				if svc == nil {
 					m.pendingOps = make(map[string]string)
-					m.lastResult = styles.StyleError.Render("Service not found.")
 					return m, nil
 				}
 				if m.pendingStartLabel != "" {
@@ -778,9 +785,6 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.SetSize(msg.Width, msg.Height-5)
-		return m, nil
 	case tea.KeyMsg:
 		if m.viewingItemList {
 			switch {
@@ -985,11 +989,10 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if !m.ensureContainerRunning(act.label) {
 						return m, nil
 					}
-					m.lastResult = ""
 					m.doneOp = act.label
 					m.doneOpAt = time.Now()
 					m.pendingOps[act.label] = "running"
-					return m, tea.Batch(act.execute(), spinnerCmd())
+					return m, tea.Batch(act.execute, spinnerCmd())
 				}
 				}
 			}
@@ -1001,7 +1004,6 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case daemonStartedMsg:
 		m.daemonStarting = false
 		if !msg.available {
-			m.lastResult = styles.StyleError.Render("Docker daemon failed to start")
 			delete(m.pendingOps, m.pendingStartLabel)
 			m.pendingStartLabel = ""
 			return m, spinnerCmd()
@@ -1010,7 +1012,6 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		svc := m.currentService()
 		if svc == nil {
 			m.pendingOps = make(map[string]string)
-			m.lastResult = styles.StyleError.Render("Service not found.")
 			return m, nil
 		}
 		if m.pendingStartLabel != "" {
@@ -1037,7 +1038,6 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case serviceStartedMsg:
 		if msg.err != nil {
-			m.lastResult = styles.StyleError.Render("start service: " + msg.err.Error())
 			delete(m.pendingOps, m.pendingStartLabel)
 			m.pendingStartLabel = ""
 			return m, spinnerCmd()
@@ -1051,7 +1051,6 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.pendingOps = make(map[string]string)
-		m.lastResult = styles.StyleError.Render("Could not find pending action")
 		return m, nil
 
 	case readyRetryMsg:
@@ -1066,12 +1065,12 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.pendingStartLabel = ""
 					// Actions with execute func (List, Retrieve)
 					if act.execute != nil {
-						return m, tea.Batch(act.execute(), spinnerCmd())
+						return m, tea.Batch(act.execute, spinnerCmd())
 					}
 					// "Reset all" — direct API call
 					if act.label == "Reset all" {
 						return m, tea.Batch(
-							m.mockAPICall("/mockserver/reset", "PUT", nil, nil)(),
+							m.mockAPICall("/mockserver/reset", "PUT", nil, nil),
 							spinnerCmd(),
 						)
 					}
@@ -1085,11 +1084,9 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.pendingOps = make(map[string]string)
 			m.pendingStartLabel = ""
-			m.lastResult = styles.StyleError.Render("Could not find pending action")
 			return m, nil
 		}
 		if msg.retry >= 30 {
-			m.lastResult = styles.StyleError.Render("container not ready after 30s")
 			delete(m.pendingOps, msg.label)
 			m.pendingStartLabel = ""
 			return m, spinnerCmd()
@@ -1123,8 +1120,8 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *MockOpsModel) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "y", "Y":
+		switch {
+		case key.Matches(msg, mockOpsEnter):
 			m.confirmAction = false
 			label := m.confirmLabel
 			switch label {
@@ -1133,16 +1130,15 @@ func (m *MockOpsModel) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !m.ensureContainerRunning(label) {
 					return m, nil
 				}
-				m.lastResult = ""
 				m.doneOp = label
 				m.doneOpAt = time.Now()
 				m.pendingOps[label] = "running"
 				return m, tea.Batch(
-					m.mockAPICall("/mockserver/reset", "PUT", nil, nil)(),
+					m.mockAPICall("/mockserver/reset", "PUT", nil, nil),
 					spinnerCmd(),
 				)
 			}
-		case "n", "N", "esc":
+		default:
 			m.confirmAction = false
 		}
 	}
@@ -1307,7 +1303,6 @@ func (m *MockOpsModel) submitForm() (tea.Model, tea.Cmd) {
 	if execCmd == nil {
 		return m, nil
 	}
-	m.lastResult = ""
 	m.doneOp = label
 	m.doneOpAt = time.Now()
 	m.pendingOps[label] = "running"
@@ -1542,7 +1537,6 @@ func (m *MockOpsModel) submitCurrentParam() (tea.Model, tea.Cmd) {
 		m.editingOrigPath = ""
 		return m, nil
 	}
-	m.lastResult = ""
 	if isEdit {
 		// Use a distinct label so the result viewport says "Edit expectation"
 		// and no spurious checkmark appears on "Create expectation" in the
@@ -1605,8 +1599,8 @@ func (m *MockOpsModel) viewActions() string {
 	// Confirm destructive
 	if m.confirmAction {
 		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
-		b.WriteString(styles.StyleError.Render("  ✗ This action clears ALL active expectations.") + "\n")
-		b.WriteString("  " + promptStyle.Render("▸ Continue?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
+		b.WriteString(formatErrorMsg("This action clears ALL active expectations.") + "\n")
+		b.WriteString("  " + promptStyle.Render("▸ Continue?") + "  " + styles.StyleSubtitle.Render("(enter to confirm, any other key to cancel)") + "\n\n")
 		return b.String()
 	}
 
@@ -1661,17 +1655,13 @@ func (m *MockOpsModel) viewActions() string {
 
 	b.WriteString("\n")
 
-	if m.lastResult != "" {
-		b.WriteString("  " + m.lastResult + "\n\n")
-	}
-
 	if m.promptStartDaemon {
 		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
-		b.WriteString(styles.StyleError.Render("  Docker daemon is not running.") + "\n")
+		b.WriteString(formatErrorMsg("Docker daemon is not running.") + "\n")
 		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
 	} else if m.promptStartService {
 		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
-		b.WriteString(styles.StyleError.Render("  Service '" + m.serviceName + "' is not running.") + "\n")
+		b.WriteString(formatErrorMsg("Service '"+m.serviceName+"' is not running.") + "\n")
 		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
 	}
 
@@ -1693,19 +1683,58 @@ func (m *MockOpsModel) viewItemList() string {
 	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 	itemStyle := lipgloss.NewStyle().Foreground(styles.ColorMuted)
 
-	for i, item := range m.itemList {
-		label := mockItemLabel(item)
+	// Calculate visible window — each item is 1 line.
+	// Overhead: title (1) + blank (1) + blank before help (1) + help (1) + delete armed (0-1) = ~5
+	oh := 5
+	if m.deleteItemArmed {
+		oh++
+	}
+	total := len(m.itemList)
+	avail := m.height - oh
+	if avail < 1 {
+		avail = 1
+	}
+
+	var start, end int
+	hasAbove, hasBelow := false, false
+	if total <= avail {
+		start, end = 0, total
+	} else {
+		half := avail / 2
+		start = m.itemCursor - half
+		if start < 0 {
+			start = 0
+		}
+		end = start + avail
+		if end > total {
+			end = total
+			start = total - avail
+		}
+		hasAbove = start > 0
+		hasBelow = end < total
+	}
+
+	if hasAbove {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", start)))
+		b.WriteString("\n")
+	}
+	for i := start; i < end; i++ {
+		label := mockItemLabel(m.itemList[i])
 		if i == m.itemCursor {
 			b.WriteString(selStyle.Render("    > " + label) + "\n")
 		} else {
 			b.WriteString(itemStyle.Render("      " + label) + "\n")
 		}
 	}
+	if hasBelow {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", total-end)))
+		b.WriteString("\n")
+	}
 
 	b.WriteString("\n")
 
 	if m.deleteItemArmed {
-		b.WriteString("  " + styles.StyleError.Render("Press d again to delete this item") + "\n\n")
+		b.WriteString("  " + formatErrorMsg("Press d again to delete this item") + "\n\n")
 	}
 
 	helpItems := []styles.HelpItemResult{
@@ -1801,7 +1830,7 @@ func (m *MockOpsModel) viewParamPrompt() string {
 		b.WriteString("  " + m.paramInput.View() + "\n")
 
 		if m.qpDeleteArmed {
-			b.WriteString("\n  " + styles.StyleError.Render("Press Ctrl+D again to remove last pair") + "\n")
+			b.WriteString("\n  " + formatErrorMsg("Press Ctrl+D again to remove last pair") + "\n")
 		}
 
 		helpItems := []styles.HelpItemResult{
