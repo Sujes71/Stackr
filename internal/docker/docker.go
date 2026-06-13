@@ -468,24 +468,27 @@ func ContainerExecWithEnv(container string, env []string, args ...string) (strin
 func QueueExecLocal(containerName, program string, args ...string) (string, error) {
 	cmdArgs := []string{"exec", containerName}
 	if program == "activemq" {
-		// Override ACTIVEMQ_OPTS to prevent the CLI's JVM from inheriting the
-		// broker's JMX port binding flags (which cause "Address already in use").
-		// The CLI's JVM reads ACTIVEMQ_OPTS and passes all -D flags to the JVM,
-		// including -Dcom.sun.management.jmxremote.port=1099 which conflicts with
-		// the already-running broker on the same port.
+		// Bypass the activemq shell script and call the JAR directly.
 		//
-		// We override completely (no $ACTIVEMQ_OPTS reference) so only our
-		// desired flags reach the CLI JVM. The actual JMX connection URL is
-		// passed via --jmxlocal (for JMX commands) or --jmxurl (for purge).
-		// The -Dactivemq.jmx.url here is a fallback for any command that reads
-		// the system property instead of the CLI flag.
+		// The activemq shell script does:
+		//   COMMANDLINE_ARGS="$@"   (line 49 — joins all args with spaces)
+		//   java ... $COMMANDLINE_ARGS  (line 362 — unquoted, so IFS splits
+		//   arg values containing spaces!)
+		//
+		// This means --message "hello world" arrives as two separate args
+		// ("hello", "world"), --messageCount and its value become positional
+		// noise, and the default 1000 messages is used instead of 1.
+		//
+		// By calling java -jar directly, each argv element stays intact and
+		// proper quoting is preserved.
 		port := detectActiveMQJmxPort(containerName)
-		jmxURL := fmt.Sprintf("service:jmx:rmi:///jndi/rmi://localhost:%s/jmxrmi", port)
-		shellCmd := fmt.Sprintf(
-			`ACTIVEMQ_OPTS="-Dcom.sun.management.jmxremote.ssl=false -Dactivemq.jmx.url=%s" %s %s`,
-			jmxURL, program, strings.Join(args, " "),
+		activemqOpts := fmt.Sprintf(
+			"ACTIVEMQ_OPTS=-Dcom.sun.management.jmxremote.ssl=false -Dactivemq.jmx.url=service:jmx:rmi:///jndi/rmi://localhost:%s/jmxrmi",
+			port,
 		)
-		cmdArgs = append(cmdArgs, "sh", "-c", shellCmd)
+		jarArgs := append([]string{"-jar", "/opt/apache-activemq/bin/activemq.jar"}, args...)
+		cmdArgs = []string{"exec", "-e", activemqOpts, containerName, "java"}
+		cmdArgs = append(cmdArgs, jarArgs...)
 	} else {
 		cmdArgs = append(cmdArgs, program)
 		cmdArgs = append(cmdArgs, args...)

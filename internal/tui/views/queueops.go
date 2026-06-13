@@ -932,7 +932,11 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingOps = make(map[string]string)
 
 		if msg.err != nil {
-			m.lastResult = formatErrorMsg(msg.err.Error())
+			errMsg := msg.err.Error()
+			if m.currentQueueType() == "activemq" {
+				errMsg = m.cleanActiveMQError(errMsg)
+			}
+			m.lastResult = formatErrorMsg(errMsg)
 			return m, nil
 		}
 
@@ -2110,14 +2114,47 @@ func cleanActiveMQOutput(out string) string {
 		if strings.Contains(trimmed, "ActiveMQ.Advisory") {
 			continue
 		}
-		// Skip INFO lines (internal ActiveMQ Java logging).
-		// The consumer/producer use "INFO |" format, purge uses "INFO:".
+		// Skip INFO lines — they're internal progress/confirmation noise.
+		// activemq producer: "INFO | producer-1 Produced: X messages"
+		// activemq consumer: "INFO | consumer-1 Consumed: X messages"
+		// activemq purge:    "INFO: Purging all messages in queue: X"
+		// The checkmark (✓) in the action list for 5s is enough
+		// confirmation — no need for an intrusive result panel.
+		// Data commands (dstat, browse, list) use a different output
+		// format without INFO prefix, so they're unaffected.
 		if strings.HasPrefix(trimmed, "INFO |") || strings.HasPrefix(trimmed, "INFO:") {
 			continue
 		}
 		result = append(result, line)
 	}
 	return strings.TrimSpace(strings.Join(result, "\n"))
+}
+
+// cleanActiveMQError cleans an activemq CLI error message for display.
+// QueueExecLocal wraps the raw CombinedOutput with "activemq: <out>: <err>".
+// This strips JVM noise and, if nothing useful remains, shows a concise
+// fallback instead of a raw dump.
+func (m *QueueOpsModel) cleanActiveMQError(errMsg string) string {
+	if !strings.HasPrefix(errMsg, "activemq: ") {
+		// Not from activemq — still try to clean noise from raw output
+		cleaned := cleanActiveMQOutput(errMsg)
+		if cleaned != "" {
+			return cleaned
+		}
+		return errMsg
+	}
+	cleaned := strings.TrimPrefix(errMsg, "activemq: ")
+	cleaned = cleanActiveMQOutput(cleaned)
+	if cleaned == "" {
+		// All output was filtered — likely a timeout on an empty queue.
+		// Show a concise fallback instead of the raw noise.
+		if strings.Contains(errMsg, "signal: killed") || strings.Contains(errMsg, "context deadline exceeded") {
+			cleaned = "timed out waiting for messages"
+		} else {
+			cleaned = "command failed"
+		}
+	}
+	return "activemq: " + cleaned
 }
 
 // ── Table Formatting ────────────────────────────────────────────────────────────
