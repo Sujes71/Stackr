@@ -406,6 +406,12 @@ func ContainerCopy(container, srcPath, destPath string) error {
 	return exec.Command("docker", "cp", srcPath, container+":"+destPath).Run()
 }
 
+// ContainerCopyFrom copies a file or directory FROM the container to the host.
+// docker cp <container>:<src> <dest>
+func ContainerCopyFrom(container, srcPath, destPath string) error {
+	return exec.Command("docker", "cp", container+":"+srcPath, destPath).Run()
+}
+
 // ContainerExec runs an arbitrary command inside the container.
 func ContainerExec(container string, args ...string) (string, error) {
 	cmd := exec.Command("docker", append([]string{"exec", container}, args...)...)
@@ -985,6 +991,93 @@ func OracleTruncate(profileName, envName, serviceName string) error {
 	if err != nil {
 		return fmt.Errorf("truncate oracle: %w", err)
 	}
+	return nil
+}
+
+// OracleExport exports data from a local Oracle container using Data Pump (expdp).
+// The dump file is created inside the container (server-side) then copied out to outPath.
+// Remote Oracle export is not supported via this function — use Data Pump manually.
+func OracleExport(profileName, envName, serviceName, outPath string) error {
+	container := ContainerName(profileName, envName, serviceName)
+	user, pass, pdb := oracleCreds(container)
+	outFile := filepath.Base(outPath)
+	outDir := filepath.Dir(outPath)
+	containerDumpDir := "/tmp/stackr_dump"
+
+	// Ensure local dump dir exists
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return fmt.Errorf("create dump dir: %w", err)
+	}
+
+	// 1. Create temp dir inside the container
+	ContainerExec(container, "mkdir", "-p", containerDumpDir) //nolint:errcheck
+
+	// 2. Create Oracle directory object
+	dirSQL := fmt.Sprintf("CREATE OR REPLACE DIRECTORY STACKR_DUMP AS '%s'", containerDumpDir)
+	if _, err := ContainerExec(container, "bash", "-c",
+		fmt.Sprintf(`echo "%s" | sqlplus -S %s/%s@//localhost:1521/%s`, dirSQL, user, pass, pdb)); err != nil {
+		ContainerExec(container, "rm", "-rf", containerDumpDir)
+		return fmt.Errorf("create directory object: %w", err)
+	}
+
+	// 3. Run expdp inside the container
+	if out, err := ContainerExec(container, "bash", "-c",
+		fmt.Sprintf(`expdp %s/%s@//localhost:1521/%s directory=STACKR_DUMP dumpfile=%s schemas=%s`,
+			user, pass, pdb, outFile, user)); err != nil {
+		ContainerExec(container, "rm", "-rf", containerDumpDir)
+		return fmt.Errorf("oracle export: %s: %w", strings.TrimSpace(out), err)
+	}
+
+	// 4. Copy dump file out of the container
+	if err := ContainerCopyFrom(container, filepath.Join(containerDumpDir, outFile), outPath); err != nil {
+		ContainerExec(container, "rm", "-rf", containerDumpDir)
+		return fmt.Errorf("copy dump from container: %w", err)
+	}
+
+	// 5. Clean up (best-effort)
+	ContainerExec(container, "rm", "-rf", containerDumpDir) //nolint:errcheck
+	return nil
+}
+
+// OracleImport imports a Data Pump dump file into a local Oracle container.
+// The file is copied into the container first, then impdp restores it.
+// Remote Oracle import is not supported via this function — use Data Pump manually.
+func OracleImport(profileName, envName, serviceName, inPath string) error {
+	container := ContainerName(profileName, envName, serviceName)
+	user, pass, pdb := oracleCreds(container)
+	containerDumpDir := "/tmp/stackr_dump"
+	inFile := filepath.Base(inPath)
+
+	// 1. Create temp dir inside the container
+	ContainerExec(container, "mkdir", "-p", containerDumpDir) //nolint:errcheck
+
+	// 2. Create Oracle directory object pointing to the temp dir
+	dirSQL := fmt.Sprintf("CREATE OR REPLACE DIRECTORY STACKR_DUMP AS '%s'", containerDumpDir)
+	_, err := ContainerExec(container, "bash", "-c",
+		fmt.Sprintf(`echo "%s" | sqlplus -S %s/%s@//localhost:1521/%s`, dirSQL, user, pass, pdb))
+	if err != nil {
+		ContainerExec(container, "rm", "-rf", containerDumpDir)
+		return fmt.Errorf("create directory object: %w", err)
+	}
+
+	// 3. Copy dump file into the container
+	if err := ContainerCopy(container, inPath, filepath.Join(containerDumpDir, inFile)); err != nil {
+		ContainerExec(container, "rm", "-rf", containerDumpDir)
+		return fmt.Errorf("copy dump into container: %w", err)
+	}
+
+	// 4. Run impdp (TABLE_EXISTS_ACTION=REPLACE handles re-imports)
+	impdpOut, err := ContainerExec(container, "bash", "-c",
+		fmt.Sprintf(`impdp %s/%s@//localhost:1521/%s directory=STACKR_DUMP dumpfile=%s table_exists_action=replace`,
+			user, pass, pdb, inFile))
+	if err != nil {
+		ContainerExec(container, "rm", "-rf", containerDumpDir)
+		return fmt.Errorf("oracle import: %s: %w", strings.TrimSpace(impdpOut), err)
+	}
+
+	// 5. Clean up (best-effort)
+	ContainerExec(container, "rm", "-rf", containerDumpDir) //nolint:errcheck
+
 	return nil
 }
 

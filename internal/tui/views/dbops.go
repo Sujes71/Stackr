@@ -1470,7 +1470,10 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 		}
 
 	case "oracle":
+		hasData := docker.HasDumpFile(dDir, "data-*.dmp")
 		actions = []actionItem{
+			{label: "Export", group: "Export", enabled: true, execute: m.exportData(se)},
+			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no .dmp file"), execute: m.importData(se)},
 			{label: "Truncate tables", group: "Functions", enabled: true, execute: truncate},
 		}
 	}
@@ -1556,7 +1559,11 @@ func (m *DBOpsModel) exportData(se *config.SyncEnv) tea.Cmd {
 			return dbOpsDoneMsg{result: "Data exported to " + filepath.Base(outPath)}
 
 		case "oracle":
-			return dbOpsDoneMsg{err: fmt.Errorf("Oracle export not yet implemented. Set sync_env.tool_image and use Data Pump manually.")}
+			outPath := filepath.Join(dDir, "data-"+ts()+".dmp")
+			if err := docker.OracleExport(m.profile.Name, m.envName, m.serviceName, outPath); err != nil {
+				return dbOpsDoneMsg{err: fmt.Errorf("export oracle: %w", err)}
+			}
+			return dbOpsDoneMsg{result: "Data exported to " + filepath.Base(outPath)}
 		default:
 			return dbOpsDoneMsg{err: fmt.Errorf("unknown db type: %s", se.DBType)}
 		}
@@ -1639,7 +1646,14 @@ func (m *DBOpsModel) importData(se *config.SyncEnv) tea.Cmd {
 			return dbOpsDoneMsg{result: "Data imported from " + filepath.Base(latest)}
 
 		case "oracle":
-			return dbOpsDoneMsg{err: fmt.Errorf("Oracle import not yet implemented. Set sync_env.tool_image and use Data Pump manually.")}
+			latest, err := docker.FindLatestDump(dDir, "data-*.dmp")
+			if err != nil {
+				return dbOpsDoneMsg{err: fmt.Errorf("no .dmp file: %w", err)}
+			}
+			if err := docker.OracleImport(m.profile.Name, m.envName, m.serviceName, latest); err != nil {
+				return dbOpsDoneMsg{err: fmt.Errorf("import oracle: %w", err)}
+			}
+			return dbOpsDoneMsg{result: "Data imported from " + filepath.Base(latest)}
 		default:
 			return dbOpsDoneMsg{err: fmt.Errorf("unknown db type: %s", se.DBType)}
 		}
