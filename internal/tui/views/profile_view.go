@@ -205,10 +205,6 @@ type svcRmDoneMsg struct {
 	svcName string
 }
 
-type resetAllDoneMsg struct {
-	envName string
-}
-
 func ClearActionAfter(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(t time.Time) tea.Msg {
 		return ClearActionMsg{}
@@ -760,20 +756,6 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rememberCurrentEnvSelection()
 		return m, m.loadStatus()
 
-	case resetAllDoneMsg:
-		m.StopAllLocalProcesses()
-		updated, err := m.cfg.ClearServices(m.profile.Name, msg.envName)
-		if err != nil {
-			return m, m.loadStatus()
-		}
-		m.profile = updated
-		if _, err := config.GenerateCompose(*m.profile, msg.envName); err != nil {
-			return m, m.loadStatus()
-		}
-		m.cursor = 0
-		m.rememberCurrentEnvSelection()
-		return m, m.loadStatus()
-
 	case SpinnerTickMsg:
 		if len(m.pendingOps) > 0 || m.dockerStarting {
 			m.spinnerFrame++
@@ -974,52 +956,23 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "r":
 				env := m.currentEnv()
 				switch msg.String() {
-				case "r":
-					// rr → reset all (delete all services/forwards)
-					if m.isPortForwardEnv() {
-						forwards := m.currentForwards()
-						if len(forwards) == 0 {
-							m.keyPending = ""
-							return m, nil
-						}
-						envName := m.profile.Environments[m.activeEnv].Name
-						for _, h := range forwards {
-							_ = h.Stop()
-						}
-						updated, err := m.cfg.ClearPortForwards(m.profile.Name, envName)
-						if err != nil {
-							return m, nil
-						}
-						m.profile = updated
-						m.buildForwardHandles()
-						m.cursor = 0
-						m.rememberCurrentEnvSelection()
-						return m, nil
-					}
-					if len(m.currentEnvServices()) == 0 && len(env.LocalProcesses) == 0 {
-						m.keyPending = ""
-						return m, nil
-					}
-					envName := env.Name
-					return m, func() tea.Msg {
-						_ = docker.Down(m.profile.Name, envName)
-						return resetAllDoneMsg{envName: envName}
-					}
-
 				case "v":
-					// rv → reset volumes (Docker only)
+					// rv → reset volume of the focused service (Docker only)
 					if m.isPortForwardEnv() || len(m.currentEnvServices()) == 0 {
 						break
 					}
-					for i := range env.Services {
-						svc := env.Services[i]
-						cn := containerName(m.profile.Name, env.Name, svc.ComposeName())
-						m.pendingOps[cn] = "resetting volumes"
+					svcs := m.currentEnvServices()
+					svcIdx := m.selectedServiceIndex()
+					if svcIdx >= len(svcs) {
+						break
 					}
-				return m, tea.Batch(
-					func() tea.Msg {
-						_ = docker.DownVolumes(m.profile.Name, env.Name)
-						return m.refreshStatusForEnv(env.Name)
+					svc := svcs[svcIdx]
+					cn := containerName(m.profile.Name, env.Name, svc.ComposeName())
+					m.pendingOps[cn] = "resetting volume"
+					return m, tea.Batch(
+						func() tea.Msg {
+							_ = docker.ResetServiceVolumes(m.profile.Name, env.Name, svc.ComposeName())
+							return m.refreshStatusForEnv(env.Name)
 						},
 						func() tea.Msg { return m.refreshStatusForEnv(env.Name) },
 						func() tea.Msg { return SpinnerTickMsg{} },
@@ -1476,13 +1429,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if env == nil {
 				break
 			}
-			if m.isPortForwardEnv() && len(m.currentForwards()) == 0 {
+			if m.isPortForwardEnv() || len(m.currentEnvServices()) == 0 {
 				break
 			}
-			if !m.isPortForwardEnv() && len(m.currentEnvServices()) == 0 {
-				break
-			}
-			// First r: arm, wait for second key (r or v)
+			// First r: arm, wait for v to reset the focused service's volume
 			m.keyPending = "r"
 			m.resetArmed = true
 			return m, nil
@@ -2205,9 +2155,9 @@ func (m *ProfileViewModel) View() string {
 	if m.resetArmed {
 		b.WriteString("\n")
 		if m.isPortForwardEnv() {
-			b.WriteString(styles.StyleError.Render("  Press r again to delete all forwards"))
+			b.WriteString(styles.StyleError.Render("  Press v to delete this forward"))
 		} else {
-			b.WriteString(styles.StyleError.Render("  Press r again to delete all, or v to reset volumes"))
+			b.WriteString(styles.StyleError.Render("  Press v to reset this service's volume"))
 		}
 		b.WriteString("\n")
 	}
@@ -2895,7 +2845,7 @@ func (m *ProfileViewModel) renderShortcuts() string {
 			if hasRunning {
 				stackItems = append(stackItems, pair{"x", "stop all"})
 			}
-			stackItems = append(stackItems, pair{"r r", "reset all"})
+			stackItems = append(stackItems, pair{"r v", "reset vol"})
 		}
 		if m.extraEnvCount() < 3 {
 			stackItems = append(stackItems, pair{"n", "new env"})
@@ -2962,8 +2912,7 @@ func (m *ProfileViewModel) renderShortcuts() string {
 			if hasRunning {
 				stackItems = append(stackItems, pair{"x", "stop all"})
 			}
-			stackItems = append(stackItems, pair{"r r", "reset all"})
-			stackItems = append(stackItems, pair{"r v", "reset vols"})
+			stackItems = append(stackItems, pair{"r v", "reset vol"})
 		}
 		if m.extraEnvCount() < 3 {
 			stackItems = append(stackItems, pair{"n", "new env"})

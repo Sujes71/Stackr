@@ -201,6 +201,19 @@ func RmService(profileName, envName, serviceName string) error {
 	return runDocker(composeArgs(profileName, envName, "rm", "-fs", serviceName)...)
 }
 
+// ResetServiceVolumes stops the service, removes its container + anonymous volumes,
+// then starts it again. Named volumes are not affected.
+func ResetServiceVolumes(profileName, envName, serviceName string) error {
+	if err := StopService(profileName, envName, serviceName); err != nil {
+		return fmt.Errorf("stop: %w", err)
+	}
+	// rm -fsv: force stop + remove container + remove anonymous volumes
+	if err := runDocker(composeArgs(profileName, envName, "rm", "-fsv", serviceName)...); err != nil {
+		// Ignore errors if the container is already gone
+	}
+	return UpService(profileName, envName, serviceName)
+}
+
 func DownVolumes(profileName, envName string) error {
 	return runDocker(composeArgs(profileName, envName, "down", "-v")...)
 }
