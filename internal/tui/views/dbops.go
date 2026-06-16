@@ -1468,6 +1468,11 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no .bacpac file"), execute: m.importData(se)},
 			{label: "Truncate tables", group: "Functions", enabled: true, execute: truncate},
 		}
+
+	case "oracle":
+		actions = []actionItem{
+			{label: "Truncate tables", group: "Functions", enabled: true, execute: truncate},
+		}
 	}
 
 	// Append custom actions below Truncate tables in Functions group
@@ -1550,6 +1555,8 @@ func (m *DBOpsModel) exportData(se *config.SyncEnv) tea.Cmd {
 			}
 			return dbOpsDoneMsg{result: "Data exported to " + filepath.Base(outPath)}
 
+		case "oracle":
+			return dbOpsDoneMsg{err: fmt.Errorf("Oracle export not yet implemented. Set sync_env.tool_image and use Data Pump manually.")}
 		default:
 			return dbOpsDoneMsg{err: fmt.Errorf("unknown db type: %s", se.DBType)}
 		}
@@ -1631,6 +1638,8 @@ func (m *DBOpsModel) importData(se *config.SyncEnv) tea.Cmd {
 			}
 			return dbOpsDoneMsg{result: "Data imported from " + filepath.Base(latest)}
 
+		case "oracle":
+			return dbOpsDoneMsg{err: fmt.Errorf("Oracle import not yet implemented. Set sync_env.tool_image and use Data Pump manually.")}
 		default:
 			return dbOpsDoneMsg{err: fmt.Errorf("unknown db type: %s", se.DBType)}
 		}
@@ -1662,6 +1671,10 @@ func (m *DBOpsModel) truncateTables(se *config.SyncEnv) tea.Cmd {
 		case "mssql":
 			if err := docker.MsSqlTruncate(m.profile.Name, m.envName, m.serviceName, se.Database); err != nil {
 				return dbOpsDoneMsg{err: fmt.Errorf("truncate mssql: %w", err)}
+			}
+		case "oracle":
+			if err := docker.OracleTruncate(m.profile.Name, m.envName, m.serviceName); err != nil {
+				return dbOpsDoneMsg{err: fmt.Errorf("truncate oracle: %w", err)}
 			}
 		default:
 			return dbOpsDoneMsg{err: fmt.Errorf("unknown db type: %s", se.DBType)}
@@ -1874,6 +1887,19 @@ func getLocalDBCredentials(svc *config.Service, dbType string) (user, pass, db s
 		db = envMap["MSSQL_DB"]
 		if db == "" {
 			db = "master"
+		}
+	case "oracle":
+		user = envMap["ORACLE_USER"]
+		if user == "" {
+			user = "system"
+		}
+		pass = envMap["ORACLE_PASSWORD"]
+		if pass == "" {
+			pass = "oracle"
+		}
+		db = envMap["ORACLE_PDB"]
+		if db == "" {
+			db = "FREEPDB1"
 		}
 	}
 	return

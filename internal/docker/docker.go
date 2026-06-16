@@ -605,6 +605,13 @@ func ContainerReady(container, dbType string) bool {
 			"-l", "2", // 2-second timeout
 		)
 		return err == nil
+	case "oracle":
+		user, pass, pdb := oracleCreds(container)
+		err := exec.Command("docker", "exec", container,
+			"bash", "-c",
+			fmt.Sprintf("echo \"SELECT 'ready' FROM dual;\" | sqlplus -S %s/%s@//localhost:1521/%s", user, pass, pdb),
+		).Run()
+		return err == nil
 	default:
 		return true // unknown type — assume ready
 	}
@@ -965,6 +972,37 @@ func SqlPackageExport(syncEnv *config.SyncEnv, outPath string) error {
 		return fmt.Errorf("sqlpackage via docker: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
+}
+
+// OracleTruncate truncates all user tables in an Oracle container using sqlplus.
+func OracleTruncate(profileName, envName, serviceName string) error {
+	container := ContainerName(profileName, envName, serviceName)
+	user, pass, pdb := oracleCreds(container)
+	// PL/SQL block: truncate every table visible to the connecting user
+	sql := "BEGIN FOR t IN (SELECT table_name FROM user_tables) LOOP EXECUTE IMMEDIATE 'TRUNCATE TABLE ' || t.table_name; END LOOP; END;"
+	_, err := ContainerExec(container, "sh", "-c",
+		fmt.Sprintf("echo \"%s\" | sqlplus -S %s/%s@//localhost:1521/%s", sql, user, pass, pdb))
+	if err != nil {
+		return fmt.Errorf("truncate oracle: %w", err)
+	}
+	return nil
+}
+
+// oracleCreds reads Oracle connection credentials from the running container.
+func oracleCreds(container string) (user, pass, pdb string) {
+	user, _ = ContainerEnv(container, "ORACLE_USER")
+	if user == "" {
+		user = "system"
+	}
+	pass, _ = ContainerEnv(container, "ORACLE_PASSWORD")
+	if pass == "" {
+		pass = "oracle"
+	}
+	pdb, _ = ContainerEnv(container, "ORACLE_PDB")
+	if pdb == "" {
+		pdb = "FREEPDB1"
+	}
+	return
 }
 
 // SqlPackageImport imports a .bacpac file into the MSSQL container using sqlpackage CLI.
