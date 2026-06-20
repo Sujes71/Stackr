@@ -1015,7 +1015,7 @@ func (m *DBOpsModel) updateCustomForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return saveForm()
 
 	case keyMsg.String() == "ctrl+s":
-		if m.customFormFocus == 1 && m.commandEditMode {
+		if m.customFormFocus == 1 {
 			return saveForm()
 		}
 		return m, nil
