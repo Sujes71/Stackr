@@ -1815,7 +1815,7 @@ func (m *MockOpsModel) viewParamPrompt() string {
 			styles.HelpItem("enter", "confirm"),
 		}
 		if len(m.qpPairs) > 0 && m.qpPhase == 0 {
-			helpItems = append(helpItems, styles.HelpItem("^d ^d", "delete last"))
+			helpItems = append(helpItems, styles.HelpItem("ctrl+d ctrl+d", "delete last"))
 		}
 		b.WriteString("\n  " + styles.InlineHelp(helpItems...))
 		return b.String()

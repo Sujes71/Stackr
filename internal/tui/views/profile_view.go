@@ -2154,11 +2154,7 @@ func (m *ProfileViewModel) View() string {
 
 	if m.resetArmed {
 		b.WriteString("\n")
-		if m.isPortForwardEnv() {
-			b.WriteString(styles.StyleError.Render("  Press v to delete this forward"))
-		} else {
-			b.WriteString(styles.StyleError.Render("  Press v to reset this service's volume"))
-		}
+		b.WriteString(styles.StyleError.Render("  Press v to reset this service's volume"))
 		b.WriteString("\n")
 	}
 
