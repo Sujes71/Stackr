@@ -324,7 +324,7 @@ var profileKeys = struct {
 	down:           key.NewBinding(key.WithKeys("down")),
 	enter:          key.NewBinding(key.WithKeys("enter")),
 	start:          key.NewBinding(key.WithKeys("s")),
-	stop:           key.NewBinding(key.WithKeys("S")),
+	stop:           key.NewBinding(key.WithKeys("x")),
 	addSvc:         key.NewBinding(key.WithKeys("a")),
 	svcDelete:      key.NewBinding(key.WithKeys("d")),
 	dbOps:          key.NewBinding(key.WithKeys("o")),
@@ -2727,7 +2727,7 @@ func (m *ProfileViewModel) renderShortcuts() string {
 			}
 			stackItems = append(stackItems, pair{"s", "stack all"})
 			if hasRunning {
-				stackItems = append(stackItems, pair{"S", "stop all"})
+				stackItems = append(stackItems, pair{"x", "stop all"})
 			}
 			// "r v reset vol" is Docker-only — omitted for port-forward envs.
 		}
@@ -2794,7 +2794,7 @@ func (m *ProfileViewModel) renderShortcuts() string {
 			}
 			stackItems = append(stackItems, pair{"s", "stack all"})
 			if hasRunning {
-				stackItems = append(stackItems, pair{"S", "stop all"})
+				stackItems = append(stackItems, pair{"x", "stop all"})
 			}
 			stackItems = append(stackItems, pair{"r v", "reset vol"})
 		}
