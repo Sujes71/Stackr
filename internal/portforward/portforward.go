@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os/exec"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/stackr/stackr/internal/config"
@@ -192,8 +191,9 @@ func (h *PortForwardHandle) Start() error {
 	}
 }
 
-// Stop terminates the port-forward subprocess gracefully (SIGTERM with 5 s
-// fallback to SIGKILL). It is a no-op if the forward is not Running or Starting.
+// Stop terminates the port-forward subprocess gracefully (graceful signal
+// with a 5 s fallback to force-kill). It is a no-op if the forward is not
+// Running or Starting.
 func (h *PortForwardHandle) Stop() error {
 	h.mu.Lock()
 	if h.State != ForwardRunning && h.State != ForwardStarting {
@@ -205,18 +205,7 @@ func (h *PortForwardHandle) Stop() error {
 	h.mu.Unlock()
 
 	if cmd != nil && cmd.Process != nil {
-		// Send SIGTERM for graceful shutdown
-		_ = cmd.Process.Signal(syscall.SIGTERM)
-
-		// Wait up to 5 seconds for graceful exit
-		select {
-		case <-doneCh:
-			// Process exited on SIGTERM — clean
-		case <-time.After(5 * time.Second):
-			// Force kill
-			_ = cmd.Process.Kill()
-			<-doneCh
-		}
+		gracefulTerminate(cmd, doneCh, 5*time.Second)
 	}
 
 	h.mu.Lock()

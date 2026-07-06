@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -1915,10 +1914,10 @@ func (m *ProfileViewModel) StopAllForwards() {
 
 // killLocalProcess kills a single local process by name, removes it from
 // the tracking map, and cleans its PID file. Single source of truth for
-// the kill sequence: syscall.Kill(-pgid) + waitWithTimeout + cleanup.
+// the kill sequence: killProcessGroup + waitWithTimeout + cleanup.
 func (m *ProfileViewModel) killLocalProcess(name string) {
 	if cmd, ok := m.localProcesses[name]; ok && cmd != nil && cmd.Process != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		killProcessGroup(cmd)
 		go func(c *exec.Cmd) { _ = waitWithTimeout(c, 5*time.Second) }(cmd)
 	}
 	delete(m.localProcesses, name)
@@ -2003,8 +2002,8 @@ func (m *ProfileViewModel) recoverOrphanProcesses() {
 			m.cleanPIDFile(name)
 			continue
 		}
-		// Signal 0 checks if the process exists (Unix-only, no signal sent)
-		if err := proc.Signal(syscall.Signal(0)); err != nil {
+		// processAlive checks if the process exists (platform-specific)
+		if !processAlive(pid) {
 			m.cleanPIDFile(name)
 			continue
 		}
@@ -2033,14 +2032,10 @@ func (m *ProfileViewModel) startLocalProcess(proc config.LocalProcess) bool {
 	if m.isLocalProcRunning(proc.Name) {
 		m.killLocalProcess(proc.Name)
 	}
-	cmd := exec.Command("sh", "-c", proc.Command)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd := shellCommand(proc.Command)
+	setNewProcessGroup(cmd)
 	if proc.WorkDir != "" {
-		wd := proc.WorkDir
-		if strings.HasPrefix(wd, "~") {
-			wd = strings.Replace(wd, "~", os.Getenv("HOME"), 1)
-		}
-		cmd.Dir = wd
+		cmd.Dir = expandHome(proc.WorkDir)
 	}
 	if err := cmd.Start(); err != nil {
 		return false
