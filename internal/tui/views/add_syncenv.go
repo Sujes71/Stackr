@@ -28,23 +28,14 @@ const (
 // Credentials focus order. AuthDB comes before ToolImage so Mongo flows
 // DB→AuthDB→ToolImage. Non-Mongo types skip AuthDB in the navigation.
 const (
-	credFocusHost   = iota // 0
-	credFocusPort          // 1
-	credFocusUser          // 2
-	credFocusPass          // 3
-	credFocusDB            // 4
-	credFocusAuthDB        // 5 — mongo only
-	credFocusToolImage     // 6
+	credFocusHost      = iota // 0
+	credFocusPort             // 1
+	credFocusUser             // 2
+	credFocusPass             // 3
+	credFocusDB               // 4
+	credFocusAuthDB           // 5 — mongo only
+	credFocusToolImage        // 6
 )
-
-// ── Messages ──────────────────────────────────────────────────────────────────
-
-// wizardSavedMsg is sent by save() when the user confirms the review step.
-type wizardSavedMsg struct {
-	env      *config.SyncEnv
-	editMode bool
-	origName string
-}
 
 // ── Model ─────────────────────────────────────────────────────────────────────
 
@@ -67,11 +58,11 @@ type AddSyncEnvModel struct {
 	nameErr   string
 
 	// Step 2: credentials
-	hostInput   textinput.Model
-	portInput   textinput.Model
-	userInput   textinput.Model
-	passInput   textinput.Model
-	dbInput     textinput.Model
+	hostInput      textinput.Model
+	portInput      textinput.Model
+	userInput      textinput.Model
+	passInput      textinput.Model
+	dbInput        textinput.Model
 	authDBInput    textinput.Model // mongo only
 	toolImageInput textinput.Model
 	credFocus      int
@@ -80,9 +71,6 @@ type AddSyncEnvModel struct {
 
 	// Step 3: review
 	confirmed bool
-
-	// Error state (shared)
-	err string
 }
 
 // ── Key bindings ──────────────────────────────────────────────────────────────
@@ -231,7 +219,7 @@ func (m *AddSyncEnvModel) Init() tea.Cmd {
 
 // ── Update ────────────────────────────────────────────────────────────────────
 
-func (m *AddSyncEnvModel) Update(msg tea.Msg) (*AddSyncEnvModel, tea.Cmd) {
+func (m *AddSyncEnvModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.step {
 	case syncEnvStepName:
 		return m.updateNameStep(msg)
@@ -245,7 +233,7 @@ func (m *AddSyncEnvModel) Update(msg tea.Msg) (*AddSyncEnvModel, tea.Cmd) {
 
 // ── Step: Name ────────────────────────────────────────────────────────────────
 
-func (m *AddSyncEnvModel) updateNameStep(msg tea.Msg) (*AddSyncEnvModel, tea.Cmd) {
+func (m *AddSyncEnvModel) updateNameStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
@@ -296,7 +284,7 @@ func (m *AddSyncEnvModel) updateNameStep(msg tea.Msg) (*AddSyncEnvModel, tea.Cmd
 
 // ── Step: Credentials ─────────────────────────────────────────────────────────
 
-func (m *AddSyncEnvModel) updateCredentialsStep(msg tea.Msg) (*AddSyncEnvModel, tea.Cmd) {
+func (m *AddSyncEnvModel) updateCredentialsStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
@@ -363,7 +351,7 @@ func (m *AddSyncEnvModel) updateCredentialsStep(msg tea.Msg) (*AddSyncEnvModel, 
 
 // ── Step: Review ──────────────────────────────────────────────────────────────
 
-func (m *AddSyncEnvModel) updateReviewStep(msg tea.Msg) (*AddSyncEnvModel, tea.Cmd) {
+func (m *AddSyncEnvModel) updateReviewStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
@@ -553,10 +541,6 @@ func (m *AddSyncEnvModel) View() string {
 		b.WriteString(m.viewReviewStep())
 	}
 
-	if m.err != "" {
-		b.WriteString("\n" + styles.StyleError.Render("  ✗ "+m.err))
-	}
-
 	return b.String()
 }
 
@@ -628,7 +612,7 @@ func (m *AddSyncEnvModel) viewReviewStep() string {
 
 	dbTypeLabel := styles.StyleCode.Render(m.dbType)
 	hostPort := m.hostInput.Value() + ":" + m.portInput.Value()
-	maskedPass := styles.StyleSubtitle.Render("\u2022\u2022\u2022\u2022\u2022\u2022 (encrypted at rest \u2014 password is not stored in plaintext)")
+	maskedPass := styles.StyleSubtitle.Render("•••••• (encrypted at rest — password is not stored in plaintext)")
 	if m.passInput.Value() == "" {
 		maskedPass = styles.StyleSubtitle.Render("(empty)")
 	}

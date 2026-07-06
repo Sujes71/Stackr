@@ -104,11 +104,11 @@ func TestService_FindQueueSyncEnv(t *testing.T) {
 	envB := QueueSyncEnv{Name: "production", QueueType: "rabbitmq", Host: "mq.prod.com", Port: "5672"}
 
 	tests := []struct {
-		name         string
-		envs         []QueueSyncEnv
-		searchName   string
-		wantNil      bool
-		wantName     string
+		name       string
+		envs       []QueueSyncEnv
+		searchName string
+		wantNil    bool
+		wantName   string
 	}{
 		{
 			name:       "find existing env by name",

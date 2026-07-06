@@ -6,6 +6,7 @@ package portforward
 import (
 	"fmt"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 
@@ -44,6 +45,9 @@ func (s ForwardState) String() string {
 
 // PortForwardHandle wraps a single port-forward configuration and its runtime state.
 // It tracks the subprocess lifecycle (start, stop, health) and any error messages.
+// All state transitions are guarded by mu because Start() may run in a goroutine
+// (e.g. restarting a forward after a port edit) while CheckAlive() runs in the
+// main TUI update loop on a ForwardMonitorTick.
 type PortForwardHandle struct {
 	// Config is the immutable port-forward configuration this handle was created from.
 	Config config.PortForward
@@ -55,15 +59,44 @@ type PortForwardHandle struct {
 	Error string
 	// done is closed when the subprocess exits. Nil when not running.
 	done chan struct{}
+	// mu guards State, Cmd, Error, and done.
+	mu sync.Mutex
 }
 
 // NewHandle creates a new PortForwardHandle in the Stopped state for the given config.
+// The handle is also registered in a package-level registry so that StopAll can
+// tear down any still-running forwards when the program exits.
 func NewHandle(cfg config.PortForward) *PortForwardHandle {
-	return &PortForwardHandle{
+	h := &PortForwardHandle{
 		Config: cfg,
 		State:  ForwardStopped,
 	}
+	handlesMu.Lock()
+	handles = append(handles, h)
+	handlesMu.Unlock()
+	return h
 }
+
+// StopAll stops every handle created via NewHandle. It is safe to call from
+// main() after the TUI exits, so port-forward subprocesses are not orphaned
+// when the program terminates (Ctrl+C / SIGTERM). Stop is a no-op on handles
+// that are already stopped, so calling this is always safe.
+func StopAll() {
+	handlesMu.Lock()
+	hs := make([]*PortForwardHandle, len(handles))
+	copy(hs, handles)
+	handlesMu.Unlock()
+	for _, h := range hs {
+		_ = h.Stop()
+	}
+}
+
+// handles registry tracks every handle created via NewHandle so StopAll can
+// reach them from main() without the TUI model having to expose them.
+var (
+	handlesMu sync.Mutex
+	handles   []*PortForwardHandle
+)
 
 // Start spawns a kubectl port-forward subprocess.
 //
@@ -74,18 +107,22 @@ func NewHandle(cfg config.PortForward) *PortForwardHandle {
 // Returns an error if already running/starting, kubectl is missing, or the
 // subprocess exits within the 2-second window.
 func (h *PortForwardHandle) Start() error {
+	h.mu.Lock()
 	if h.State == ForwardRunning || h.State == ForwardStarting {
+		h.mu.Unlock()
 		return fmt.Errorf("already %s", h.State)
 	}
-
 	h.State = ForwardStarting
 	h.Error = ""
+	h.mu.Unlock()
 
 	// Validate kubectl is available
 	if _, err := exec.LookPath("kubectl"); err != nil {
+		h.mu.Lock()
 		h.State = ForwardFailed
 		h.Error = "kubectl not found in PATH"
-		return fmt.Errorf(h.Error)
+		h.mu.Unlock()
+		return fmt.Errorf("%s", h.Error)
 	}
 
 	// Build: kubectl port-forward --context <ctx> -n <ns> service/<svc> <local>:<remote>
@@ -101,45 +138,56 @@ func (h *PortForwardHandle) Start() error {
 	// Capture stderr for diagnostics
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		h.mu.Lock()
 		h.State = ForwardFailed
 		h.Error = err.Error()
+		h.mu.Unlock()
 		return err
 	}
 
 	if err := cmd.Start(); err != nil {
+		h.mu.Lock()
 		h.State = ForwardFailed
 		h.Error = err.Error()
+		h.mu.Unlock()
 		return err
 	}
 
+	doneCh := make(chan struct{})
+	h.mu.Lock()
 	h.Cmd = cmd
-	h.done = make(chan struct{})
+	h.done = doneCh
+	h.mu.Unlock()
 
-	// Background goroutine: wait for process exit, then signal via close(done)
+	// Background goroutine: wait for process exit, then signal via close(doneCh)
 	go func() {
 		cmd.Wait()
-		close(h.done)
+		close(doneCh)
 	}()
 
 	// Wait up to 2 seconds for fast-fail detection
 	select {
-	case <-h.done:
+	case <-doneCh:
 		// Process exited quickly — try to read stderr for the error
-		h.State = ForwardFailed
 		buf := make([]byte, 4096)
 		n, _ := stderr.Read(buf)
 		errMsg := string(buf[:n])
 		if errMsg == "" {
 			errMsg = fmt.Sprintf("process exited with code %d", cmd.ProcessState.ExitCode())
 		}
+		h.mu.Lock()
+		h.State = ForwardFailed
 		h.Error = errMsg
 		h.Cmd = nil
 		h.done = nil
-		return fmt.Errorf(errMsg)
+		h.mu.Unlock()
+		return fmt.Errorf("%s", errMsg)
 
 	case <-time.After(2 * time.Second):
 		// Still alive after 2 seconds — treat as running
+		h.mu.Lock()
 		h.State = ForwardRunning
+		h.mu.Unlock()
 		return nil
 	}
 }
@@ -147,29 +195,36 @@ func (h *PortForwardHandle) Start() error {
 // Stop terminates the port-forward subprocess gracefully (SIGTERM with 5 s
 // fallback to SIGKILL). It is a no-op if the forward is not Running or Starting.
 func (h *PortForwardHandle) Stop() error {
+	h.mu.Lock()
 	if h.State != ForwardRunning && h.State != ForwardStarting {
+		h.mu.Unlock()
 		return nil
 	}
+	cmd := h.Cmd
+	doneCh := h.done
+	h.mu.Unlock()
 
-	if h.Cmd != nil && h.Cmd.Process != nil {
+	if cmd != nil && cmd.Process != nil {
 		// Send SIGTERM for graceful shutdown
-		_ = h.Cmd.Process.Signal(syscall.SIGTERM)
+		_ = cmd.Process.Signal(syscall.SIGTERM)
 
 		// Wait up to 5 seconds for graceful exit
 		select {
-		case <-h.done:
+		case <-doneCh:
 			// Process exited on SIGTERM — clean
 		case <-time.After(5 * time.Second):
 			// Force kill
-			_ = h.Cmd.Process.Kill()
-			<-h.done
+			_ = cmd.Process.Kill()
+			<-doneCh
 		}
 	}
 
+	h.mu.Lock()
 	h.State = ForwardStopped
 	h.Cmd = nil
 	h.done = nil
 	h.Error = ""
+	h.mu.Unlock()
 	return nil
 }
 
@@ -177,22 +232,30 @@ func (h *PortForwardHandle) Stop() error {
 // If the subprocess has exited, it transitions the state to ForwardFailed.
 // It is a no-op if the forward is not in Running state.
 func (h *PortForwardHandle) CheckAlive() ForwardState {
+	h.mu.Lock()
 	if h.State != ForwardRunning {
-		return h.State
+		state := h.State
+		h.mu.Unlock()
+		return state
 	}
+	doneCh := h.done
+	h.mu.Unlock()
 
 	select {
-	case <-h.done:
+	case <-doneCh:
 		// Subprocess exited unexpectedly
+		h.mu.Lock()
 		h.State = ForwardFailed
 		h.Error = "process exited unexpectedly"
 		h.Cmd = nil
 		h.done = nil
+		state := h.State
+		h.mu.Unlock()
+		return state
 	default:
 		// Still alive
+		return ForwardRunning
 	}
-
-	return h.State
 }
 
 // AssignPort finds the next free port starting from `start`,

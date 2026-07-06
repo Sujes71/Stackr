@@ -20,7 +20,7 @@ import (
 type queueSyncEnvStep int
 
 const (
-	queueStepName       queueSyncEnvStep = iota
+	queueStepName queueSyncEnvStep = iota
 	queueStepConnection
 	queueStepReview
 )
@@ -211,7 +211,9 @@ func NewAddQueueSyncEnv(
 		m.hostInput.SetValue(existing.Host)
 		m.portInput.SetValue(existing.Port)
 		m.userInput.SetValue(existing.User)
-		m.passInput.SetValue(existing.Password)
+		if decrypted, err := existing.GetPassword(); err == nil {
+			m.passInput.SetValue(decrypted)
+		}
 		switch queueType {
 		case "kafka":
 			m.bootstrapServersInput.SetValue(existing.BootstrapServers)
@@ -407,7 +409,9 @@ func (m *AddQueueSyncEnvModel) save() tea.Cmd {
 			Host:      strings.TrimSpace(m.hostInput.Value()),
 			Port:      strings.TrimSpace(m.portInput.Value()),
 			User:      strings.TrimSpace(m.userInput.Value()),
-			Password:  m.passInput.Value(), // plaintext — no encryption for v1
+		}
+		if err := qse.SetPassword(m.passInput.Value()); err != nil {
+			return ErrorMsg(fmt.Sprintf("encrypt password: %v", err))
 		}
 
 		switch m.queueType {
@@ -668,7 +672,7 @@ func (m *AddQueueSyncEnvModel) viewReviewStep() string {
 
 	queueTypeLabel := styles.StyleCode.Render(m.queueType)
 	hostPort := styles.StyleCode.Render(m.hostInput.Value() + ":" + m.portInput.Value())
-	maskedPass := styles.StyleSubtitle.Render("••••••")
+	maskedPass := styles.StyleSubtitle.Render("•••••• (encrypted at rest — password is not stored in plaintext)")
 	if m.passInput.Value() == "" {
 		maskedPass = styles.StyleSubtitle.Render("(empty)")
 	}

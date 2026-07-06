@@ -60,7 +60,7 @@ type Tag struct {
 }
 
 type tagsResponse struct {
-	Results []Tag `json:"results"`
+	Results []Tag  `json:"results"`
 	Next    string `json:"next"`
 }
 
@@ -106,12 +106,12 @@ func containsSlash(s string) bool {
 // ── Curated catalog ──────────────────────────────────────────────────────────
 
 type CatalogEntry struct {
-	Name               string
-	Image              string
-	Description        string
-	DefaultTag         string
-	DefaultPorts       []string
-	DefaultEnv         map[string]string
+	Name                string
+	Image               string
+	Description         string
+	DefaultTag          string
+	DefaultPorts        []string
+	DefaultEnv          map[string]string
 	DefaultVolumeTarget string // e.g. /var/lib/postgresql/data
 }
 
@@ -119,10 +119,10 @@ type CatalogEntry struct {
 // Users can use any of these as a starting point before customising.
 var Catalog = []CatalogEntry{
 	{
-		Name:        "PostgreSQL",
-		Image:       "postgres",
-		Description: "The world's most advanced open source relational database",
-		DefaultTag:  "15",
+		Name:         "PostgreSQL",
+		Image:        "postgres",
+		Description:  "The world's most advanced open source relational database",
+		DefaultTag:   "15",
 		DefaultPorts: []string{"5432:5432"},
 		DefaultEnv: map[string]string{
 			"POSTGRES_DB":       "mydb",
@@ -132,10 +132,10 @@ var Catalog = []CatalogEntry{
 		DefaultVolumeTarget: "/var/lib/postgresql/data",
 	},
 	{
-		Name:        "MongoDB",
-		Image:       "mongo",
-		Description: "Document-oriented NoSQL database",
-		DefaultTag:  "7",
+		Name:         "MongoDB",
+		Image:        "mongo",
+		Description:  "Document-oriented NoSQL database",
+		DefaultTag:   "7",
 		DefaultPorts: []string{"27017:27017"},
 		DefaultEnv: map[string]string{
 			"MONGO_INITDB_ROOT_USERNAME": "admin",
@@ -145,19 +145,19 @@ var Catalog = []CatalogEntry{
 		DefaultVolumeTarget: "/data/db",
 	},
 	{
-		Name:        "Redis",
-		Image:       "redis",
-		Description: "In-memory data structure store",
-		DefaultTag:  "7-alpine",
-		DefaultPorts: []string{"6379:6379"},
-		DefaultEnv:  map[string]string{},
+		Name:                "Redis",
+		Image:               "redis",
+		Description:         "In-memory data structure store",
+		DefaultTag:          "7-alpine",
+		DefaultPorts:        []string{"6379:6379"},
+		DefaultEnv:          map[string]string{},
 		DefaultVolumeTarget: "/data",
 	},
 	{
-		Name:        "MySQL",
-		Image:       "mysql",
-		Description: "Popular open source relational database",
-		DefaultTag:  "8",
+		Name:         "MySQL",
+		Image:        "mysql",
+		Description:  "Popular open source relational database",
+		DefaultTag:   "8",
 		DefaultPorts: []string{"3306:3306"},
 		DefaultEnv: map[string]string{
 			"MYSQL_ROOT_PASSWORD": "root",
@@ -168,10 +168,10 @@ var Catalog = []CatalogEntry{
 		DefaultVolumeTarget: "/var/lib/mysql",
 	},
 	{
-		Name:        "ActiveMQ",
-		Image:       "apache/activemq-classic",
-		Description: "Popular open source message broker",
-		DefaultTag:  "latest",
+		Name:         "ActiveMQ",
+		Image:        "apache/activemq-classic",
+		Description:  "Popular open source message broker",
+		DefaultTag:   "latest",
 		DefaultPorts: []string{"61616:61616", "8161:8161"},
 		DefaultEnv: map[string]string{
 			"ACTIVEMQ_USERNAME":    "admin",
@@ -182,10 +182,10 @@ var Catalog = []CatalogEntry{
 		DefaultVolumeTarget: "/opt/activemq/data",
 	},
 	{
-		Name:        "RabbitMQ",
-		Image:       "rabbitmq",
-		Description: "Open source message broker with management UI",
-		DefaultTag:  "3-management",
+		Name:         "RabbitMQ",
+		Image:        "rabbitmq",
+		Description:  "Open source message broker with management UI",
+		DefaultTag:   "3-management",
 		DefaultPorts: []string{"5672:5672", "15672:15672"},
 		DefaultEnv: map[string]string{
 			"RABBITMQ_DEFAULT_USER": "admin",
@@ -194,10 +194,10 @@ var Catalog = []CatalogEntry{
 		DefaultVolumeTarget: "/var/lib/rabbitmq",
 	},
 	{
-		Name:        "Kafka",
-		Image:       "apache/kafka",
-		Description: "Distributed event streaming platform",
-		DefaultTag:  "latest",
+		Name:         "Kafka",
+		Image:        "apache/kafka",
+		Description:  "Distributed event streaming platform",
+		DefaultTag:   "latest",
 		DefaultPorts: []string{"9092:9092"},
 		DefaultEnv: map[string]string{
 			"KAFKA_LISTENERS":            "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093",
@@ -206,10 +206,10 @@ var Catalog = []CatalogEntry{
 		DefaultVolumeTarget: "/var/lib/kafka/data",
 	},
 	{
-		Name:        "Elasticsearch",
-		Image:       "elasticsearch",
-		Description: "Distributed search and analytics engine",
-		DefaultTag:  "8.13.0",
+		Name:         "Elasticsearch",
+		Image:        "elasticsearch",
+		Description:  "Distributed search and analytics engine",
+		DefaultTag:   "8.13.0",
 		DefaultPorts: []string{"9200:9200", "9300:9300"},
 		DefaultEnv: map[string]string{
 			"discovery.type":         "single-node",
@@ -219,10 +219,10 @@ var Catalog = []CatalogEntry{
 		DefaultVolumeTarget: "/usr/share/elasticsearch/data",
 	},
 	{
-		Name:        "MinIO",
-		Image:       "minio/minio",
-		Description: "High-performance S3-compatible object storage",
-		DefaultTag:  "latest",
+		Name:         "MinIO",
+		Image:        "minio/minio",
+		Description:  "High-performance S3-compatible object storage",
+		DefaultTag:   "latest",
 		DefaultPorts: []string{"9000:9000", "9001:9001"},
 		DefaultEnv: map[string]string{
 			"MINIO_ROOT_USER":     "minioadmin",
@@ -231,24 +231,24 @@ var Catalog = []CatalogEntry{
 		DefaultVolumeTarget: "./data",
 	},
 	{
-		Name:        "Mailpit",
-		Image:       "axllent/mailpit",
-		Description: "Email testing tool with web UI",
-		DefaultTag:  "latest",
+		Name:         "Mailpit",
+		Image:        "axllent/mailpit",
+		Description:  "Email testing tool with web UI",
+		DefaultTag:   "latest",
 		DefaultPorts: []string{"1025:1025", "8025:8025"},
-		DefaultEnv:  map[string]string{},
+		DefaultEnv:   map[string]string{},
 	},
 	{
-		Name:        "MockServer",
-		Image:       "mockserver/mockserver",
-		Description: "HTTP mock server & proxy for API testing",
-		DefaultTag:  "latest",
+		Name:         "MockServer",
+		Image:        "mockserver/mockserver",
+		Description:  "HTTP mock server & proxy for API testing",
+		DefaultTag:   "latest",
 		DefaultPorts: []string{"1080:1080"},
 		DefaultEnv: map[string]string{
-			"MOCKSERVER_LOG_LEVEL":                    "INFO",
-			"MOCKSERVER_PERSIST_EXPECTATIONS":         "true",
-			"MOCKSERVER_PERSISTED_EXPECTATIONS_PATH":  "/config/persistedExpectations.json",
-			"MOCKSERVER_INITIALIZATION_JSON_PATH":     "/config/persistedExpectations.json",
+			"MOCKSERVER_LOG_LEVEL":                   "INFO",
+			"MOCKSERVER_PERSIST_EXPECTATIONS":        "true",
+			"MOCKSERVER_PERSISTED_EXPECTATIONS_PATH": "/config/persistedExpectations.json",
+			"MOCKSERVER_INITIALIZATION_JSON_PATH":    "/config/persistedExpectations.json",
 		},
 		DefaultVolumeTarget: "/config",
 	},

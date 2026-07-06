@@ -29,8 +29,8 @@ type NewProfileModel struct {
 	envs          []string // environment names being built
 	envInput      textinput.Model
 	err           string
-	confirmRemove bool   // double-tap d protection
-	height        int    // terminal height, set via WindowSizeMsg
+	confirmRemove bool // double-tap d protection
+	height        int  // terminal height, set via WindowSizeMsg
 }
 
 func NewNewProfile(cfg *config.Config) *NewProfileModel {
@@ -45,7 +45,7 @@ func NewNewProfile(cfg *config.Config) *NewProfileModel {
 
 	envInput := textinput.New()
 	envInput.Placeholder = "dev, staging, qa..."
-	envInput.CharLimit = 5
+	envInput.CharLimit = 12
 
 	return &NewProfileModel{
 		cfg:      cfg,
@@ -60,8 +60,14 @@ func NewNewProfile(cfg *config.Config) *NewProfileModel {
 var npKeys = struct {
 	next, back, removeEnv key.Binding
 }{
-	next:      key.NewBinding(key.WithKeys("enter", "tab")),
-	back:      key.NewBinding(key.WithKeys("esc")),
+	// XC-008: in this wizard, tab doubles as "next step" (same as enter). This is
+	// intentional for a linear wizard flow, unlike AddService where tab switches
+	// fields within a step. Keeping tab=next lets users advance without reaching
+	// for enter on every step.
+	next: key.NewBinding(key.WithKeys("enter", "tab")),
+	back: key.NewBinding(key.WithKeys("esc")),
+	// XC-004: ctrl+d (not bare 'd') is used because this view has active
+	// textinput fields where a bare 'd' must be passed through as typed input.
 	removeEnv: key.NewBinding(key.WithKeys("ctrl+d")),
 }
 
@@ -69,8 +75,12 @@ func (m *NewProfileModel) Init() tea.Cmd {
 	return textinput.Blink
 }
 
+// SetSize stores terminal dimensions. h is the FULL terminal height;
+// we subtract 5 for App chrome (header + separator + footer) so all
+// views share the same contract: app.go passes full height, each view
+// subtracts its own chrome internally (AUDIT-019).
 func (m *NewProfileModel) SetSize(w, h int) {
-	m.height = max(0, h)
+	m.height = max(0, h-5)
 }
 
 func (m *NewProfileModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -145,6 +155,12 @@ func (m *NewProfileModel) advance() (tea.Model, tea.Cmd) {
 				if len(m.envs) >= 5 {
 					m.err = "maximum 5 environments allowed"
 					m.envInput.Reset()
+					return m, nil
+				}
+				// AUDIT-004: reject names with characters invalid for compose
+				// identifiers, matching the validation profile_view enforces.
+				if config.SanitizeComposeName(val) != val {
+					m.err = "environment name may only contain letters, numbers, underscores, and hyphens"
 					return m, nil
 				}
 				m.envs = append(m.envs, val)
@@ -256,7 +272,7 @@ func (m *NewProfileModel) View() string {
 
 	if m.err != "" {
 		b.WriteString("\n")
-		b.WriteString(styles.StyleError.Render("  ✗ " + m.err))
+		b.WriteString(styles.ErrorLine(m.err))
 	}
 	b.WriteString("\n\n")
 	if m.step == npStepEnvs {

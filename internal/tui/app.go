@@ -40,7 +40,7 @@ type App struct {
 	dbOps       *views.DBOpsModel
 	queueOps    *views.QueueOpsModel
 	mockOps     *views.MockOpsModel
-	err string
+	err         string
 }
 
 func New(cfg *config.Config) *App {
@@ -145,15 +145,15 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 	case views.NavNewProfile:
 		a.screen = ScreenNewProfile
 		a.newProfile = views.NewNewProfile(a.cfg)
-		a.newProfile.SetSize(a.width, a.height-5)
+		a.newProfile.SetSize(a.width, a.height)
 		return a, a.newProfile.Init()
 
 	case views.NavProfileView:
 		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
 			a.screen = ScreenProfileView
 			if a.profileView == nil || a.profileView.ProfileName() != nav.ProfileName {
-				// Different profile or first time — save old state, create new
-				a.captureProfileNavState(nav)
+				// Different profile or first time — create new (leaving state
+				// already captured by captureProfileNavState at top of handleNav)
 				a.profileView = views.NewProfileView(a.cfg, p)
 				if state, ok := a.profileNavState[nav.ProfileName]; ok {
 					a.profileView.RestoreNavState(state)
@@ -180,12 +180,12 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 			a.screen = ScreenDBOps
 			if a.dbOps == nil || a.dbOps.ServiceKey() != nav.ServiceKey() {
 				a.dbOps = views.NewDBOps(a.cfg, p, nav.EnvName, nav.ServiceName)
-				a.dbOps.SetSize(a.width, a.height-5)
+				a.dbOps.SetSize(a.width, a.height)
 				return a, a.dbOps.Init()
 			}
 			// Same service — keep model alive
 			a.dbOps.ReShow(a.cfg)
-			a.dbOps.SetSize(a.width, a.height-5)
+			a.dbOps.SetSize(a.width, a.height)
 			return a, nil
 		}
 
@@ -194,12 +194,12 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 			a.screen = ScreenQueueOps
 			if a.queueOps == nil || a.queueOps.ServiceKey() != nav.ServiceKey() {
 				a.queueOps = views.NewQueueOps(a.cfg, p, nav.EnvName, nav.ServiceName)
-				a.queueOps.SetSize(a.width, a.height-5)
+				a.queueOps.SetSize(a.width, a.height)
 				return a, a.queueOps.Init()
 			}
 			// Same service — keep model alive
 			a.queueOps.ReShow(a.cfg)
-			a.queueOps.SetSize(a.width, a.height-5)
+			a.queueOps.SetSize(a.width, a.height)
 			return a, nil
 		}
 
@@ -208,12 +208,12 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 			a.screen = ScreenMockOps
 			if a.mockOps == nil || a.mockOps.ServiceKey() != nav.ServiceKey() {
 				a.mockOps = views.NewMockOps(a.cfg, p, nav.EnvName, nav.ServiceName)
-				a.mockOps.SetSize(a.width, a.height-5)
+				a.mockOps.SetSize(a.width, a.height)
 				return a, a.mockOps.Init()
 			}
 			// Same service — keep model alive
 			a.mockOps.ReShow(a.cfg)
-			a.mockOps.SetSize(a.width, a.height-5)
+			a.mockOps.SetSize(a.width, a.height)
 			return a, nil
 		}
 
@@ -310,19 +310,19 @@ func (a *App) breadcrumb() string {
 		return "profiles / new"
 	case ScreenAddService:
 		if a.addService != nil {
-			return "profiles / " + a.addService.ProfileName() + " / add service"
+			return "profiles / " + a.addService.ProfileName() + " / Add Service"
 		}
 	case ScreenDBOps:
 		if a.dbOps != nil {
-			return "profiles / " + a.dbOps.ProfileName() + " / " + a.dbOps.EnvName() + " / " + a.dbOps.ServiceName() + " / db ops"
+			return "profiles / " + a.dbOps.ProfileName() + " / " + a.dbOps.EnvName() + " / " + a.dbOps.ServiceName() + " / DB Ops"
 		}
 	case ScreenQueueOps:
 		if a.queueOps != nil {
-			return "profiles / " + a.queueOps.ProfileName() + " / " + a.queueOps.EnvName() + " / " + a.queueOps.ServiceName() + " / queue ops"
+			return "profiles / " + a.queueOps.ProfileName() + " / " + a.queueOps.EnvName() + " / " + a.queueOps.ServiceName() + " / Queue Ops"
 		}
 	case ScreenMockOps:
 		if a.mockOps != nil {
-			return "profiles / " + a.mockOps.ProfileName() + " / " + a.mockOps.EnvName() + " / " + a.mockOps.ServiceName() + " / mock ops"
+			return "profiles / " + a.mockOps.ProfileName() + " / " + a.mockOps.EnvName() + " / " + a.mockOps.ServiceName() + " / MockServer Ops"
 		}
 	}
 	return ""
@@ -350,11 +350,10 @@ func (a *App) renderBody() string {
 
 func (a *App) renderFooter() string {
 	sep := styles.Separator(a.width)
-	var content string
+	quitLine := styles.StyleHelp.Render("ctrl+c quit")
 	if a.err != "" {
-		content = styles.StyleError.Render("  ✗ " + a.err)
-	} else {
-		content = styles.StyleHelp.Render("ctrl+c quit")
+		errLine := styles.StyleError.Render("  ✗ " + a.err)
+		return lipgloss.JoinVertical(lipgloss.Left, sep, errLine, quitLine)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, sep, content)
+	return lipgloss.JoinVertical(lipgloss.Left, sep, quitLine)
 }

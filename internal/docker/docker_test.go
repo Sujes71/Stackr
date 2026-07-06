@@ -56,9 +56,9 @@ func TestDefaultQueueToolImage(t *testing.T) {
 
 func TestQueueToolImage(t *testing.T) {
 	tests := []struct {
-		name              string
-		qse               *config.QueueSyncEnv
-		want              string
+		name string
+		qse  *config.QueueSyncEnv
+		want string
 	}{
 		{
 			name: "with override returns override image",

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stackr/stackr/internal/config"
+	"github.com/stackr/stackr/internal/crypto"
 	"github.com/stackr/stackr/internal/docker"
 	"github.com/stackr/stackr/internal/tui/styles"
 )
@@ -55,10 +57,10 @@ type QueueOpsModel struct {
 	screen queueOpsScreen
 
 	// SyncEnv list state
-	listCursor       int
-	deleteArmed      bool
-	selectedEnv      string // name of selected QueueSyncEnv (empty = local)
-	selectedEnvName  string // display name
+	listCursor      int
+	deleteArmed     bool
+	selectedEnv     string // name of selected QueueSyncEnv (empty = local)
+	selectedEnvName string // display name
 
 	// Actions state
 	actions       []actionItem
@@ -96,13 +98,13 @@ type QueueOpsModel struct {
 	customCmdInput     textinput.Model
 
 	// Custom action param prompting
-	promptingParams   bool
-	promptingForCore  bool // true = prompting for pre-defined action, false = for custom
-	paramsToPrompt    []string
-	paramValues       map[string]string
-	currentParamIdx   int
-	paramInput        textinput.Model
-	paramTextarea     textarea.Model
+	promptingParams  bool
+	promptingForCore bool // true = prompting for pre-defined action, false = for custom
+	paramsToPrompt   []string
+	paramValues      map[string]string
+	currentParamIdx  int
+	paramInput       textinput.Model
+	paramTextarea    textarea.Model
 
 	// Custom action delete
 	deleteActionArmed bool
@@ -127,12 +129,12 @@ type QueueOpsModel struct {
 
 func NewQueueOps(cfg *config.Config, p *config.Profile, envName, serviceName string) *QueueOpsModel {
 	m := &QueueOpsModel{
-		cfg:         cfg,
-		profile:     p,
-		envName:     envName,
-		serviceName: serviceName,
-		screen:      queueScreenSyncEnvList,
-		pendingOps:  make(map[string]string),
+		cfg:             cfg,
+		profile:         p,
+		envName:         envName,
+		serviceName:     serviceName,
+		screen:          queueScreenSyncEnvList,
+		pendingOps:      make(map[string]string),
 		customNameInput: textinput.New(),
 		customCmdInput:  textinput.New(),
 		paramInput:      textinput.New(),
@@ -211,14 +213,14 @@ func (m *QueueOpsModel) Init() tea.Cmd {
 
 func (m *QueueOpsModel) SetSize(w, h int) {
 	m.width = w
-	m.height = max(0, h)
+	m.height = max(0, h-5)
 	m.resultViewport.Width = w - 4
 	if m.viewingResult {
 		lineCount := strings.Count(m.viewportContent, "\n") + 1
 		// +3 for title + blank lines outside the viewport
-		m.resultViewport.Height = min(lineCount, max(8, h-13))
+		m.resultViewport.Height = min(lineCount, max(8, m.height-13))
 	} else {
-		m.resultViewport.Height = max(8, h-10)
+		m.resultViewport.Height = max(8, m.height-10)
 	}
 	// Recalculate textarea height if param prompting with a textarea param
 	if m.promptingParams && m.currentParamIdx < len(m.paramsToPrompt) {
@@ -232,7 +234,7 @@ func (m *QueueOpsModel) SetSize(w, h int) {
 
 func (m *QueueOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if wsMsg, ok := msg.(tea.WindowSizeMsg); ok {
-		m.SetSize(wsMsg.Width, wsMsg.Height-5)
+		m.SetSize(wsMsg.Width, wsMsg.Height)
 		return m, nil
 	}
 
@@ -248,6 +250,7 @@ func (m *QueueOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.doneOp != "" {
 			if time.Since(m.doneOpAt) >= 5*time.Second {
 				m.doneOp = ""
+				m.doneOpAt = time.Time{}
 			} else {
 				m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
 				return m, tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
@@ -385,14 +388,14 @@ func (m *QueueOpsModel) viewSyncEnvList() string {
 
 	// Build all items as strings for windowing
 	totalItems := 1 + len(queueSyncEnvs) // local + remote envs
-	overhead := 14                        // title, subtitle, help, margins
+	overhead := 14                       // title, subtitle, help, margins
 	if m.deleteArmed {
 		overhead++
 	}
 	if m.lastResult != "" {
 		overhead += 2
 	}
-	win := m.queueOpsWindow(totalItems, m.listCursor, 1, overhead)
+	win := opsWindow(totalItems, m.listCursor, 1, m.height, overhead)
 
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
@@ -543,7 +546,7 @@ func (m *QueueOpsModel) buildActionsList(qse *config.QueueSyncEnv) []actionItem 
 		actions = []actionItem{
 			// Topics group
 			{label: "List topics", group: "Topics", enabled: true,
-				execute: 		qExec("/usr/bin/kafka-topics", "--bootstrap-server", bs, "--list")},
+				execute: qExec("/usr/bin/kafka-topics", "--bootstrap-server", bs, "--list")},
 			{label: "Describe topic", group: "Topics", enabled: true,
 				execute: nil}, // params: topic → will be prompted
 			{label: "Create topic", group: "Topics", enabled: true,
@@ -559,7 +562,7 @@ func (m *QueueOpsModel) buildActionsList(qse *config.QueueSyncEnv) []actionItem 
 
 			// Consumer Groups group
 			{label: "List groups", group: "Consumer Groups", enabled: true,
-				execute: 		qExec("/usr/bin/kafka-consumer-groups", "--bootstrap-server", bs, "--list")},
+				execute: qExec("/usr/bin/kafka-consumer-groups", "--bootstrap-server", bs, "--list")},
 			{label: "Describe group", group: "Consumer Groups", enabled: true,
 				execute: nil}, // params: group
 			{label: "Reset offset", group: "Consumer Groups", enabled: true,
@@ -612,7 +615,7 @@ func (m *QueueOpsModel) buildActionsList(qse *config.QueueSyncEnv) []actionItem 
 				execute: qExec("/usr/local/bin/rabbitmqadmin", rabbitArgs("list consumers")...)},
 		}
 
-			case "activemq":
+	case "activemq":
 		// JMX exec helper: uses --jmxurl for both remote and local.
 		// --jmxlocal (Attach API) was initially used for local but doesn't
 		// reliably find destination MBeans inside the container — --jmxurl
@@ -965,10 +968,10 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cleaned = formatActiveMQTable(cleaned)
 			cleaned = formatActiveMQBrowse(cleaned)
 		case "kafka":
-			cleaned = formatActiveMQTable(cleaned)  // consumer groups describe
-			cleaned = formatKafkaDescribe(cleaned)  // topic describe
+			cleaned = formatActiveMQTable(cleaned) // consumer groups describe
+			cleaned = formatKafkaDescribe(cleaned) // topic describe
 		case "rabbitmq":
-			cleaned = formatRabbitMQTable(cleaned)  // rabbitmqadmin list *
+			cleaned = formatRabbitMQTable(cleaned) // rabbitmqadmin list *
 		}
 		if cleaned == "" {
 			// Auto-generated success — no output, skip the result panel entirely.
@@ -1054,8 +1057,31 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case readyRetryMsg:
 		container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
-		ready, _ := docker.QueueContainerRunning(container)
-		if ready {
+		running, _ := docker.QueueContainerRunning(container)
+		if running {
+			// TCP port readiness check — the service port must be accepting
+			// connections, not just the container running (docker inspect
+			// only checks the container state, not the service inside).
+			hostPort := m.queueHostPort()
+			if hostPort != "" {
+				conn, err := net.DialTimeout("tcp", "localhost:"+hostPort, 2*time.Second)
+				if err != nil {
+					// Port not ready yet — retry
+					if msg.retry >= 30 {
+						m.pendingOps = make(map[string]string)
+						m.lastResult = formatErrorMsg("queue port not ready after 30s")
+						return m, nil
+					}
+					return m, tea.Batch(
+						func() tea.Msg {
+							time.Sleep(1 * time.Second)
+							return readyRetryMsg{label: msg.label, retry: msg.retry + 1}
+						},
+						spinnerCmd(),
+					)
+				}
+				conn.Close()
+			}
 			// ActiveMQ KahaDB grace period: after the container starts, the broker
 			// needs ~3s to recover persisted queue data from KahaDB journal before
 			// dstat returns the full destination list. If we execute too early,
@@ -1319,16 +1345,11 @@ func (m *QueueOpsModel) updateCustomConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, opsKeyEnter):
-			container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
-			if !m.isContainerRunning(container) && m.targetSyncEnv == false {
-				m.confirmCustomAction = false
-				if !docker.DaemonAvailable() {
-					m.promptStartDaemon = true
-				} else {
-					m.promptStartService = true
+			if !m.targetSyncEnv {
+				if !m.ensureContainerRunning(m.actions[m.actionCursor].label) {
+					m.confirmCustomAction = false
+					return m, nil
 				}
-				m.pendingStartLabel = m.actions[m.actionCursor].label
-				return m, nil
 			}
 			m.confirmCustomAction = false
 			m.lastResult = ""
@@ -1358,15 +1379,8 @@ func (m *QueueOpsModel) updateCoreConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			act := m.actions[m.actionCursor]
 
 			// For local targeting, check container is running
-			if m.targetSyncEnv == false {
-				container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
-				if !m.isContainerRunning(container) {
-					if !docker.DaemonAvailable() {
-						m.promptStartDaemon = true
-					} else {
-						m.promptStartService = true
-					}
-					m.pendingStartLabel = act.label
+			if !m.targetSyncEnv {
+				if !m.ensureContainerRunning(act.label) {
 					return m, nil
 				}
 			}
@@ -1493,21 +1507,21 @@ INNEREOF`,
 						}
 					}
 				}
-		case "Purge queue":
-			program = "activemq"
-			// --jmxlocal avoids a NullPointerException in ActiveMQ 6.2.0
-			// that occurs with --jmxurl when running purge locally.
-			args = []string{"purge", m.paramValues["queue"], "--jmxlocal"}
-			if m.targetSyncEnv {
-				svc := m.currentService()
-				if svc != nil {
-					qse := svc.FindQueueSyncEnv(m.selectedEnv)
-					if qse != nil {
-						jmxURL := "service:jmx:rmi:///jndi/rmi://" + qse.Host + ":1099/jmxrmi"
-						args = []string{"purge", m.paramValues["queue"], "--jmxurl", jmxURL}
+			case "Purge queue":
+				program = "activemq"
+				// --jmxlocal avoids a NullPointerException in ActiveMQ 6.2.0
+				// that occurs with --jmxurl when running purge locally.
+				args = []string{"purge", m.paramValues["queue"], "--jmxlocal"}
+				if m.targetSyncEnv {
+					svc := m.currentService()
+					if svc != nil {
+						qse := svc.FindQueueSyncEnv(m.selectedEnv)
+						if qse != nil {
+							jmxURL := "service:jmx:rmi:///jndi/rmi://" + qse.Host + ":1099/jmxrmi"
+							args = []string{"purge", m.paramValues["queue"], "--jmxurl", jmxURL}
+						}
 					}
 				}
-			}
 			case "Send message":
 				program = "activemq"
 				args = []string{"producer", "--destination", m.paramValues["queue"], "--message", m.paramValues["message"], "--messageCount", "1"}
@@ -1788,11 +1802,21 @@ func (m *QueueOpsModel) viewActions() string {
 		targetLabel = m.selectedEnvName
 	}
 	b.WriteString(styles.StyleTitle.Render(
-		fmt.Sprintf(" Queue Actions — %s ", m.serviceName)))
+		fmt.Sprintf(" Queue Ops — %s / %s / %s — %s ", m.profile.Name, m.envName, m.serviceName, targetLabel)))
 	b.WriteString("\n\n")
 	b.WriteString(styles.StyleSubtitle.Render(
 		fmt.Sprintf("  Target: %s  |  Type: %s", targetLabel, m.currentQueueType()),
 	))
+	// Show encryption indicator when the remote QueueSyncEnv has an encrypted password
+	if m.targetSyncEnv {
+		if svc := m.currentService(); svc != nil {
+			if qse := svc.FindQueueSyncEnv(m.selectedEnv); qse != nil {
+				if qse.Password != "" && crypto.IsEncrypted(qse.Password) {
+					b.WriteString("\n" + styles.StyleSubtitle.Render("  \U0001F512 Password: [encrypted]"))
+				}
+			}
+		}
+	}
 	b.WriteString("\n\n")
 
 	// Custom action form
@@ -1836,7 +1860,7 @@ func (m *QueueOpsModel) viewActions() string {
 	if m.confirmAction || m.confirmCustomAction {
 		overhead += 2
 	}
-	win := m.queueOpsWindow(totalActions, m.actionCursor, 2, overhead)
+	win := opsWindow(totalActions, m.actionCursor, 2, m.height, overhead)
 
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
@@ -1852,15 +1876,21 @@ func (m *QueueOpsModel) viewActions() string {
 				b.WriteString("\n")
 			}
 			b.WriteString("  " + groupHeaderStyle.Render(currentGroup))
+			// Context subtitle: local vs remote target
+			if m.targetSyncEnv {
+				b.WriteString(" " + styles.StyleSubtitle.Render("(remote)"))
+			} else {
+				b.WriteString(" " + styles.StyleSubtitle.Render("(local)"))
+			}
 			b.WriteString("\n")
 		}
 
 		isCursor := i == m.actionCursor
 
 		if !act.enabled {
-			b.WriteString(styles.StyleSubtitle.Render("      " + act.label) + "\n")
+			b.WriteString(styles.StyleSubtitle.Render("      "+act.label) + "\n")
 			if act.disabledReason != "" {
-				b.WriteString(styles.StyleSubtitle.Render("      unavailable: " + act.disabledReason) + "\n")
+				b.WriteString(styles.StyleSubtitle.Render("      unavailable: "+act.disabledReason) + "\n")
 			}
 			continue
 		}
@@ -1880,11 +1910,11 @@ func (m *QueueOpsModel) viewActions() string {
 
 		if isCursor {
 			if act.isCustom {
-				b.WriteString(customSelStyle.Render("    > " + act.label) + "\n")
+				b.WriteString(customSelStyle.Render("    > "+act.label) + "\n")
 			} else if act.isAddAction {
-				b.WriteString(addSelStyle.Render("    > " + act.label) + "\n")
+				b.WriteString(addSelStyle.Render("    > "+act.label) + "\n")
 			} else {
-				b.WriteString(selStyle.Render("    > " + act.label) + "\n")
+				b.WriteString(selStyle.Render("    > "+act.label) + "\n")
 			}
 		} else {
 			b.WriteString("      " + act.label + "\n")
@@ -1912,7 +1942,7 @@ func (m *QueueOpsModel) viewActions() string {
 		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
 	} else if m.promptStartService {
 		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
-		b.WriteString(styles.StyleError.Render("  Service '" + m.serviceName + "' is not running.") + "\n")
+		b.WriteString(styles.StyleError.Render("  Service '"+m.serviceName+"' is not running.") + "\n")
 		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
 	}
 
@@ -1946,7 +1976,7 @@ func (m *QueueOpsModel) viewCustomForm() string {
 	if m.editingCustomIdx >= 0 {
 		titleStr = "Edit Custom Action"
 	}
-	b.WriteString(styles.StyleSubtitle.Render("  " + titleStr) + "\n\n")
+	b.WriteString(styles.StyleSubtitle.Render("  "+titleStr) + "\n\n")
 
 	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 	normalStyle := lipgloss.NewStyle()
@@ -2030,7 +2060,7 @@ func (m *QueueOpsModel) viewParamPrompt() string {
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "navigate"),
-			styles.HelpItem("enter", "newline"),
+			styles.HelpItem("↵", "newline"),
 			styles.HelpItem("ctrl+f", "format"),
 			styles.HelpItem("ctrl+s", "save"),
 		))
@@ -2057,49 +2087,13 @@ func (m *QueueOpsModel) viewParamPrompt() string {
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "navigate"),
-			styles.HelpItem("enter", enterLabel),
+			styles.HelpItem("↵", enterLabel),
 		))
 	}
 	return b.String()
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-// queueOpsWindow calculates the visible item range given total items, cursor
-// position, terminal height, and per-item height estimate.
-func (m *QueueOpsModel) queueOpsWindow(total, cursor, itemHeight, overhead int) itemWindow {
-	w := itemWindow{start: 0, end: total}
-	if total == 0 || m.height <= 0 {
-		return w
-	}
-	avail := m.height - overhead
-	if avail <= 0 {
-		return itemWindow{start: cursor, end: min(cursor+1, total), hasAbove: cursor > 0, hasBelow: cursor+1 < total}
-	}
-	fit := avail / itemHeight
-	if fit <= 0 {
-		fit = 1
-	}
-	if total <= fit {
-		return w
-	}
-	half := fit / 2
-	start := cursor - half
-	if start < 0 {
-		start = 0
-	}
-	end := start + fit
-	if end > total {
-		end = total
-		start = total - fit
-	}
-	return itemWindow{
-		start:    start,
-		end:      end,
-		hasAbove: start > 0,
-		hasBelow: end < total,
-	}
-}
 
 func (m *QueueOpsModel) renderSpinnerDot(op string) string {
 	return opsRenderSpinnerDot(m.spinnerFrame, op)
@@ -2111,6 +2105,53 @@ func (m *QueueOpsModel) firstEnabledAction() int {
 
 func (m *QueueOpsModel) isContainerRunning(container string) bool {
 	return opsIsContainerRunning(m.profile.Name, m.envName, container)
+}
+
+// ensureContainerRunning checks whether the service container is running.
+// If it is not, it sets up the daemon/service start prompt and returns false.
+// The caller should return (m, nil) immediately when this returns false.
+func (m *QueueOpsModel) ensureContainerRunning(label string) bool {
+	st := opsCheckContainer(m.profile.Name, m.envName, m.serviceName)
+	return st.apply(
+		func(v bool) { m.promptStartDaemon = v },
+		func(v bool) { m.promptStartService = v },
+		func(v string) { m.pendingStartLabel = v },
+		label,
+	)
+}
+
+// queueReadyPort returns the default container port for the queue type,
+// used for TCP readiness checks.
+func queueReadyPort(queueType string) string {
+	switch queueType {
+	case "kafka":
+		return "9092"
+	case "rabbitmq":
+		return "5672"
+	case "activemq":
+		return "61616"
+	}
+	return ""
+}
+
+// queueHostPort returns the host port mapped to the queue's default container
+// port, or "" if no explicit host mapping exists. Returning "" (not the
+// container port) ensures the TCP readiness check is skipped for unmapped
+// services — the dial would target localhost:containerPort on the host where
+// nothing listens, causing a false 30s failure. Unmapped queue services are
+// reached inside the container network via docker exec.
+func (m *QueueOpsModel) queueHostPort() string {
+	svc := m.currentService()
+	if svc == nil {
+		return ""
+	}
+	containerPort := queueReadyPort(m.currentQueueType())
+	for _, p := range svc.Ports {
+		if p.Container == containerPort {
+			return p.Host
+		}
+	}
+	return ""
 }
 
 func (m *QueueOpsModel) launchDockerCmd() tea.Cmd {

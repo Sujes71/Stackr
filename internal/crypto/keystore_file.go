@@ -14,8 +14,17 @@ import (
 type fileKeyStore struct{}
 
 // keyFilePath returns the path to the encryption key file: ~/.stackr/.encryption-key
+// If the home directory cannot be determined it falls back to $HOME, then to the
+// current directory, so we never silently produce a relative key path from an
+// empty home string (which would create/look for the key in the CWD).
 func keyFilePath() string {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		home = os.Getenv("HOME")
+	}
+	if home == "" {
+		home = "."
+	}
 	return filepath.Join(home, ".stackr", ".encryption-key")
 }
 

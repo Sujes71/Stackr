@@ -21,27 +21,23 @@ type HomeModel struct {
 	cursor       int
 	profiles     []config.Profile
 	deleteArmed  bool
-	deleting     string         // non-empty → typed confirmation for deletion of this profile
+	deleting     string // non-empty → typed confirmation for deletion of this profile
 	confirmInput textinput.Model
 	lastResult   string
 	height       int // terminal height, set via WindowSizeMsg
+	width        int // terminal width, set via WindowSizeMsg
 
 	// ── Export / Import ──
-	showImport  bool
-	importFiles     []string // available export files not yet imported
-	importCursor    int
+	showImport        bool
+	importFiles       []string // available export files not yet imported
+	importCursor      int
 	importDeleteArmed bool
-	importErr       string
-	importing   bool
+	importErr         string
+	importing         bool
 
 	// ── Pending Ops / Spinner ──
 	pendingOps   map[string]string // key → "importing"
 	spinnerFrame int
-}
-
-type importResultMsg struct {
-	profiles []config.Profile
-	err      string
 }
 
 func NewHome(cfg *config.Config) *HomeModel {
@@ -77,6 +73,7 @@ func (m *HomeModel) SetCursor(c int) { m.cursor = c }
 // SetSize propagates terminal dimensions before the first WindowSizeMsg.
 // h is the full terminal height; we subtract 5 for App chrome.
 func (m *HomeModel) SetSize(w, h int) {
+	m.width = w
 	m.height = max(0, h-5)
 }
 
@@ -100,7 +97,7 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.pendingOps, "import")
 		m.importing = false
 		if msg.err != "" {
-			m.importErr = msg.err
+			m.importErr = styles.ErrorLine(msg.err)
 			return m, nil
 		}
 		m.profiles = msg.profiles
@@ -170,7 +167,7 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				name := m.importFiles[m.importCursor]
 				path := filepath.Join(config.StackrDir(), "exports", name+".yaml")
 				if err := os.Remove(path); err != nil {
-					m.importErr = styles.StyleError.Render("✗ Failed to delete: " + err.Error())
+					m.importErr = styles.ErrorLine("Failed to delete: " + err.Error())
 					return m, ClearActionAfter(3 * time.Second)
 				}
 				m.importFiles = append(m.importFiles[:m.importCursor], m.importFiles[m.importCursor+1:]...)
@@ -191,6 +188,7 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch {
 			case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
 				m.deleting = ""
+				m.lastResult = ""
 				m.confirmInput.Reset()
 				m.confirmInput.Blur()
 				return m, nil
@@ -198,6 +196,7 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.confirmInput.Value() == m.deleting {
 					name := m.deleting
 					m.deleting = ""
+					m.lastResult = ""
 					m.confirmInput.Reset()
 					m.confirmInput.Blur()
 					_ = m.cfg.DeleteProfile(name)
@@ -206,6 +205,8 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.cursor--
 					}
 				} else {
+					// AUDIT-034: surface a clear error instead of silently resetting.
+					m.lastResult = styles.ErrorLine("name does not match — type " + fmt.Sprintf("%q", m.deleting) + " to confirm")
 					m.confirmInput.Reset()
 				}
 				return m, nil
@@ -272,11 +273,11 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			path := filepath.Join(exportDir, p.Name+".yaml")
 			data, err := yaml.Marshal(p)
 			if err != nil {
-				m.lastResult = styles.StyleError.Render("✗ export: " + err.Error())
+				m.lastResult = styles.ErrorLine("export: " + err.Error())
 			} else if err := os.WriteFile(path, data, 0644); err != nil {
-				m.lastResult = styles.StyleError.Render("✗ export: " + err.Error())
+				m.lastResult = styles.ErrorLine("export: " + err.Error())
 			} else {
-				m.lastResult = styles.StyleSuccess.Render("✓ Exported to " + path)
+				m.lastResult = "  " + styles.StyleSuccess.Render("✓") + " Exported to " + path
 			}
 			return m, ClearActionAfter(3 * time.Second)
 
@@ -295,7 +296,7 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if len(m.importFiles) == 0 {
-				m.lastResult = styles.StyleSubtitle.Render("No profiles available to import. Export one first with 'x'.")
+				m.lastResult = "  " + styles.StyleSubtitle.Render("No profiles available to import. Export one first with 'x'.")
 				return m, ClearActionAfter(3 * time.Second)
 			}
 			m.deleteArmed = false
@@ -309,13 +310,6 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
-}
-
-// ── Spinner ──
-
-func (m *HomeModel) renderSpinnerDot(op string) string {
-	frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
-	return lipgloss.NewStyle().Foreground(styles.ColorAccent).Render(fmt.Sprintf("%s %s", frame, op))
 }
 
 func (m *HomeModel) View() string {
@@ -336,7 +330,7 @@ func (m *HomeModel) View() string {
 		}
 		b.WriteString("\n")
 		if m.importDeleteArmed {
-			b.WriteString(styles.StyleError.Render("  Press d again to confirm removal"))
+			b.WriteString(styles.StyleError.Render("  Press d again to confirm deletion"))
 			b.WriteString("\n")
 		}
 		b.WriteString(styles.InlineHelp(
@@ -347,10 +341,10 @@ func (m *HomeModel) View() string {
 		))
 		b.WriteString("\n")
 		if m.importing {
-			b.WriteString(m.renderSpinnerDot("Importing") + "\n")
+			b.WriteString(opsRenderSpinnerDot(m.spinnerFrame, "Importing") + "\n")
 		}
 		if m.importErr != "" {
-			b.WriteString("  " + m.importErr + "\n")
+			b.WriteString(m.importErr + "\n")
 		}
 		return b.String()
 	}
@@ -367,6 +361,9 @@ func (m *HomeModel) View() string {
 		))
 		b.WriteString("\n\n")
 		b.WriteString("  " + m.confirmInput.View())
+		if m.lastResult != "" {
+			b.WriteString("\n\n" + m.lastResult)
+		}
 		b.WriteString("\n\n")
 		b.WriteString(styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
@@ -377,10 +374,7 @@ func (m *HomeModel) View() string {
 	}
 
 	if len(m.profiles) == 0 {
-		empty := styles.StylePanel.Render(
-			styles.StyleSubtitle.Render("No profiles yet. Press n to create one."),
-		)
-		b.WriteString(lipgloss.PlaceHorizontal(60, lipgloss.Center, empty))
+		b.WriteString(styles.EmptyState("No profiles yet. Press n to create one.", m.width))
 		b.WriteString("\n")
 	} else {
 		win := m.homeWindow(len(m.profiles))
@@ -403,7 +397,7 @@ func (m *HomeModel) View() string {
 		b.WriteString("\n")
 	}
 	if m.lastResult != "" {
-		b.WriteString("\n  " + m.lastResult + "\n")
+		b.WriteString("\n" + m.lastResult + "\n")
 	}
 	b.WriteString("\n")
 	// Line 1: contextual actions (affect cards) — indented

@@ -79,8 +79,8 @@ type AddServiceModel struct {
 	defaultEnvVars     []config.EnvVar      // snapshot for reset
 
 	// volumes editor
-	volSource          textinput.Model
-	volNamed           bool
+	volSource      textinput.Model
+	volNamed       bool
 	volumes        []config.VolumeMapping
 	defaultVolumes []config.VolumeMapping // snapshot for reset on re-entry
 
@@ -91,65 +91,24 @@ type AddServiceModel struct {
 	runCmdFocus   int // 0=name, 1=command, 2=workdir
 
 	// error shown inline by the step view
-	errInline bool
-	err     string
-	height int // terminal height, set via WindowSizeMsg
+	errInline    bool
+	err          string
+	height       int // terminal height (chrome already subtracted), set via SetSize
+	width        int // terminal width, set via SetSize
+	spinnerFrame int // animated spinner frame for search/tag-fetch (AUDIT-027)
 }
 
-// addSvcItemWindow calculates the visible range for single-line item lists
-// (catalog, search results, tag list) given the terminal height and overhead.
-func addSvcItemWindow(total, cursor, height, overhead int) itemWindow {
-	w := itemWindow{start: 0, end: total}
-	if total == 0 || height <= 0 {
-		return w
-	}
-	avail := height - overhead
-	if avail <= 0 {
-		return itemWindow{
-			start:    cursor,
-			end:      min(cursor+1, total),
-			hasAbove: cursor > 0,
-			hasBelow: cursor+1 < total,
-		}
-	}
-	if total <= avail {
-		return w
-	}
-	half := avail / 2
-	start := cursor - half
-	if start < 0 {
-		start = 0
-	}
-	end := start + avail
-	if end > total {
-		end = total
-		start = total - avail
-	}
-	return itemWindow{
-		start: start, end: end,
-		hasAbove: start > 0,
-		hasBelow: end < total,
-	}
-}
-
-func addSvcTailWindow(total, height, overhead int) itemWindow {
-	w := itemWindow{start: 0, end: total}
-	if total == 0 || height <= 0 {
-		return w
-	}
-	avail := height - overhead
-	if avail <= 0 {
-		return itemWindow{start: total - 1, end: total, hasAbove: total > 1}
-	}
-	if total <= avail {
-		return w
-	}
-	start := total - avail
-	if start < 0 {
-		start = 0
-	}
-	return itemWindow{start: start, end: total, hasAbove: start > 0}
-}
+// Named overhead constants for add_service list views (AUDIT-039).
+// Each accounts for the View() chrome (title + blank = ~4 lines) plus
+// the per-step chrome (headers, field labels, help bar). Replaces the
+// former magic numbers passed to the windowing helpers.
+const (
+	addSvcOverheadView     = 4                      // "\n" + title + blank line in View()
+	addSvcOverheadCatalog  = addSvcOverheadView + 4 // header(2) + after(2)
+	addSvcOverheadSearch   = addSvcOverheadView + 7 // header(2) + input(2) + err(1) + after(2)
+	addSvcOverheadTags     = addSvcOverheadView + 4 // header(2) + after(2)
+	addSvcOverheadFormList = 13                     // header(2) + field labels(2) + blank(1) + help + spacing
+)
 
 func NewAddService(cfg *config.Config, p *config.Profile, envName string) *AddServiceModel {
 	si := textinput.New()
@@ -293,35 +252,10 @@ func (m *AddServiceModel) refocusInputs(step addSvcStep) tea.Cmd {
 		m.volSource.Focus()
 		return textinput.Blink
 	case svcStepRunCommand:
-		m.runCmdName.Blur()
-		m.runCmdCmd.Blur()
-		m.runCmdWorkDir.Blur()
-		switch m.runCmdFocus {
-		case 0:
-			m.runCmdName.Focus()
-		case 1:
-			m.runCmdCmd.Focus()
-		case 2:
-			m.runCmdWorkDir.Focus()
-		}
-		return textinput.Blink
+		return m.focusRunCmdField(m.runCmdFocus)
 	}
 	return nil
 }
-
-// ── Messages ─────────────────────────────────────────────────────────────────
-
-type hubSearchResultMsg struct {
-	results []hub.SearchResult
-	err     string
-}
-
-type hubTagsResultMsg struct {
-	tags []hub.Tag
-	err  string
-}
-
-type svcSavedMsg struct{}
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 
@@ -341,13 +275,24 @@ var addSvcReset = key.NewBinding(key.WithKeys("ctrl+r"))
 var addSvcTab = key.NewBinding(key.WithKeys("tab"))
 
 // SetSize propagates terminal dimensions before the first WindowSizeMsg.
-// h is the full terminal height; we subtract 5 for App chrome.
+// h is the full terminal height; we subtract 5 for App chrome (AUDIT-019).
 func (m *AddServiceModel) SetSize(w, h int) {
+	m.width = w
 	m.height = max(0, h-5)
 }
 
 func (m *AddServiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case SpinnerTickMsg:
+		// AUDIT-027: animate the spinner while hub search or tag fetch is in flight.
+		if m.searching || m.loadingTags {
+			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
+			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+				return SpinnerTickMsg{}
+			})
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.height = max(0, msg.Height-5)
 		return m, nil
@@ -376,11 +321,11 @@ func (m *AddServiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
-	if key.Matches(msg, addSvcBack) {
-		m.portsDeleteArmed = false
-		m.envVarsDeleteArmed = false
-		m.resetArmed = false
-		if m.step == svcStepSource {
+		if key.Matches(msg, addSvcBack) {
+			m.portsDeleteArmed = false
+			m.envVarsDeleteArmed = false
+			m.resetArmed = false
+			if m.step == svcStepSource {
 				return m, func() tea.Msg {
 					return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name, EnvName: m.envName}
 				}
@@ -393,17 +338,17 @@ func (m *AddServiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.step = svcStepSource
 				m.sourcePath = ""
 				return m, nil
-		case svcStepSelectTag:
-			m.resetServiceData()
-			m.step = svcStepSource
-			m.sourcePath = ""
-			return m, nil
-		case svcStepRunCommand:
-			m.resetServiceData()
-			m.step = svcStepSource
-			m.sourcePath = ""
-			return m, nil
-		case svcStepName:
+			case svcStepSelectTag:
+				m.resetServiceData()
+				m.step = svcStepSource
+				m.sourcePath = ""
+				return m, nil
+			case svcStepRunCommand:
+				m.resetServiceData()
+				m.step = svcStepSource
+				m.sourcePath = ""
+				return m, nil
+			case svcStepName:
 				if m.sourcePath == "manual" {
 					m.resetServiceData()
 					m.step = svcStepSource
@@ -659,17 +604,34 @@ func (m *AddServiceModel) handleCatalog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// go to tag selection
 		m.step = svcStepSelectTag
 		m.loadingTags = true
-		image := entry.Image
-		return m, func() tea.Msg {
-			tags, err := hub.FetchTags(image, 20)
-			errStr := ""
-			if err != nil {
-				errStr = err.Error()
-			}
-			return hubTagsResultMsg{tags: tags, err: errStr}
-		}
+		return m, tea.Batch(m.fetchTags(entry.Image), spinnerCmd())
 	}
 	return m.updateActiveInput(msg)
+}
+
+// searchHub fires a Docker Hub search for the given query. Extracted so both
+// the new-query and re-search paths share one closure (AUDIT-027/040).
+func (m *AddServiceModel) searchHub(query string) tea.Cmd {
+	return func() tea.Msg {
+		results, err := hub.Search(query, 15)
+		errStr := ""
+		if err != nil {
+			errStr = err.Error()
+		}
+		return hubSearchResultMsg{results: results, err: errStr}
+	}
+}
+
+// fetchTags fires a Docker Hub tag fetch for the given image.
+func (m *AddServiceModel) fetchTags(image string) tea.Cmd {
+	return func() tea.Msg {
+		tags, err := hub.FetchTags(image, 20)
+		errStr := ""
+		if err != nil {
+			errStr = err.Error()
+		}
+		return hubTagsResultMsg{tags: tags, err: errStr}
+	}
 }
 
 func (m *AddServiceModel) handleSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -687,37 +649,21 @@ func (m *AddServiceModel) handleSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if query == "" {
 			break
 		}
-		if query != m.lastSearchQuery {
-			// query changed — search (or re-search)
-			m.lastSearchQuery = query
-			m.searching = true
-			return m, func() tea.Msg {
-				results, err := hub.Search(query, 15)
-				errStr := ""
-				if err != nil {
-					errStr = err.Error()
-				}
-				return hubSearchResultMsg{results: results, err: errStr}
-			}
-		}
-		// same query + results exist → select result at cursor
-		if len(m.searchResults) > 0 {
+		// Same query with existing results → select at cursor and fetch tags
+		if query == m.lastSearchQuery && len(m.searchResults) > 0 {
 			result := m.searchResults[m.searchCursor]
 			m.svc.Image = result.Name
 			m.svc.Name = strings.ReplaceAll(result.Name, "/", "-")
 			m.prefillFromCatalog(result.Name)
 			m.step = svcStepSelectTag
 			m.loadingTags = true
-			image := result.Name
-			return m, func() tea.Msg {
-				tags, err := hub.FetchTags(image, 20)
-				errStr := ""
-				if err != nil {
-					errStr = err.Error()
-				}
-				return hubTagsResultMsg{tags: tags, err: errStr}
-			}
+			return m, tea.Batch(m.fetchTags(result.Name), spinnerCmd())
 		}
+		// New query OR same query with no results → (re)search.
+		// AUDIT-040: previously a same-query-no-results enter was a silent no-op.
+		m.lastSearchQuery = query
+		m.searching = true
+		return m, tea.Batch(m.searchHub(query), spinnerCmd())
 	}
 	return m.updateActiveInput(msg)
 }
@@ -791,13 +737,15 @@ func (m *AddServiceModel) handlePorts(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.portsDeleteArmed = false
 			return m.updateActiveInput(msg)
 		}
-		// Don't arm if last port is protected or only one left
+		// Don't arm if last port is protected (a catalog default) or only one left
 		if len(m.ports) <= 1 {
 			return m, nil
 		}
 		last := m.ports[len(m.ports)-1]
-		if last.Host == "5432" && last.Container == "5432" {
-			return m, nil
+		for _, dp := range m.defaultPorts {
+			if last == dp {
+				return m, nil
+			}
 		}
 		if !m.portsDeleteArmed {
 			// First d: arm deletion
@@ -1025,44 +973,39 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.updateActiveInput(msg)
 }
 
+// focusRunCmdField sets the active run-command field, blurring the others.
+// Extracted from handleRunCommand to remove the focus-cycling duplication
+// across up/down/tab navigation (AUDIT-016).
+func (m *AddServiceModel) focusRunCmdField(idx int) tea.Cmd {
+	m.runCmdFocus = idx
+	m.runCmdName.Blur()
+	m.runCmdCmd.Blur()
+	m.runCmdWorkDir.Blur()
+	switch idx {
+	case 0:
+		m.runCmdName.Focus()
+	case 1:
+		m.runCmdCmd.Focus()
+	case 2:
+		m.runCmdWorkDir.Focus()
+	}
+	return textinput.Blink
+}
+
 func (m *AddServiceModel) handleRunCommand(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, addSvcUpField):
-		if m.runCmdFocus > 0 {
-			m.runCmdFocus--
-		} else {
-			m.runCmdFocus = 2
+		idx := m.runCmdFocus - 1
+		if idx < 0 {
+			idx = 2
 		}
-		m.runCmdName.Blur()
-		m.runCmdCmd.Blur()
-		m.runCmdWorkDir.Blur()
-		switch m.runCmdFocus {
-		case 0:
-			m.runCmdName.Focus()
-		case 1:
-			m.runCmdCmd.Focus()
-		case 2:
-			m.runCmdWorkDir.Focus()
-		}
-		return m, textinput.Blink
+		return m, m.focusRunCmdField(idx)
 	case key.Matches(msg, addSvcDownField):
-		if m.runCmdFocus < 2 {
-			m.runCmdFocus++
-		} else {
-			m.runCmdFocus = 0
+		idx := m.runCmdFocus + 1
+		if idx > 2 {
+			idx = 0
 		}
-		m.runCmdName.Blur()
-		m.runCmdCmd.Blur()
-		m.runCmdWorkDir.Blur()
-		switch m.runCmdFocus {
-		case 0:
-			m.runCmdName.Focus()
-		case 1:
-			m.runCmdCmd.Focus()
-		case 2:
-			m.runCmdWorkDir.Focus()
-		}
-		return m, textinput.Blink
+		return m, m.focusRunCmdField(idx)
 
 	case key.Matches(msg, addSvcNext):
 		name := config.SanitizeComposeName(strings.TrimSpace(m.runCmdName.Value()))
@@ -1091,23 +1034,11 @@ func (m *AddServiceModel) handleRunCommand(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 		return m, m.saveLocalProcess(name, cmdStr, strings.TrimSpace(m.runCmdWorkDir.Value()))
 
 	case key.Matches(msg, addSvcTab):
-		if m.runCmdFocus < 2 {
-			m.runCmdFocus++
-		} else {
-			m.runCmdFocus = 0
+		idx := m.runCmdFocus + 1
+		if idx > 2 {
+			idx = 0
 		}
-		m.runCmdName.Blur()
-		m.runCmdCmd.Blur()
-		m.runCmdWorkDir.Blur()
-		switch m.runCmdFocus {
-		case 0:
-			m.runCmdName.Focus()
-		case 1:
-			m.runCmdCmd.Focus()
-		case 2:
-			m.runCmdWorkDir.Focus()
-		}
-		return m, textinput.Blink
+		return m, m.focusRunCmdField(idx)
 	}
 	return m.updateActiveInput(msg)
 }
@@ -1271,7 +1202,7 @@ func (m *AddServiceModel) View() string {
 	m.errInline = false
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(styles.StyleTitle.Render(fmt.Sprintf(" Add Service → %s / %s ", m.profile.Name, m.envName)))
+	b.WriteString(styles.StyleTitle.Render(fmt.Sprintf(" Add Service — %s / %s ", m.profile.Name, m.envName)))
 	b.WriteString("\n\n")
 
 	switch m.step {
@@ -1298,7 +1229,7 @@ func (m *AddServiceModel) View() string {
 	}
 
 	if m.err != "" && !m.errInline {
-		b.WriteString("\n" + styles.StyleError.Render("  ✗ "+m.err) + "\n")
+		b.WriteString("\n" + styles.ErrorLine(m.err) + "\n")
 	}
 	return b.String()
 }
@@ -1362,8 +1293,7 @@ func (m *AddServiceModel) viewCatalog() string {
 	b.WriteString("  Select a service from the catalog:\n\n")
 	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 
-	// overhead: View() = 4, catalog = 4 (header 2 + after 2) = 8
-	win := addSvcItemWindow(len(hub.Catalog), m.catalogCursor, m.height, 8)
+	win := opsWindow(len(hub.Catalog), m.catalogCursor, 1, m.height, addSvcOverheadCatalog)
 
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
@@ -1398,16 +1328,16 @@ func (m *AddServiceModel) viewSearch() string {
 	b.WriteString("  Search Docker Hub:\n\n")
 	b.WriteString("  " + m.searchInput.View() + "  ")
 	if m.searching {
-		b.WriteString(styles.StyleSubtitle.Render("searching…"))
+		frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+		b.WriteString(lipgloss.NewStyle().Foreground(styles.ColorAccent).Render(fmt.Sprintf("%s searching…", frame)))
 	}
 	b.WriteString("\n\n")
 	if m.searchErr != "" {
-		b.WriteString(styles.StyleError.Render("  ✗ "+m.searchErr) + "\n")
+		b.WriteString(styles.ErrorLine(m.searchErr) + "\n")
 	}
 	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 
-	// overhead: View() = 4, search = ~7 (header 2 + input 2 + err 1 + after 2)
-	win := addSvcItemWindow(len(m.searchResults), m.searchCursor, m.height, 11)
+	win := opsWindow(len(m.searchResults), m.searchCursor, 1, m.height, addSvcOverheadSearch)
 
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
@@ -1433,7 +1363,12 @@ func (m *AddServiceModel) viewSearch() string {
 		b.WriteString("\n")
 	}
 	if len(m.searchResults) == 0 && !m.searching {
-		b.WriteString("  Type a name and press ↵ to search\n")
+		if m.lastSearchQuery != "" {
+			b.WriteString(styles.EmptyState(fmt.Sprintf("No images found for %q", m.lastSearchQuery), m.width))
+			b.WriteString("\n")
+		} else {
+			b.WriteString(styles.StyleSubtitle.Render("  Type a name and press ↵ to search\n"))
+		}
 	}
 	b.WriteString("\n")
 	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "next")))
@@ -1449,8 +1384,7 @@ func (m *AddServiceModel) viewTags() string {
 	}
 	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 
-	// overhead: View() = 4, tags = 4 (header 2 + after 2) = 8
-	win := addSvcItemWindow(len(m.tags), m.tagCursor, m.height, 8)
+	win := opsWindow(len(m.tags), m.tagCursor, 1, m.height, addSvcOverheadTags)
 
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
@@ -1522,7 +1456,7 @@ func (m *AddServiceModel) viewPorts() string {
 
 	b.WriteString("  " + hostLabel.Render("Host port:      ") + m.portHost.View() + "\n")
 	b.WriteString("  " + contLabel.Render("Container port: ") + m.portContainer.View() + "\n\n")
-	win := addSvcTailWindow(len(m.ports), m.height, 13)
+	win := opsWindow(len(m.ports), max(0, len(m.ports)-1), 1, m.height, addSvcOverheadFormList)
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
 		b.WriteString("\n")
@@ -1535,7 +1469,7 @@ func (m *AddServiceModel) viewPorts() string {
 		b.WriteString("\n")
 	}
 	if m.portsDeleteArmed {
-		b.WriteString(styles.StyleError.Render("  Press ctrl+d again to confirm removal"))
+		b.WriteString(styles.StyleError.Render("  Press ctrl+d again to confirm deletion"))
 		b.WriteString("\n")
 	}
 	if m.resetArmed {
@@ -1629,7 +1563,7 @@ func (m *AddServiceModel) viewEnvVars() string {
 
 	b.WriteString("  " + keyLabel.Render("Key:  ") + m.envKey.View() + "\n")
 	b.WriteString("  " + valLabel.Render("Value:") + m.envVal.View() + "\n\n")
-	win := addSvcTailWindow(len(m.envVars), m.height, 13)
+	win := opsWindow(len(m.envVars), max(0, len(m.envVars)-1), 1, m.height, addSvcOverheadFormList)
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
 		b.WriteString("\n")
@@ -1642,7 +1576,7 @@ func (m *AddServiceModel) viewEnvVars() string {
 		b.WriteString("\n")
 	}
 	if m.envVarsDeleteArmed {
-		b.WriteString(styles.StyleError.Render("  Press ctrl+d again to confirm removal"))
+		b.WriteString(styles.StyleError.Render("  Press ctrl+d again to confirm deletion"))
 		b.WriteString("\n")
 	}
 	if m.resetArmed {
@@ -1684,7 +1618,7 @@ func (m *AddServiceModel) viewVolumes() string {
 	}
 
 	b.WriteString("  " + label.Render("Source: ") + m.volSource.View() + "  " + styles.StyleCode.Render(namedLabel) + "\n\n")
-	win := addSvcTailWindow(len(m.volumes), m.height, 13)
+	win := opsWindow(len(m.volumes), max(0, len(m.volumes)-1), 1, m.height, addSvcOverheadFormList)
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
 		b.WriteString("\n")
@@ -1706,7 +1640,7 @@ func (m *AddServiceModel) viewVolumes() string {
 		b.WriteString("\n")
 	}
 	if m.err != "" {
-		b.WriteString(styles.StyleError.Render("  ✗ "+m.err) + "\n")
+		b.WriteString(styles.ErrorLine(m.err) + "\n")
 		m.errInline = true
 	}
 	b.WriteString("\n")
@@ -1785,8 +1719,9 @@ func (m *AddServiceModel) reviewSection(label, value string) string {
 }
 
 func truncate(s string, max int) string {
-	if len(s) <= max {
+	r := []rune(s)
+	if len(r) <= max {
 		return s
 	}
-	return s[:max-1] + "…"
+	return string(r[:max-1]) + "…"
 }

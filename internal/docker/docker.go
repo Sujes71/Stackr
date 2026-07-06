@@ -141,7 +141,9 @@ type ServiceStatus struct {
 
 func Status(profileName, envName string) ([]ServiceStatus, error) {
 	args := composeArgs(profileName, envName, "ps", "--format", "json")
-	out, err := exec.Command("docker", args...).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", args...).Output()
 	if err != nil {
 		return []ServiceStatus{}, friendlyError(err, string(out))
 	}
@@ -229,7 +231,11 @@ func Restart(profileName, envName, service string) error {
 func UpAndStream(profileName, envName string, ch chan<- string) error {
 	args := composeArgs(profileName, envName, "up", "-d", "--remove-orphans")
 	cmd := exec.Command("docker", args...)
-	stderr, _ := cmd.StderrPipe()
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		close(ch)
+		return fmt.Errorf("stderr pipe: %w", err)
+	}
 	if err := cmd.Start(); err != nil {
 		close(ch)
 		return err
@@ -238,7 +244,7 @@ func UpAndStream(profileName, envName string, ch chan<- string) error {
 	for scanner.Scan() {
 		ch <- scanner.Text()
 	}
-	err := cmd.Wait()
+	err = cmd.Wait()
 	close(ch)
 	if err != nil {
 		return friendlyError(err, "")
@@ -253,7 +259,12 @@ func Logs(profileName, envName string, follow bool, ch chan<- string, done <-cha
 	}
 	args = append(args, svcName...)
 	cmd := exec.Command("docker", args...)
-	stdout, _ := cmd.StdoutPipe()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		ch <- "error: " + err.Error()
+		close(ch)
+		return
+	}
 	if err := cmd.Start(); err != nil {
 		ch <- "error: " + err.Error()
 		close(ch)
@@ -261,11 +272,19 @@ func Logs(profileName, envName string, follow bool, ch chan<- string, done <-cha
 	}
 	go func() {
 		<-done
-		cmd.Process.Kill()
+		_ = cmd.Process.Kill()
 	}()
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
-		ch <- scanner.Text()
+		// Select on done so a caller that stops reading ch (e.g. navigated
+		// away) does not deadlock the scanner on an unbuffered channel send.
+		select {
+		case ch <- scanner.Text():
+		case <-done:
+			cmd.Wait()
+			close(ch)
+			return
+		}
 	}
 	cmd.Wait()
 	close(ch)
@@ -280,7 +299,9 @@ type LocalImage struct {
 }
 
 func LocalImages() ([]LocalImage, error) {
-	out, err := exec.Command("docker", "images", "--format",
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "images", "--format",
 		"{{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}").Output()
 	if err != nil {
 		return nil, err
@@ -407,7 +428,9 @@ func ContainerName(profileName, envName, serviceName string) string {
 
 // ContainerEnv reads a single environment variable from a running container.
 func ContainerEnv(container, envVar string) (string, error) {
-	out, err := exec.Command("docker", "exec", container, "printenv", envVar).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "exec", container, "printenv", envVar).Output()
 	if err != nil {
 		return "", fmt.Errorf("docker exec printenv %s: %w", envVar, err)
 	}
@@ -626,14 +649,39 @@ func ContainerReady(container, dbType string) bool {
 		return err == nil
 	case "oracle":
 		user, pass, pdb := oracleCreds(container)
-		err := exec.Command("docker", "exec", container,
-			"bash", "-c",
-			fmt.Sprintf("echo \"SELECT 'ready' FROM dual;\" | sqlplus -S %s/%s@//localhost:1521/%s", user, pass, pdb),
-		).Run()
-		return err == nil
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		return oracleSqlPlus(ctx, container, user, pass, pdb, "SELECT 'ready' FROM dual;\n") == nil
 	default:
 		return true // unknown type — assume ready
 	}
+}
+
+// oracleSqlPlus runs sqlplus inside the container with the given SQL piped to stdin.
+// It invokes sqlplus directly (no sh -c/bash -c) so credentials cannot break out
+// of a shell string — this eliminates the shell-injection vector present when
+// credentials were interpolated into `echo "..." | sqlplus` shell strings.
+// The connection string is passed as a single argv element and the SQL via stdin.
+func oracleSqlPlus(ctx context.Context, container, user, pass, pdb, sql string) error {
+	connStr := fmt.Sprintf("%s/%s@//localhost:1521/%s", user, pass, pdb)
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", container, "sqlplus", "-S", connStr)
+	cmd.Stdin = strings.NewReader(sql)
+	return cmd.Run()
+}
+
+// OracleExecSQL runs raw SQL inside the Oracle container via sqlplus, returning
+// the combined output. Used by DBOps custom actions for Oracle so credentials
+// are passed as argv (not interpolated into a shell string), mirroring the
+// oracleSqlPlus safety pattern.
+func OracleExecSQL(ctx context.Context, container, user, pass, pdb, sql string) (string, error) {
+	connStr := fmt.Sprintf("%s/%s@//localhost:1521/%s", user, pass, pdb)
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", container, "sqlplus", "-S", connStr)
+	cmd.Stdin = strings.NewReader(sql)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("oracle sqlplus: %w", err)
+	}
+	return string(out), nil
 }
 
 // MockServerReady checks if MockServer is accepting HTTP requests.
@@ -809,13 +857,32 @@ func ExecMySqlRestore(profileName, envName, serviceName, dumpPath string) error 
 		return fmt.Errorf("docker cp: %w", err)
 	}
 
+	// No shell: stream the dump file into mysql via stdin using docker exec -i.
+	// This avoids `sh -c "mysql -u <user> <db> < <file>"` which interpolated
+	// user/db into a shell string (shell-injection vector).
+	dockerArgs := []string{"exec", "-i"}
 	env := []string{}
 	if pass != "" {
 		env = append(env, "MYSQL_PWD="+pass)
 	}
-	_, err = ContainerExecWithEnv(container, env,
-		"sh", "-c", fmt.Sprintf("mysql -u %s %s < %s", user, db, tmpPath))
-	return err
+	for _, e := range env {
+		dockerArgs = append(dockerArgs, "-e", e)
+	}
+	dockerArgs = append(dockerArgs, container, "mysql", "-u", user, "-D", db)
+
+	f, err := os.Open(dumpPath)
+	if err != nil {
+		return fmt.Errorf("open dump file: %w", err)
+	}
+	defer f.Close()
+
+	cmd := exec.Command("docker", dockerArgs...)
+	cmd.Stdin = f
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mysql restore: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
 }
 
 // ================================================================
@@ -878,14 +945,14 @@ func MySqlTruncate(profileName, envName, serviceName string) error {
 	if pass != "" {
 		env = append(env, "MYSQL_PWD="+pass)
 	}
-	_, err = ContainerExecWithEnv(container, env, "sh", "-c",
-		fmt.Sprintf(`mysql -u %s %s -e "
-			SET FOREIGN_KEY_CHECKS=0;
-			SELECT GROUP_CONCAT(CONCAT('TRUNCATE TABLE ', table_name, ';') SEPARATOR ' ')
-			INTO @sql FROM information_schema.tables WHERE table_schema = '%s';
-			PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
-		"`, user, db, db),
-	)
+	// No shell: invoke mysql directly with -D to select the database and use
+	// DATABASE() in the WHERE clause instead of interpolating db into SQL.
+	// This removes both the shell-injection and SQL-injection vectors.
+	_, err = ContainerExecWithEnv(container, env, "mysql", "-u", user, "-D", db, "-e",
+		`SET FOREIGN_KEY_CHECKS=0;
+		SELECT GROUP_CONCAT(CONCAT('TRUNCATE TABLE ', table_name, ';') SEPARATOR ' ')
+		INTO @sql FROM information_schema.tables WHERE table_schema = DATABASE();
+		PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;`)
 	if err != nil {
 		return fmt.Errorf("truncate tables: %w", err)
 	}
@@ -998,10 +1065,8 @@ func OracleTruncate(profileName, envName, serviceName string) error {
 	container := ContainerName(profileName, envName, serviceName)
 	user, pass, pdb := oracleCreds(container)
 	// PL/SQL block: truncate every table visible to the connecting user
-	sql := "BEGIN FOR t IN (SELECT table_name FROM user_tables) LOOP EXECUTE IMMEDIATE 'TRUNCATE TABLE ' || t.table_name; END LOOP; END;"
-	_, err := ContainerExec(container, "sh", "-c",
-		fmt.Sprintf("echo \"%s\" | sqlplus -S %s/%s@//localhost:1521/%s", sql, user, pass, pdb))
-	if err != nil {
+	sql := "BEGIN FOR t IN (SELECT table_name FROM user_tables) LOOP EXECUTE IMMEDIATE 'TRUNCATE TABLE ' || t.table_name; END LOOP; END;\n"
+	if err := oracleSqlPlus(context.Background(), container, user, pass, pdb, sql); err != nil {
 		return fmt.Errorf("truncate oracle: %w", err)
 	}
 	return nil
@@ -1026,17 +1091,16 @@ func OracleExport(profileName, envName, serviceName, outPath string) error {
 	ContainerExec(container, "mkdir", "-p", containerDumpDir) //nolint:errcheck
 
 	// 2. Create Oracle directory object
-	dirSQL := fmt.Sprintf("CREATE OR REPLACE DIRECTORY STACKR_DUMP AS '%s'", containerDumpDir)
-	if _, err := ContainerExec(container, "bash", "-c",
-		fmt.Sprintf(`echo "%s" | sqlplus -S %s/%s@//localhost:1521/%s`, dirSQL, user, pass, pdb)); err != nil {
+	dirSQL := fmt.Sprintf("CREATE OR REPLACE DIRECTORY STACKR_DUMP AS '%s'\n", containerDumpDir)
+	if err := oracleSqlPlus(context.Background(), container, user, pass, pdb, dirSQL); err != nil {
 		ContainerExec(container, "rm", "-rf", containerDumpDir)
 		return fmt.Errorf("create directory object: %w", err)
 	}
 
-	// 3. Run expdp inside the container
-	if out, err := ContainerExec(container, "bash", "-c",
-		fmt.Sprintf(`expdp %s/%s@//localhost:1521/%s directory=STACKR_DUMP dumpfile=%s schemas=%s`,
-			user, pass, pdb, outFile, user)); err != nil {
+	// 3. Run expdp inside the container (no shell — args passed directly)
+	connStr := fmt.Sprintf("%s/%s@//localhost:1521/%s", user, pass, pdb)
+	if out, err := ContainerExec(container, "expdp", connStr,
+		"directory=STACKR_DUMP", "dumpfile="+outFile, "schemas="+user); err != nil {
 		ContainerExec(container, "rm", "-rf", containerDumpDir)
 		return fmt.Errorf("oracle export: %s: %w", strings.TrimSpace(out), err)
 	}
@@ -1065,10 +1129,8 @@ func OracleImport(profileName, envName, serviceName, inPath string) error {
 	ContainerExec(container, "mkdir", "-p", containerDumpDir) //nolint:errcheck
 
 	// 2. Create Oracle directory object pointing to the temp dir
-	dirSQL := fmt.Sprintf("CREATE OR REPLACE DIRECTORY STACKR_DUMP AS '%s'", containerDumpDir)
-	_, err := ContainerExec(container, "bash", "-c",
-		fmt.Sprintf(`echo "%s" | sqlplus -S %s/%s@//localhost:1521/%s`, dirSQL, user, pass, pdb))
-	if err != nil {
+	dirSQL := fmt.Sprintf("CREATE OR REPLACE DIRECTORY STACKR_DUMP AS '%s'\n", containerDumpDir)
+	if err := oracleSqlPlus(context.Background(), container, user, pass, pdb, dirSQL); err != nil {
 		ContainerExec(container, "rm", "-rf", containerDumpDir)
 		return fmt.Errorf("create directory object: %w", err)
 	}
@@ -1079,10 +1141,10 @@ func OracleImport(profileName, envName, serviceName, inPath string) error {
 		return fmt.Errorf("copy dump into container: %w", err)
 	}
 
-	// 4. Run impdp (TABLE_EXISTS_ACTION=REPLACE handles re-imports)
-	impdpOut, err := ContainerExec(container, "bash", "-c",
-		fmt.Sprintf(`impdp %s/%s@//localhost:1521/%s directory=STACKR_DUMP dumpfile=%s table_exists_action=replace`,
-			user, pass, pdb, inFile))
+	// 4. Run impdp (TABLE_EXISTS_ACTION=REPLACE handles re-imports, no shell)
+	connStr := fmt.Sprintf("%s/%s@//localhost:1521/%s", user, pass, pdb)
+	impdpOut, err := ContainerExec(container, "impdp", connStr,
+		"directory=STACKR_DUMP", "dumpfile="+inFile, "table_exists_action=replace")
 	if err != nil {
 		ContainerExec(container, "rm", "-rf", containerDumpDir)
 		return fmt.Errorf("oracle import: %s: %w", strings.TrimSpace(impdpOut), err)
@@ -1118,6 +1180,11 @@ func SqlPackageImport(profileName, envName, serviceName, inPath, hostPort, toolI
 	if err != nil {
 		return fmt.Errorf("read MSSQL_SA_PASSWORD from container: %w", err)
 	}
+	// Read the target database name from the container env; fall back to master.
+	targetDB, _ := ContainerEnv(container, "MSSQL_DB")
+	if targetDB == "" {
+		targetDB = "master"
+	}
 
 	if toolImage == "" {
 		toolImage = DefaultToolImage("mssql")
@@ -1134,7 +1201,7 @@ func SqlPackageImport(profileName, envName, serviceName, inPath, hostPort, toolI
 		"sqlpackage",
 		"/Action:Import",
 		"/TargetServerName:host.docker.internal," + hostPort,
-		"/TargetDatabaseName:master",
+		"/TargetDatabaseName:" + targetDB,
 		"/TargetUser:sa",
 		"/TargetPassword:" + saPass,
 		"/SourceFile:/tmp/" + inFile,

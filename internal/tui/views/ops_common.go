@@ -34,14 +34,15 @@ var (
 
 // actionItem describes a single action in the actions screen.
 type actionItem struct {
-	label          string
-	group          string // panel group label: "Export", "Import", "Functions", etc.
-	enabled        bool
-	disabledReason string
-	execute        tea.Cmd
-	isCustom       bool
-	isAddAction    bool
-	customIdx      int // index into CustomActions (valid when isCustom)
+	label             string
+	group             string // panel group label: "Export", "Import", "Functions", etc.
+	enabled           bool
+	disabledReason    string
+	execute           tea.Cmd
+	isCustom          bool
+	isAddAction       bool
+	customIdx         int  // index into CustomActions (valid when isCustom)
+	requiresContainer bool // true when the action needs the local container running
 }
 
 // serviceStartedMsg is sent when docker.UpService completes for the prompt flow.
@@ -136,6 +137,16 @@ func opsFirstEnabledAction(actions []actionItem) int {
 
 // ── Spinner helpers ───────────────────────────────────────────────────────────
 
+// spinnerFrames is the Braille spinner animation sequence shared by all views.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// spinnerCmd returns a tea.Cmd that fires a SpinnerTickMsg to kick off the
+// spinner loop. After this initial tick, the SpinnerTickMsg handler in each
+// view uses tea.Tick to keep the spinner running.
+func spinnerCmd() tea.Cmd {
+	return func() tea.Msg { return SpinnerTickMsg{} }
+}
+
 // opsRenderSpinnerDot renders a spinner frame with an operation label.
 func opsRenderSpinnerDot(spinnerFrame int, op string) string {
 	frame := spinnerFrames[spinnerFrame%len(spinnerFrames)]
@@ -223,4 +234,101 @@ func disabledIf(cond bool, reason string) string {
 		return reason
 	}
 	return ""
+}
+
+// ── Windowing helper ──────────────────────────────────────────────────────────
+
+// itemWindow is defined in profile_view.go and shared across all list views.
+
+// opsWindow calculates the visible item range for a cursor-based list.
+// total is the number of items, cursor is the current position, itemHeight is
+// the estimated lines per item, height is the available viewport height, and
+// overhead is the number of lines consumed by chrome (title, help, etc.).
+// The returned window keeps the cursor centered when possible.
+func opsWindow(total, cursor, itemHeight, height, overhead int) itemWindow {
+	if total == 0 || height <= 0 {
+		return itemWindow{}
+	}
+	avail := height - overhead
+	if avail <= 0 {
+		return itemWindow{
+			start:    cursor,
+			end:      min(cursor+1, total),
+			hasAbove: cursor > 0,
+			hasBelow: cursor+1 < total,
+		}
+	}
+	if itemHeight < 1 {
+		itemHeight = 1
+	}
+	fit := avail / itemHeight
+	if fit <= 0 {
+		fit = 1
+	}
+	if total <= fit {
+		return itemWindow{start: 0, end: total}
+	}
+	half := fit / 2
+	start := cursor - half
+	if start < 0 {
+		start = 0
+	}
+	end := start + fit
+	if end > total {
+		end = total
+		start = total - fit
+	}
+	return itemWindow{
+		start:    start,
+		end:      end,
+		hasAbove: start > 0,
+		hasBelow: end < total,
+	}
+}
+
+// ── Container readiness helper ────────────────────────────────────────────────
+
+// opsContainerStatus represents the result of checking whether the service
+// container is running and ready for action execution.
+type opsContainerStatus struct {
+	Running      bool
+	NeedsDaemon  bool
+	NeedsService bool
+}
+
+// opsCheckContainer checks whether the service container is running.
+// If it is running, status.Running is true. If it is not running and the
+// Docker daemon is unavailable, status.NeedsDaemon is true. Otherwise
+// status.NeedsService is true. Callers set their own prompt fields from
+// the returned status, keeping the shared logic in one place.
+func opsCheckContainer(profileName, envName, serviceName string) opsContainerStatus {
+	container := docker.ContainerName(profileName, envName, serviceName)
+	if opsIsContainerRunning(profileName, envName, container) {
+		return opsContainerStatus{Running: true}
+	}
+	if !docker.DaemonAvailable() {
+		return opsContainerStatus{NeedsDaemon: true}
+	}
+	return opsContainerStatus{NeedsService: true}
+}
+
+// applyContainerStatus sets the appropriate prompt field on the model based
+// on the container check status. Returns true when the container is running
+// and the action can proceed immediately.
+//
+// DBOpsModel, QueueOpsModel, and MockOpsModel each have a thin
+// ensureContainerRunning wrapper that calls opsCheckContainer + apply with
+// their own field-setting closures. The shared logic lives here; the per-model
+// methods only wire model-specific fields (promptStartDaemon, etc.).
+func (s opsContainerStatus) apply(setDaemon, setService func(bool), setLabel func(string), label string) bool {
+	if s.Running {
+		return true
+	}
+	if s.NeedsDaemon {
+		setDaemon(true)
+	} else {
+		setService(true)
+	}
+	setLabel(label)
+	return false
 }

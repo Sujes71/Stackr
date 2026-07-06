@@ -300,3 +300,82 @@ func LocalProcessDot(running bool) string {
 		Foreground(c).
 		Render(fmt.Sprintf("▶ %s", state))
 }
+
+// ── Shared state helpers (XC-006, XC-007, AUDIT-020) ──────────────────────────
+
+// emptyStatePanel is the subtle panel used by EmptyState.
+var emptyStatePanel = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(ColorMuted).
+	Padding(0, 2)
+
+// EmptyState renders a centered, muted message inside a subtle panel.
+// Used by views to render "no items" placeholders consistently.
+func EmptyState(msg string, width int) string {
+	rendered := StyleSubtitle.Render(msg)
+	panelW := lipgloss.Width(rendered) + 6
+	if panelW < 40 {
+		panelW = 40
+	}
+	if width > 0 && panelW > width-4 {
+		panelW = width - 4
+	}
+	panel := emptyStatePanel.Width(panelW).Render(rendered)
+	if width > 0 {
+		return lipgloss.PlaceHorizontal(width, lipgloss.Center, panel)
+	}
+	return panel
+}
+
+// errorBannerPrefix is the standardized error-line prefix ("  ✗ ") used by
+// ErrorBanner and ErrorLine so all views share the same indent and glyph.
+const errorBannerPrefix = "  ✗ "
+
+// wrapSimple splits s into lines of at most width characters at word
+// boundaries. Words longer than width are placed on their own line.
+func wrapSimple(s string, width int) []string {
+	var lines []string
+	for _, para := range strings.Split(s, "\n") {
+		if len(para) <= width {
+			lines = append(lines, para)
+			continue
+		}
+		var current string
+		for _, word := range strings.Fields(para) {
+			if current == "" {
+				current = word
+			} else if len(current)+1+len(word) <= width {
+				current += " " + word
+			} else {
+				lines = append(lines, current)
+				current = word
+			}
+		}
+		if current != "" {
+			lines = append(lines, current)
+		}
+	}
+	return lines
+}
+
+// ErrorBanner renders an error message with the standardized "  ✗ " prefix
+// and word-wraps long messages so they don't overflow the viewport.
+// Used by inline error displays and the app footer (XC-007).
+func ErrorBanner(msg string, width int) string {
+	wrapped := wrapSimple(msg, 80)
+	if len(wrapped) <= 1 {
+		return StyleError.Render(errorBannerPrefix + msg)
+	}
+	var b strings.Builder
+	b.WriteString(errorBannerPrefix + wrapped[0] + "\n")
+	for _, line := range wrapped[1:] {
+		b.WriteString("  " + line + "\n")
+	}
+	return StyleError.Render(strings.TrimSuffix(b.String(), "\n"))
+}
+
+// ErrorLine renders a single-line error with the standardized "  ✗ " prefix
+// matching the content indent used across views (AUDIT-020).
+func ErrorLine(msg string) string {
+	return StyleError.Render(errorBannerPrefix + msg)
+}

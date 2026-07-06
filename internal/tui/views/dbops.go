@@ -62,10 +62,9 @@ type DBOpsModel struct {
 	deleteArmed bool
 
 	// SyncEnv actions state
-	selectedEnv        string
-	actionCursor       int
-	actions            []actionItem // cached for view rendering
-
+	selectedEnv  string
+	actionCursor int
+	actions      []actionItem // cached for view rendering
 
 	// Prompt state (start service before import/truncate)
 	promptStartService bool
@@ -74,7 +73,7 @@ type DBOpsModel struct {
 	pendingStartLabel  string // action label to execute after service/service starts
 
 	// Running state — per-action inline spinners
-	pendingOps   map[string]string // action label → "starting" | "running"
+	pendingOps map[string]string // action label → "starting" | "running"
 	lastResult string
 	doneOp     string    // briefly set to completed action label for checkmark feedback
 	doneOpAt   time.Time // timestamp of when doneOp was set
@@ -91,19 +90,19 @@ type DBOpsModel struct {
 
 	// Custom action form
 	addingCustomAction bool
-	editingCustomIdx   int // -1 = adding new, >= 0 = editing index
-	customFormFocus    int // 0=name, 1=command
+	editingCustomIdx   int  // -1 = adding new, >= 0 = editing index
+	customFormFocus    int  // 0=name, 1=command
 	commandEditMode    bool // true = textarea focused, false = preview (blurred)
 	customNameInput    textinput.Model
 	customCmdInput     textinput.Model
 	customCmdTextarea  textarea.Model
 
 	// Custom action param prompting
-	promptingParams   bool
-	paramsToPrompt    []string
-	paramValues       map[string]string
-	currentParamIdx   int
-	paramInput       textinput.Model
+	promptingParams bool
+	paramsToPrompt  []string
+	paramValues     map[string]string
+	currentParamIdx int
+	paramInput      textinput.Model
 
 	// Custom action delete
 	deleteActionArmed bool
@@ -111,7 +110,7 @@ type DBOpsModel struct {
 	// Confirm before execute (double confirmation)
 	confirmAction       bool
 	confirmCustomAction bool
-	pendingCustomCmd   string
+	pendingCustomCmd    string
 }
 
 // actionItem is defined in ops_common.go.
@@ -124,12 +123,12 @@ type DBOpsModel struct {
 
 func NewDBOps(cfg *config.Config, p *config.Profile, envName, serviceName string) *DBOpsModel {
 	m := &DBOpsModel{
-		cfg:         cfg,
-		profile:     p,
-		envName:     envName,
-		serviceName: serviceName,
-		screen:      dbScreenSyncEnvList,
-		pendingOps:  make(map[string]string),
+		cfg:             cfg,
+		profile:         p,
+		envName:         envName,
+		serviceName:     serviceName,
+		screen:          dbScreenSyncEnvList,
+		pendingOps:      make(map[string]string),
 		customNameInput: textinput.New(),
 		customCmdInput:  textinput.New(),
 		paramInput:      textinput.New(),
@@ -199,7 +198,7 @@ func (m *DBOpsModel) Init() tea.Cmd {
 
 func (m *DBOpsModel) SetSize(w, h int) {
 	m.width = max(0, w)
-	m.height = max(0, h)
+	m.height = max(0, h-5)
 	if m.addingCustomAction {
 		m.setCustomCmdTextareaHeight()
 	}
@@ -231,7 +230,7 @@ func (m *DBOpsModel) setCustomCmdTextareaHeight() {
 
 func (m *DBOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(tea.WindowSizeMsg); ok {
-		m.SetSize(msg.Width, msg.Height-5)
+		m.SetSize(msg.Width, msg.Height)
 		return m, nil
 	}
 
@@ -249,7 +248,7 @@ func (m *DBOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.doneOpAt = time.Time{}
 			} else {
 				m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
-				return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+				return m, tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
 					return SpinnerTickMsg{}
 				})
 			}
@@ -323,28 +322,27 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if !m.deleteArmed {
 				m.deleteArmed = true
-			} else {
-				// Second d: confirm delete
-				m.deleteArmed = false
-				svc.SyncEnvs = append(syncEnvs[:m.listCursor], syncEnvs[m.listCursor+1:]...)
-				m.profile.UpdatedAt = time.Now()
+				break
+			}
+			// Second d: confirm delete
+			m.deleteArmed = false
+			svc.SyncEnvs = append(syncEnvs[:m.listCursor], syncEnvs[m.listCursor+1:]...)
+			m.profile.UpdatedAt = time.Now()
 			if err := m.cfg.UpdateProfile(*m.profile); err != nil {
 				m.lastResult = formatErrorMsg(err.Error())
 				return m, nil
-			} else {
-					if m.listCursor >= len(svc.SyncEnvs) && m.listCursor > 0 {
-						m.listCursor--
-					}
-					return m, nil
-				}
 			}
+			if m.listCursor >= len(svc.SyncEnvs) && m.listCursor > 0 {
+				m.listCursor--
+			}
+			return m, nil
 
-	default:
-		// Any other key disarms delete
-		if m.deleteArmed {
-			m.deleteArmed = false
+		default:
+			// Any other key disarms delete
+			if m.deleteArmed {
+				m.deleteArmed = false
+			}
 		}
-	}
 
 	}
 
@@ -388,12 +386,8 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 		if m.lastResult == "" {
 			overhead -= 2
 		}
-		avail := m.height - overhead
-		if avail < 1 {
-			avail = 1
-		}
 		total := len(syncEnvs)
-		win := dbOpsWindow(total, m.listCursor, avail)
+		win := opsWindow(total, m.listCursor, 1, m.height, overhead)
 		if win.hasAbove {
 			b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
 			b.WriteString("\n")
@@ -578,14 +572,14 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.actionCursor < len(m.actions) {
 				act := m.actions[m.actionCursor]
 				if act.enabled {
-				if act.isAddAction {
-					m.addingCustomAction = true
-					m.editingCustomIdx = -1
-					m.customFormFocus = 0
-					m.commandEditMode = true // name field focused
-			m.customNameInput.SetValue("")
-			m.customCmdTextarea.SetValue("")
-			return m, nil
+					if act.isAddAction {
+						m.addingCustomAction = true
+						m.editingCustomIdx = -1
+						m.customFormFocus = 0
+						m.commandEditMode = true // name field focused
+						m.customNameInput.SetValue("")
+						m.customCmdTextarea.SetValue("")
+						return m, nil
 					}
 					if act.isCustom {
 						svc := m.currentService()
@@ -602,11 +596,11 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if len(params) > 0 {
 							m.promptingParams = true
 							m.paramsToPrompt = params
-			m.paramValues = make(map[string]string)
-			m.currentParamIdx = 0
-			m.paramInput.SetValue("")
-			m.paramInput.Placeholder = params[0]
-			m.paramInput.Focus()
+							m.paramValues = make(map[string]string)
+							m.currentParamIdx = 0
+							m.paramInput.SetValue("")
+							m.paramInput.Placeholder = params[0]
+							m.paramInput.Focus()
 						} else {
 							m.confirmCustomAction = true
 						}
@@ -634,12 +628,12 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if se == nil || act.customIdx >= len(se.CustomActions) {
 						return m, nil
 					}
-				m.addingCustomAction = true
-				m.editingCustomIdx = act.customIdx
-				m.customFormFocus = 0
-				m.commandEditMode = true // name field focused
-			m.customNameInput.SetValue(se.CustomActions[act.customIdx].Name)
-			m.customCmdTextarea.SetValue(se.CustomActions[act.customIdx].Command)
+					m.addingCustomAction = true
+					m.editingCustomIdx = act.customIdx
+					m.customFormFocus = 0
+					m.commandEditMode = true // name field focused
+					m.customNameInput.SetValue(se.CustomActions[act.customIdx].Name)
+					m.customCmdTextarea.SetValue(se.CustomActions[act.customIdx].Command)
 				}
 			}
 
@@ -694,6 +688,13 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.lastResult = formatErrorMsg(msg.err.Error())
 			return m, nil
+		}
+
+		// Show success result message so the user sees what happened
+		if msg.result != "" {
+			m.lastResult = styles.StyleSuccess.Render("✓ " + msg.result)
+		} else {
+			m.lastResult = ""
 		}
 
 		// Re-scan dump states — imports/exports affect dump availability
@@ -860,15 +861,8 @@ func (m *DBOpsModel) updateCustomConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, opsKeyEnter):
-			container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
-			if !m.isContainerRunning(container) {
+			if !m.ensureContainerRunning(m.actions[m.actionCursor].label) {
 				m.confirmCustomAction = false
-				if !docker.DaemonAvailable() {
-					m.promptStartDaemon = true
-				} else {
-					m.promptStartService = true
-				}
-				m.pendingStartLabel = m.actions[m.actionCursor].label
 				return m, nil
 			}
 			m.confirmCustomAction = false
@@ -897,15 +891,8 @@ func (m *DBOpsModel) updateCoreConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, opsKeyEnter):
 			m.confirmAction = false
 			act := m.actions[m.actionCursor]
-			if act.group == "Import" || act.group == "Export" || strings.Contains(act.label, "Truncate") {
-				container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
-				if !m.isContainerRunning(container) {
-					if !docker.DaemonAvailable() {
-						m.promptStartDaemon = true
-					} else {
-						m.promptStartService = true
-					}
-					m.pendingStartLabel = act.label
+			if act.requiresContainer {
+				if !m.ensureContainerRunning(act.label) {
 					return m, nil
 				}
 			}
@@ -1047,64 +1034,79 @@ func (m *DBOpsModel) customActionExecCmd(cmd string) tea.Cmd {
 			return dbOpsDoneMsg{err: fmt.Errorf("sync env not found")}
 		}
 
-	container := docker.ContainerName(m.profile.Name, m.envName, svc.ComposeName())
+		container := docker.ContainerName(m.profile.Name, m.envName, svc.ComposeName())
 
-	// Get local Docker credentials from service environment variables
-	localUser, localPass, localDB := getLocalDBCredentials(svc, se.DBType)
+		// Get local Docker credentials from service environment variables
+		localUser, localPass, localDB := getLocalDBCredentials(svc, se.DBType)
 
-	// Auto-variables: {database}/{db}/{user}/{password} resolve to the LOCAL
-	// container credentials because ALL custom function execution runs via
-	// docker exec inside the container. Use {se_db} / {se_user} etc. for the
-	// SyncEnv's remote credentials (for export-like operations).
-	autoVars := map[string]string{
-		"host":        se.Host,
-		"user":        se.User,
-		"password":    se.Password,
-		"database":    localDB,
-		"db":          localDB,
-		"env":         m.envName,
-		"local_user":  localUser,
-		"local_pass":  localPass,
-		"local_db":    localDB,
-		"se_db":       se.Database,
-		"se_user":     se.User,
-		"se_password": se.Password,
-	}
+		// Auto-variables: {database}/{db}/{user}/{password} resolve to the LOCAL
+		// container credentials because ALL custom function execution runs via
+		// docker exec inside the container. Use {se_db} / {se_user} etc. for the
+		// SyncEnv's remote credentials (for export-like operations).
+		autoVars := map[string]string{
+			"host":        se.Host,
+			"user":        se.User,
+			"password":    se.Password,
+			"database":    localDB,
+			"db":          localDB,
+			"env":         m.envName,
+			"local_user":  localUser,
+			"local_pass":  localPass,
+			"local_db":    localDB,
+			"se_db":       se.Database,
+			"se_user":     se.User,
+			"se_password": se.Password,
+		}
 
-	// Substitute all variables (auto + user params)
-	substituted := cmd
-	for k, v := range m.paramValues {
-		substituted = strings.ReplaceAll(substituted, "{"+k+"}", v)
-	}
-	for k, v := range autoVars {
-		if v != "" {
+		// Substitute all variables (auto + user params)
+		substituted := cmd
+		for k, v := range m.paramValues {
 			substituted = strings.ReplaceAll(substituted, "{"+k+"}", v)
 		}
-	}
+		for k, v := range autoVars {
+			if v != "" {
+				substituted = strings.ReplaceAll(substituted, "{"+k+"}", v)
+			}
+		}
 
-	// Auto-wrap in DB client if it looks like raw SQL (no shell command prefix)
-	shellCmd := substituted
-	if !strings.HasPrefix(shellCmd, "psql") &&
-		!strings.HasPrefix(shellCmd, "mysql") &&
-		!strings.HasPrefix(shellCmd, "mongo") &&
-		!strings.HasPrefix(shellCmd, "mongosh") &&
-		!strings.HasPrefix(shellCmd, "sqlcmd") &&
-		!strings.HasPrefix(shellCmd, "sh ") &&
-		!strings.HasPrefix(shellCmd, "bash ") {
-		switch se.DBType {
-		case "postgres":
-			shellCmd = fmt.Sprintf(`psql -h localhost -U %s -d %s -c "%s"`, localUser, localDB, strings.ReplaceAll(substituted, `"`, `\"`))
-		case "mongo":
-			shellCmd = fmt.Sprintf(`mongo -u %s -p %s --authenticationDatabase admin %s --eval '%s'`, localUser, localPass, localDB, strings.ReplaceAll(substituted, "'", `'\''`))
-		case "mysql", "mariadb":
-			shellCmd = fmt.Sprintf(`mysql -h localhost -u %s -p%s %s -e "%s"`, localUser, localPass, localDB, strings.ReplaceAll(substituted, `"`, `\"`))
-		case "mssql":
-			shellCmd = fmt.Sprintf(`sqlcmd -S localhost -U %s -P %s -d %s -Q "%s"`, localUser, localPass, localDB, strings.ReplaceAll(substituted, `"`, `\"`))
+		// Auto-wrap in DB client if it looks like raw SQL (no shell command prefix)
+		shellCmd := substituted
+		needsSqlplus := false
+		if !strings.HasPrefix(shellCmd, "psql") &&
+			!strings.HasPrefix(shellCmd, "mysql") &&
+			!strings.HasPrefix(shellCmd, "mongo") &&
+			!strings.HasPrefix(shellCmd, "mongosh") &&
+			!strings.HasPrefix(shellCmd, "sqlcmd") &&
+			!strings.HasPrefix(shellCmd, "sqlplus") &&
+			!strings.HasPrefix(shellCmd, "sh ") &&
+			!strings.HasPrefix(shellCmd, "bash ") {
+			switch se.DBType {
+			case "postgres":
+				shellCmd = fmt.Sprintf(`psql -h localhost -U %s -d %s -c "%s"`, localUser, localDB, strings.ReplaceAll(substituted, `"`, `\"`))
+			case "mongo":
+				shellCmd = fmt.Sprintf(`mongo -u %s -p %s --authenticationDatabase admin %s --eval '%s'`, localUser, localPass, localDB, strings.ReplaceAll(substituted, "'", `'\''`))
+			case "mysql":
+				shellCmd = fmt.Sprintf(`mysql -h localhost -u %s -p%s %s -e "%s"`, localUser, localPass, localDB, strings.ReplaceAll(substituted, `"`, `\"`))
+			case "mssql":
+				shellCmd = fmt.Sprintf(`sqlcmd -S localhost -U %s -P %s -d %s -Q "%s"`, localUser, localPass, localDB, strings.ReplaceAll(substituted, `"`, `\"`))
+			case "oracle":
+				// Oracle uses sqlplus via stdin (no shell wrapper) to avoid
+				// credential injection — see docker.OracleExecSQL.
+				needsSqlplus = true
 			}
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
+
+		if needsSqlplus {
+			out, err := docker.OracleExecSQL(ctx, container, localUser, localPass, localDB, substituted)
+			if err != nil {
+				return dbOpsDoneMsg{err: fmt.Errorf("custom action: %s: %w", strings.TrimSpace(out), err)}
+			}
+			return dbOpsDoneMsg{result: strings.TrimSpace(out)}
+		}
+
 		dockerCmd := exec.CommandContext(ctx, "docker", "exec", "-i", container, "sh", "-c", shellCmd)
 		out, err := dockerCmd.CombinedOutput()
 		if err != nil {
@@ -1135,7 +1137,7 @@ func (m *DBOpsModel) viewActions() string {
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(styles.StyleTitle.Render(
-		fmt.Sprintf(" Actions for: %s ", m.selectedEnv)))
+		fmt.Sprintf(" DB Ops — %s / %s / %s — %s ", m.profile.Name, m.envName, m.serviceName, m.selectedEnv)))
 	b.WriteString("\n\n")
 
 	// Connection info (inline, no border)
@@ -1179,18 +1181,10 @@ func (m *DBOpsModel) viewActions() string {
 	// Window the actions list: overhead = title(3) + connInfo(2) + password(1) +
 	// trailing(8: blank, lastResult, deleteArmed, prompts, help) = ~16
 	overhead := 16
-	avail := m.height - overhead
-	if avail < 1 {
-		avail = 1
-	}
 	total := len(m.actions)
 	// Estimate ~2 lines per action (some have disabled reason, group headers)
 	itemHeight := 2
-	fit := avail / itemHeight
-	if fit < 1 {
-		fit = 1
-	}
-	win := dbOpsWindow(total, m.actionCursor, fit)
+	win := opsWindow(total, m.actionCursor, itemHeight, m.height, overhead)
 
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
@@ -1224,9 +1218,9 @@ func (m *DBOpsModel) viewActions() string {
 		isCursor := i == m.actionCursor
 
 		if !act.enabled {
-			b.WriteString(styles.StyleSubtitle.Render("      " + act.label) + "\n")
+			b.WriteString(styles.StyleSubtitle.Render("      "+act.label) + "\n")
 			if act.disabledReason != "" {
-				b.WriteString(styles.StyleSubtitle.Render("      unavailable: " + act.disabledReason) + "\n")
+				b.WriteString(styles.StyleSubtitle.Render("      unavailable: "+act.disabledReason) + "\n")
 			}
 			continue
 		}
@@ -1246,11 +1240,11 @@ func (m *DBOpsModel) viewActions() string {
 
 		if isCursor {
 			if act.isCustom {
-				b.WriteString(customSelStyle.Render("    > " + act.label) + "\n")
+				b.WriteString(customSelStyle.Render("    > "+act.label) + "\n")
 			} else if act.isAddAction {
-				b.WriteString(addSelStyle.Render("    > " + act.label) + "\n")
+				b.WriteString(addSelStyle.Render("    > "+act.label) + "\n")
 			} else {
-				b.WriteString(selStyle.Render("    > " + act.label) + "\n")
+				b.WriteString(selStyle.Render("    > "+act.label) + "\n")
 			}
 		} else {
 			b.WriteString("      " + act.label + "\n")
@@ -1278,7 +1272,7 @@ func (m *DBOpsModel) viewActions() string {
 		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
 	} else if m.promptStartService {
 		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
-		b.WriteString(styles.StyleError.Render("  Service '" + m.serviceName + "' is not running.") + "\n")
+		b.WriteString(styles.StyleError.Render("  Service '"+m.serviceName+"' is not running.") + "\n")
 		b.WriteString("  " + promptStyle.Render("▸ Start it?") + "  " + styles.StyleSubtitle.Render("(y/n/esc)") + "\n\n")
 	}
 
@@ -1311,7 +1305,7 @@ func (m *DBOpsModel) viewCustomForm() string {
 	if m.editingCustomIdx >= 0 {
 		titleStr = "Edit Custom Action"
 	}
-	b.WriteString(styles.StyleSubtitle.Render("  " + titleStr) + "\n\n")
+	b.WriteString(styles.StyleSubtitle.Render("  "+titleStr) + "\n\n")
 
 	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 	normalStyle := lipgloss.NewStyle()
@@ -1363,7 +1357,7 @@ func (m *DBOpsModel) viewCustomForm() string {
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "field"),
-			styles.HelpItem("enter", "newline"),
+			styles.HelpItem("↵", "newline"),
 			styles.HelpItem("ctrl+s", "save"),
 		))
 	} else {
@@ -1421,7 +1415,7 @@ func (m *DBOpsModel) viewParamPrompt() string {
 	}
 	b.WriteString("  " + styles.InlineHelp(
 		styles.HelpItem("esc", "cancel"),
-		styles.HelpItem("enter", enterLabel),
+		styles.HelpItem("↵", enterLabel),
 	))
 	return b.String()
 }
@@ -1430,7 +1424,7 @@ func (m *DBOpsModel) viewParamPrompt() string {
 // checking dump file existence at render time.
 func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 	dDir := m.dumpDir(se)
-		truncate := m.truncateTables(se)
+	truncate := m.truncateTables(se)
 
 	var actions []actionItem
 	switch se.DBType {
@@ -1440,41 +1434,41 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 		actions = []actionItem{
 			{label: "Export schema", group: "Export", enabled: true, execute: m.exportSchema(se)},
 			{label: "Export data", group: "Export", enabled: true, execute: m.exportData(se)},
-			{label: "Import schema", group: "Import", enabled: hasSchema, disabledReason: disabledIf(!hasSchema, "no schema dump"), execute: m.importSchema(se)},
-			{label: "Import data", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no data dump"), execute: m.importData(se)},
-			{label: "Truncate tables", group: "Functions", enabled: true, execute: truncate},
+			{label: "Import schema", group: "Import", enabled: hasSchema, disabledReason: disabledIf(!hasSchema, "no schema dump"), requiresContainer: true, execute: m.importSchema(se)},
+			{label: "Import data", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no data dump"), requiresContainer: true, execute: m.importData(se)},
+			{label: "Truncate tables", group: "Functions", enabled: true, requiresContainer: true, execute: truncate},
 		}
 
 	case "mongo":
 		hasData := m.hasMongoDump(dDir)
 		actions = []actionItem{
 			{label: "Export", group: "Export", enabled: true, execute: m.exportData(se)},
-			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump"), execute: m.importData(se)},
-			{label: "Truncate tables", group: "Functions", enabled: true, execute: truncate},
+			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump"), requiresContainer: true, execute: m.importData(se)},
+			{label: "Truncate tables", group: "Functions", enabled: true, requiresContainer: true, execute: truncate},
 		}
 
 	case "mysql":
 		hasData := docker.HasDumpFile(dDir, "data-*.sql")
 		actions = []actionItem{
 			{label: "Export", group: "Export", enabled: true, execute: m.exportData(se)},
-			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump file"), execute: m.importData(se)},
-			{label: "Truncate tables", group: "Functions", enabled: true, execute: truncate},
+			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump file"), requiresContainer: true, execute: m.importData(se)},
+			{label: "Truncate tables", group: "Functions", enabled: true, requiresContainer: true, execute: truncate},
 		}
 
 	case "mssql":
 		hasData := docker.HasDumpFile(dDir, "data-*.bacpac")
 		actions = []actionItem{
 			{label: "Export", group: "Export", enabled: true, execute: m.exportData(se)},
-			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no .bacpac file"), execute: m.importData(se)},
-			{label: "Truncate tables", group: "Functions", enabled: true, execute: truncate},
+			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no .bacpac file"), requiresContainer: true, execute: m.importData(se)},
+			{label: "Truncate tables", group: "Functions", enabled: true, requiresContainer: true, execute: truncate},
 		}
 
 	case "oracle":
 		hasData := docker.HasDumpFile(dDir, "data-*.dmp")
 		actions = []actionItem{
-			{label: "Export", group: "Export", enabled: true, execute: m.exportData(se)},
-			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no .dmp file"), execute: m.importData(se)},
-			{label: "Truncate tables", group: "Functions", enabled: true, execute: truncate},
+			{label: "Export", group: "Export", enabled: true, requiresContainer: true, execute: m.exportData(se)},
+			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no .dmp file"), requiresContainer: true, execute: m.importData(se)},
+			{label: "Truncate tables", group: "Functions", enabled: true, requiresContainer: true, execute: truncate},
 		}
 	}
 
@@ -1482,12 +1476,12 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 	for idx := range se.CustomActions {
 		i := idx
 		actions = append(actions, actionItem{
-			label:    se.CustomActions[i].Name,
-			group:    "Functions",
-			enabled:  true,
-			isCustom: true,
+			label:     se.CustomActions[i].Name,
+			group:     "Functions",
+			enabled:   true,
+			isCustom:  true,
 			customIdx: i,
-			execute:  nil,
+			execute:   nil,
 		})
 	}
 
@@ -1707,6 +1701,19 @@ func (m *DBOpsModel) isContainerRunning(container string) bool {
 	return opsIsContainerRunning(m.profile.Name, m.envName, container)
 }
 
+// ensureContainerRunning checks whether the service container is running.
+// If it is not, it sets up the daemon/service start prompt and returns false.
+// The caller should return (m, nil) immediately when this returns false.
+func (m *DBOpsModel) ensureContainerRunning(label string) bool {
+	st := opsCheckContainer(m.profile.Name, m.envName, m.serviceName)
+	return st.apply(
+		func(v bool) { m.promptStartDaemon = v },
+		func(v bool) { m.promptStartService = v },
+		func(v string) { m.pendingStartLabel = v },
+		label,
+	)
+}
+
 // fetchMSSQLPort reads the MSSQL container's mapped port from docker inspect.
 // Returns "1433" as fallback if detection fails.
 func (m *DBOpsModel) fetchMSSQLPort() (string, error) {
@@ -1755,7 +1762,7 @@ func (m *DBOpsModel) updateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = dbScreenSyncEnvList
 		return m, nil
 	}
-	m.wizardModel = wm
+	m.wizardModel = wm.(*AddSyncEnvModel)
 	return m, cmd
 }
 
@@ -1793,6 +1800,8 @@ func (m *DBOpsModel) hasDumpsFor(se *config.SyncEnv) bool {
 		return docker.HasDumpFile(dDir, "data-*.sql")
 	case "mssql":
 		return docker.HasDumpFile(dDir, "data-*.bacpac")
+	case "oracle":
+		return docker.HasDumpFile(dDir, "data-*.dmp")
 	}
 	return false
 }
@@ -1813,32 +1822,6 @@ func (m *DBOpsModel) hasMongoDump(dumpDir string) bool {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// dbOpsWindow calculates the visible item range for a cursor-based list.
-func dbOpsWindow(total, cursor, avail int) itemWindow {
-	if total == 0 {
-		return itemWindow{}
-	}
-	if total <= avail {
-		return itemWindow{start: 0, end: total}
-	}
-	half := avail / 2
-	start := cursor - half
-	if start < 0 {
-		start = 0
-	}
-	end := start + avail
-	if end > total {
-		end = total
-		start = total - avail
-	}
-	return itemWindow{
-		start:    start,
-		end:      end,
-		hasAbove: start > 0,
-		hasBelow: end < total,
-	}
-}
-
 func (m *DBOpsModel) renderSpinnerDot(op string) string {
 	return opsRenderSpinnerDot(m.spinnerFrame, op)
 }
@@ -1852,11 +1835,6 @@ func ts() string {
 // firstEnabledAction returns the index of the first enabled action, or 0 if all are disabled.
 func (m *DBOpsModel) firstEnabledAction() int {
 	return opsFirstEnabledAction(m.actions)
-}
-
-// hasImportPrefix returns true when label matches any "Import" action.
-func hasImportPrefix(label string) bool {
-	return strings.HasPrefix(label, "Import")
 }
 
 // getLocalDBCredentials extracts local database credentials from the service's
@@ -1888,7 +1866,7 @@ func getLocalDBCredentials(svc *config.Service, dbType string) (user, pass, db s
 		if db == "" {
 			db = "admin"
 		}
-	case "mysql", "mariadb":
+	case "mysql":
 		user = "root"
 		pass = envMap["MYSQL_ROOT_PASSWORD"]
 		db = envMap["MYSQL_DATABASE"]

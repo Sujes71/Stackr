@@ -62,16 +62,16 @@ type MockOpsModel struct {
 	width  int
 
 	// Result panel overlay
-	viewingResult   bool
-	resultOutput    string
-	resultTitle     string
-	resultViewport  viewport.Model
-	viewportContent string
-	detailFromList  bool // true when viewingResult came from item list detail
-	editingOrigMethod string // set when editing from item list, to clear old expectation
-	editingOrigPath   string
+	viewingResult          bool
+	resultOutput           string
+	resultTitle            string
+	resultViewport         viewport.Model
+	viewportContent        string
+	detailFromList         bool   // true when viewingResult came from item list detail
+	editingOrigMethod      string // set when editing from item list, to clear old expectation
+	editingOrigPath        string
 	editingOrigQueryParams string // original queryStringParameters when editing
-	deleteItemArmed   bool // double-press 'd' from item list to delete
+	deleteItemArmed        bool   // double-press 'd' from item list to delete
 
 	// Item list (compact view for list endpoints)
 	viewingItemList bool
@@ -88,11 +88,11 @@ type MockOpsModel struct {
 	paramTextarea   textarea.Model
 
 	// Query param builder (sub-prompt for key/value pairs)
-	qpBuilding    bool       // in key=value builder mode
+	qpBuilding    bool        // in key=value builder mode
 	qpPairs       [][2]string // accumulated key-value pairs
-	qpPhase       int        // 0 = entering key, 1 = entering value
-	qpOrigVal     string     // original query_params value to restore on cancel
-	qpDeleteArmed bool       // double-press 'd' to delete last pair
+	qpPhase       int         // 0 = entering key, 1 = entering value
+	qpOrigVal     string      // original query_params value to restore on cancel
+	qpDeleteArmed bool        // double-press 'd' to delete last pair
 
 	// Confirm before execute (double confirmation)
 	confirmAction bool
@@ -109,13 +109,13 @@ type MockOpsModel struct {
 
 func NewMockOps(cfg *config.Config, p *config.Profile, envName, serviceName string) *MockOpsModel {
 	m := &MockOpsModel{
-		cfg:         cfg,
-		profile:     p,
-		envName:     envName,
-		serviceName: serviceName,
-		pendingOps:  make(map[string]string),
-		paramInput:  textinput.New(),
-		paramTextarea: textarea.New(),
+		cfg:            cfg,
+		profile:        p,
+		envName:        envName,
+		serviceName:    serviceName,
+		pendingOps:     make(map[string]string),
+		paramInput:     textinput.New(),
+		paramTextarea:  textarea.New(),
 		resultViewport: viewport.New(0, 0),
 	}
 	vp := &m.resultViewport
@@ -162,15 +162,15 @@ func (m *MockOpsModel) IsBusy() bool {
 
 func (m *MockOpsModel) SetSize(w, h int) {
 	m.width = w
-	m.height = h
+	m.height = max(0, h-5)
 	// Must match the dimension formulas used in doneMsg/error handlers to
 	// avoid visual jumps on resize.
 	m.resultViewport.Width = w - 4
 	if m.viewingResult {
 		lineCount := strings.Count(m.viewportContent, "\n") + 1
-		m.resultViewport.Height = min(lineCount, max(8, h-13))
+		m.resultViewport.Height = min(lineCount, max(8, m.height-13))
 	} else {
-		m.resultViewport.Height = min(h-12, 40)
+		m.resultViewport.Height = min(m.height-12, 40)
 	}
 	// Recalculate textarea height if a param prompt is active so the
 	// body field doesn't overflow after a terminal resize.
@@ -251,67 +251,67 @@ func unescapeNestedJSON(v interface{}) interface{} {
 // Returns a tea.Cmd that sends mockOpsDoneMsg with the result.
 func (m *MockOpsModel) mockAPICall(endpoint, httpMethod string, body interface{}, queryParams map[string]string) tea.Cmd {
 	return func() tea.Msg {
-			port := m.mockHostPort()
+		port := m.mockHostPort()
 
-			// Build URL with query params
-			apiURL := fmt.Sprintf("http://localhost:%s%s", port, endpoint)
-			if len(queryParams) > 0 {
-				var params []string
-				for k, v := range queryParams {
-					params = append(params, url.QueryEscape(k)+"="+url.QueryEscape(v))
-				}
-				apiURL += "?" + strings.Join(params, "&")
+		// Build URL with query params
+		apiURL := fmt.Sprintf("http://localhost:%s%s", port, endpoint)
+		if len(queryParams) > 0 {
+			var params []string
+			for k, v := range queryParams {
+				params = append(params, url.QueryEscape(k)+"="+url.QueryEscape(v))
 			}
+			apiURL += "?" + strings.Join(params, "&")
+		}
 
-			var reqBody io.Reader
-			if body != nil {
-				jsonBody, err := json.Marshal(body)
-				if err != nil {
-					return mockOpsDoneMsg{err: fmt.Errorf("invalid request: %w", err)}
-				}
-				reqBody = bytes.NewReader(jsonBody)
-			}
-
-			req, err := http.NewRequest(httpMethod, apiURL, reqBody)
+		var reqBody io.Reader
+		if body != nil {
+			jsonBody, err := json.Marshal(body)
 			if err != nil {
-				return mockOpsDoneMsg{err: fmt.Errorf("request failed: %w", err)}
+				return mockOpsDoneMsg{err: fmt.Errorf("invalid request: %w", err)}
 			}
-			if body != nil {
-				req.Header.Set("Content-Type", "application/json")
-			}
+			reqBody = bytes.NewReader(jsonBody)
+		}
 
-			client := &http.Client{Timeout: 10 * time.Second}
-			resp, err := client.Do(req)
-			if err != nil {
-				return mockOpsDoneMsg{err: fmt.Errorf("cannot reach MockServer at localhost:%s — is the service running?\n  %w", port, err)}
-			}
-			defer resp.Body.Close()
+		req, err := http.NewRequest(httpMethod, apiURL, reqBody)
+		if err != nil {
+			return mockOpsDoneMsg{err: fmt.Errorf("request failed: %w", err)}
+		}
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
 
-			respData, _ := io.ReadAll(resp.Body)
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return mockOpsDoneMsg{err: fmt.Errorf("cannot reach MockServer at localhost:%s — is the service running?\n  %w", port, err)}
+		}
+		defer resp.Body.Close()
 
-			if resp.StatusCode >= 400 {
-				return mockOpsDoneMsg{err: fmt.Errorf("MockServer error (%d): %s", resp.StatusCode, strings.TrimSpace(string(respData)))}
-			}
+		respData, _ := io.ReadAll(resp.Body)
 
-			if len(respData) > 0 {
-				// Empty array/object → friendly message instead of "[]"
-				trimmed := strings.TrimSpace(string(respData))
-				if trimmed == "[]" {
-					if retrieveType := queryParams["type"]; retrieveType == "REQUESTS" {
-						return mockOpsDoneMsg{result: "No requests recorded yet.\nRequests appear when a client sends traffic to MockServer."}
-					}
-					return mockOpsDoneMsg{result: "No active expectations found.\nCreate one with 'Create expectation' above."}
+		if resp.StatusCode >= 400 {
+			return mockOpsDoneMsg{err: fmt.Errorf("MockServer error (%d): %s", resp.StatusCode, strings.TrimSpace(string(respData)))}
+		}
+
+		if len(respData) > 0 {
+			// Empty array/object → friendly message instead of "[]"
+			trimmed := strings.TrimSpace(string(respData))
+			if trimmed == "[]" {
+				if retrieveType := queryParams["type"]; retrieveType == "REQUESTS" {
+					return mockOpsDoneMsg{result: "No requests recorded yet.\nRequests appear when a client sends traffic to MockServer."}
 				}
-				if trimmed == "{}" {
-					return mockOpsDoneMsg{result: "Empty response from MockServer."}
-				}
-				// Pretty-print with nested JSON unescaping
-				return mockOpsDoneMsg{result: prettyMockResult(respData)}
+				return mockOpsDoneMsg{result: "No active expectations found.\nCreate one with 'Create expectation' above."}
 			}
+			if trimmed == "{}" {
+				return mockOpsDoneMsg{result: "Empty response from MockServer."}
+			}
+			// Pretty-print with nested JSON unescaping
+			return mockOpsDoneMsg{result: prettyMockResult(respData)}
+		}
 
-			// No body — success with no meaningful output;
-			// auto-dismiss and just show the checkmark.
-			return mockOpsDoneMsg{result: ""}
+		// No body — success with no meaningful output;
+		// auto-dismiss and just show the checkmark.
+		return mockOpsDoneMsg{result: ""}
 	}
 }
 
@@ -391,7 +391,7 @@ func (m *MockOpsModel) execParamAction(act actionItem) tea.Cmd {
 		}
 
 		body := map[string]interface{}{
-			"httpRequest":  httpRequest,
+			"httpRequest": httpRequest,
 			"httpResponse": map[string]interface{}{
 				"statusCode": statusCode,
 				"headers": map[string][]string{
@@ -604,7 +604,7 @@ func (m *MockOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle resize FIRST — before any state delegation — so dimensions
 	// are never stale regardless of which screen/state is active.
 	if wm, ok := msg.(tea.WindowSizeMsg); ok {
-		m.SetSize(wm.Width, wm.Height-5)
+		m.SetSize(wm.Width, wm.Height)
 		return m, nil
 	}
 
@@ -954,17 +954,17 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.confirmLabel = act.label
 						return m, nil
 					}
-				// Immediate action
-				if act.execute != nil {
-					// Check if container is running before executing
-					if !m.ensureContainerRunning(act.label) {
-						return m, nil
+					// Immediate action
+					if act.execute != nil {
+						// Check if container is running before executing
+						if !m.ensureContainerRunning(act.label) {
+							return m, nil
+						}
+						m.doneOp = act.label
+						m.doneOpAt = time.Now()
+						m.pendingOps[act.label] = "running"
+						return m, tea.Batch(act.execute, spinnerCmd())
 					}
-					m.doneOp = act.label
-					m.doneOpAt = time.Now()
-					m.pendingOps[act.label] = "running"
-					return m, tea.Batch(act.execute, spinnerCmd())
-				}
 				}
 			}
 		}
@@ -1078,12 +1078,16 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if _, ok := msg.(SpinnerTickMsg); ok {
 		if len(m.pendingOps) > 0 {
 			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
-			return m, spinnerCmd()
+			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+				return SpinnerTickMsg{}
+			})
 		}
 		// Keep spinning for doneOp timer
 		if m.doneOp != "" && time.Since(m.doneOpAt) < 5*time.Second {
 			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
-			return m, spinnerCmd()
+			return m, tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+				return SpinnerTickMsg{}
+			})
 		}
 		m.doneOp = ""
 		m.doneOpAt = time.Time{}
@@ -1561,7 +1565,7 @@ func (m *MockOpsModel) viewActions() string {
 	b.WriteString("\n")
 
 	b.WriteString(styles.StyleTitle.Render(
-		fmt.Sprintf(" MockServer Ops — %s ", m.serviceName)))
+		fmt.Sprintf(" MockServer Ops — %s / %s / %s ", m.profile.Name, m.envName, m.serviceName)))
 	b.WriteString("\n\n")
 	b.WriteString(styles.StyleSubtitle.Render(
 		"  Target: local (HTTP API)  |  Type: mockserver"))
@@ -1589,8 +1593,25 @@ func (m *MockOpsModel) viewActions() string {
 		Foreground(styles.ColorPrimary).
 		Bold(true)
 
+	// Window the actions list (MockOps has no list screen — this is the only list)
+	totalActions := len(m.actions)
+	overhead := 12 // title, subtitle, help, margins
+	if m.promptStartDaemon || m.promptStartService {
+		overhead += 3
+	}
+	if m.confirmAction {
+		overhead += 3
+	}
+	win := opsWindow(totalActions, m.actionCursor, 2, m.height, overhead)
+
+	if win.hasAbove {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
+		b.WriteString("\n")
+	}
+
 	currentGroup := ""
-	for i, act := range m.actions {
+	for i := win.start; i < win.end; i++ {
+		act := m.actions[i]
 		if act.group != currentGroup {
 			currentGroup = act.group
 			if i > 0 {
@@ -1603,9 +1624,9 @@ func (m *MockOpsModel) viewActions() string {
 		isCursor := i == m.actionCursor
 
 		if !act.enabled {
-			b.WriteString(styles.StyleSubtitle.Render("      " + act.label) + "\n")
+			b.WriteString(styles.StyleSubtitle.Render("      "+act.label) + "\n")
 			if act.disabledReason != "" {
-				b.WriteString(styles.StyleSubtitle.Render("      unavailable: " + act.disabledReason) + "\n")
+				b.WriteString(styles.StyleSubtitle.Render("      unavailable: "+act.disabledReason) + "\n")
 			}
 			continue
 		}
@@ -1624,10 +1645,15 @@ func (m *MockOpsModel) viewActions() string {
 		}
 
 		if isCursor {
-			b.WriteString(selStyle.Render("    > " + act.label) + "\n")
+			b.WriteString(selStyle.Render("    > "+act.label) + "\n")
 		} else {
 			b.WriteString("      " + act.label + "\n")
 		}
+	}
+
+	if win.hasBelow {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", totalActions-win.end)))
+		b.WriteString("\n")
 	}
 
 	b.WriteString("\n")
@@ -1643,8 +1669,7 @@ func (m *MockOpsModel) viewActions() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString("  " + styles.InlineHelp(
-		styles.HelpItem("esc", "back"),
+	b.WriteString(styles.BackHelp(
 		styles.HelpItem("↑ ↓", "navigate"),
 		styles.HelpItem("↵", "execute"),
 	))
@@ -1698,9 +1723,9 @@ func (m *MockOpsModel) viewItemList() string {
 	for i := start; i < end; i++ {
 		label := mockItemLabel(m.itemList[i])
 		if i == m.itemCursor {
-			b.WriteString(selStyle.Render("    > " + label) + "\n")
+			b.WriteString(selStyle.Render("    > "+label) + "\n")
 		} else {
-			b.WriteString(itemStyle.Render("      " + label) + "\n")
+			b.WriteString(itemStyle.Render("      "+label) + "\n")
 		}
 	}
 	if hasBelow {
@@ -1711,7 +1736,7 @@ func (m *MockOpsModel) viewItemList() string {
 	b.WriteString("\n")
 
 	if m.deleteItemArmed {
-		b.WriteString("  " + formatErrorMsg("Press d again to delete this item") + "\n\n")
+		b.WriteString("\n" + styles.ErrorLine("Press d again to delete this item") + "\n\n")
 	}
 
 	helpItems := []styles.HelpItemResult{
@@ -1776,7 +1801,7 @@ func mockItemLabel(item interface{}) string {
 
 // viewportHelp returns the help bar shown below the result viewport.
 func (m *MockOpsModel) viewportHelp() string {
-	return styles.StyleHelp.Render("press any key to close")
+	return styles.StyleHelp.Render("▲ up  ▼ down  ·  any key to close")
 }
 
 // ── Param prompt view ──────────────────────────────────────────────────────────
@@ -1807,12 +1832,12 @@ func (m *MockOpsModel) viewParamPrompt() string {
 		b.WriteString("  " + m.paramInput.View() + "\n")
 
 		if m.qpDeleteArmed {
-			b.WriteString("\n  " + formatErrorMsg("Press Ctrl+D again to remove last pair") + "\n")
+			b.WriteString("\n" + styles.ErrorLine("Press ctrl+d again to remove last pair") + "\n")
 		}
 
 		helpItems := []styles.HelpItemResult{
 			styles.HelpItem("esc", "cancel"),
-			styles.HelpItem("enter", "confirm"),
+			styles.HelpItem("↵", "confirm"),
 		}
 		if len(m.qpPairs) > 0 && m.qpPhase == 0 {
 			helpItems = append(helpItems, styles.HelpItem("ctrl+d ctrl+d", "delete last"))
@@ -1884,7 +1909,7 @@ func (m *MockOpsModel) viewParamPrompt() string {
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "navigate"),
-			styles.HelpItem("enter", "newline"),
+			styles.HelpItem("↵", "newline"),
 			styles.HelpItem("ctrl+f", "format"),
 			styles.HelpItem("ctrl+s", "save"),
 		))
@@ -1892,24 +1917,24 @@ func (m *MockOpsModel) viewParamPrompt() string {
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "navigate"),
-			styles.HelpItem("enter", "add pairs"),
+			styles.HelpItem("↵", "add pairs"),
 		))
 	} else {
 		// Dynamic label: "save" if just storing the field, "submit" if it triggers the action
 		willSubmit := false
-			if m.currentParamIdx == len(m.paramsToPrompt)-1 {
-				othersFilled := true
-				for i, p := range m.paramsToPrompt {
-					if i == m.currentParamIdx || p == "query_params" {
-						continue
-					}
-					if v, ok := m.paramValues[p]; !ok || v == "" {
-						othersFilled = false
-						break
-					}
+		if m.currentParamIdx == len(m.paramsToPrompt)-1 {
+			othersFilled := true
+			for i, p := range m.paramsToPrompt {
+				if i == m.currentParamIdx || p == "query_params" {
+					continue
 				}
-				willSubmit = othersFilled
+				if v, ok := m.paramValues[p]; !ok || v == "" {
+					othersFilled = false
+					break
+				}
 			}
+			willSubmit = othersFilled
+		}
 		enterLabel := "save"
 		if willSubmit {
 			enterLabel = "submit"
@@ -1917,7 +1942,7 @@ func (m *MockOpsModel) viewParamPrompt() string {
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "navigate"),
-			styles.HelpItem("enter", enterLabel),
+			styles.HelpItem("↵", enterLabel),
 		))
 	}
 
@@ -1943,17 +1968,13 @@ func (m *MockOpsModel) isContainerRunning(container string) bool {
 // The caller should return (m, nil) immediately when this returns false.
 // label is the action label to execute after the container starts.
 func (m *MockOpsModel) ensureContainerRunning(label string) bool {
-	container := docker.ContainerName(m.profile.Name, m.envName, m.serviceName)
-	if m.isContainerRunning(container) {
-		return true
-	}
-	if !docker.DaemonAvailable() {
-		m.promptStartDaemon = true
-	} else {
-		m.promptStartService = true
-	}
-	m.pendingStartLabel = label
-	return false
+	st := opsCheckContainer(m.profile.Name, m.envName, m.serviceName)
+	return st.apply(
+		func(v bool) { m.promptStartDaemon = v },
+		func(v bool) { m.promptStartService = v },
+		func(v string) { m.pendingStartLabel = v },
+		label,
+	)
 }
 
 func (m *MockOpsModel) launchDockerCmd() tea.Cmd {

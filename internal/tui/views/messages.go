@@ -1,6 +1,10 @@
 package views
 
-import "github.com/stackr/stackr/internal/config"
+import (
+	"github.com/stackr/stackr/internal/config"
+	"github.com/stackr/stackr/internal/docker"
+	"github.com/stackr/stackr/internal/hub"
+)
 
 // NavTarget identifies a screen to navigate to.
 type NavTarget int
@@ -83,6 +87,66 @@ type statsResultMsg struct {
 // service status for the current environment while the profile view is active.
 type statusRefreshTickMsg struct{}
 
+// statusLoadedMsg carries Docker status results for an environment.
+// Used by the profile view to refresh container state after operations.
+type statusLoadedMsg struct {
+	statuses        []docker.ServiceStatus
+	err             string
+	daemonAvailable bool
+	envName         string // which env these statuses belong to; "" means "current active env"
+	fromLaunch      bool   // true when this result is from launchDockerCmd() completion
+}
+
+// ── Action-clear Messages ──
+
+// ClearActionMsg clears transient result state (lastResult / err) across views.
+// Sent by ClearActionAfter after a delay.
+type ClearActionMsg struct{}
+
+// ── Service removal Messages ──
+
+// svcRmDoneMsg is sent when a service is removed from a profile environment.
+type svcRmDoneMsg struct {
+	envName string
+	svcName string
+}
+
 // ── Spinner Messages ──
 
 type SpinnerTickMsg struct{}
+
+// ── Profile import/export (home) ──
+
+// importResultMsg is sent when a profile import operation completes.
+type importResultMsg struct {
+	profiles []config.Profile
+	err      string
+}
+
+// ── Add Service (hub search / tag fetch / save) ──
+
+// hubSearchResultMsg carries the results of a Docker Hub search.
+type hubSearchResultMsg struct {
+	results []hub.SearchResult
+	err     string
+}
+
+// hubTagsResultMsg carries the tags fetched for a selected image.
+type hubTagsResultMsg struct {
+	tags []hub.Tag
+	err  string
+}
+
+// svcSavedMsg is sent when a service or local process is saved.
+type svcSavedMsg struct{}
+
+// ── Add Sync Env wizard (dbops) ──
+
+// wizardSavedMsg is sent by add_syncenv save() when the user confirms the
+// review step. editMode/origName let the DBOps parent migrate dump dirs
+// when a sync env is renamed.
+type wizardSavedMsg struct {
+	env      *config.SyncEnv
+	editMode bool
+	origName string
+}

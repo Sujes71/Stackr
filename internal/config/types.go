@@ -38,36 +38,36 @@ type Config struct {
 }
 
 type Profile struct {
-	Name        string      `yaml:"name"`
-	Description string      `yaml:"description,omitempty"`
-	CreatedAt   time.Time   `yaml:"created_at"`
-	UpdatedAt   time.Time   `yaml:"updated_at"`
-	Environments []Environment `yaml:"environments"`
-	ActiveEnv            string      `yaml:"active_env"`
-	LegacyDBOpsMigrated  bool        `yaml:"legacy_db_ops_migrated,omitempty"`
-	ConfigVersion        int         `yaml:"config_version,omitempty"` // 0 = legacy/plaintext, 1 = encrypted passwords
+	Name                string        `yaml:"name"`
+	Description         string        `yaml:"description,omitempty"`
+	CreatedAt           time.Time     `yaml:"created_at"`
+	UpdatedAt           time.Time     `yaml:"updated_at"`
+	Environments        []Environment `yaml:"environments"`
+	ActiveEnv           string        `yaml:"active_env"`
+	LegacyDBOpsMigrated bool          `yaml:"legacy_db_ops_migrated,omitempty"`
+	ConfigVersion       int           `yaml:"config_version,omitempty"` // 0 = legacy/plaintext, 1 = encrypted passwords
 }
 
 type Environment struct {
-	Name         string        `yaml:"name"` // local, dev, staging...
-	Services     []Service     `yaml:"services"`
-	PortForwards   []PortForward   `yaml:"port_forwards,omitempty"`
-	LocalProcesses []LocalProcess  `yaml:"local_processes,omitempty"`
+	Name           string         `yaml:"name"` // local, dev, staging...
+	Services       []Service      `yaml:"services"`
+	PortForwards   []PortForward  `yaml:"port_forwards,omitempty"`
+	LocalProcesses []LocalProcess `yaml:"local_processes,omitempty"`
 }
 
 type Service struct {
-	Name        string            `yaml:"name"`
-	Image       string            `yaml:"image"`
-	Tag         string            `yaml:"tag"`
-	Ports       []PortMapping     `yaml:"ports,omitempty"`
-	EnvVars     []EnvVar          `yaml:"env_vars,omitempty"`
-	Volumes     []VolumeMapping   `yaml:"volumes,omitempty"`
-	DependsOn   []string          `yaml:"depends_on,omitempty"`
-	SyncEnvs      []SyncEnv         `yaml:"sync_envs,omitempty"`
-	QueueSyncEnvs []QueueSyncEnv   `yaml:"queue_sync_envs,omitempty"`
-	HealthCheck   *HealthCheck      `yaml:"healthcheck,omitempty"`
-	Restart     string            `yaml:"restart,omitempty"`
-	Networks    []string          `yaml:"networks,omitempty"`
+	Name          string          `yaml:"name"`
+	Image         string          `yaml:"image"`
+	Tag           string          `yaml:"tag"`
+	Ports         []PortMapping   `yaml:"ports,omitempty"`
+	EnvVars       []EnvVar        `yaml:"env_vars,omitempty"`
+	Volumes       []VolumeMapping `yaml:"volumes,omitempty"`
+	DependsOn     []string        `yaml:"depends_on,omitempty"`
+	SyncEnvs      []SyncEnv       `yaml:"sync_envs,omitempty"`
+	QueueSyncEnvs []QueueSyncEnv  `yaml:"queue_sync_envs,omitempty"`
+	HealthCheck   *HealthCheck    `yaml:"healthcheck,omitempty"`
+	Restart       string          `yaml:"restart,omitempty"`
+	Networks      []string        `yaml:"networks,omitempty"`
 }
 
 func (s Service) FullImage() string {
@@ -297,13 +297,37 @@ func (s *SyncEnv) SetPassword(plaintext string) error {
 	return nil
 }
 
+// GetPassword returns the decrypted password for a queue sync env.
+// Mirrors SyncEnv.GetPassword: empty passwords are returned as-is.
+func (q QueueSyncEnv) GetPassword() (string, error) {
+	if q.Password == "" {
+		return "", nil
+	}
+	return crypto.Decrypt(crypto.GetKey(), q.Password)
+}
+
+// SetPassword encrypts the plaintext password and stores it in the Password field.
+// Empty passwords are stored as empty (not encrypted). Mirrors SyncEnv.SetPassword.
+func (q *QueueSyncEnv) SetPassword(plaintext string) error {
+	if plaintext == "" {
+		q.Password = ""
+		return nil
+	}
+	encrypted, err := crypto.Encrypt(crypto.GetKey(), plaintext)
+	if err != nil {
+		return fmt.Errorf("encrypt password: %w", err)
+	}
+	q.Password = encrypted
+	return nil
+}
+
 // Validate checks that all required fields are set and valid.
 // Returns a map of field name → error message for invalid fields.
 func (s SyncEnv) Validate() map[string]string {
 	errs := make(map[string]string)
-	validDBTypes := map[string]bool{"postgres": true, "mongo": true, "mssql": true, "mysql": true}
+	validDBTypes := map[string]bool{"postgres": true, "mongo": true, "mssql": true, "mysql": true, "oracle": true}
 	if !validDBTypes[s.DBType] {
-		errs["db_type"] = fmt.Sprintf("invalid DBType %q; must be one of: postgres, mongo, mssql, mysql", s.DBType)
+		errs["db_type"] = fmt.Sprintf("invalid DBType %q; must be one of: postgres, mongo, mssql, mysql, oracle", s.DBType)
 	}
 	if strings.TrimSpace(s.Name) == "" {
 		errs["name"] = "Name is required"
@@ -365,8 +389,18 @@ type HealthCheck struct {
 
 // ── Persistence ──────────────────────────────────────────────────────────────
 
+// StackrDir returns the path to the ~/.stackr directory.
+// If the home directory cannot be determined it falls back to $HOME, then to
+// the current directory, so we never silently produce a relative config path
+// from an empty home string.
 func StackrDir() string {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		home = os.Getenv("HOME")
+	}
+	if home == "" {
+		home = "."
+	}
 	return filepath.Join(home, ".stackr")
 }
 
@@ -406,8 +440,8 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
-// maybeMigratePasswords encrypts any plaintext SyncEnv passwords in profiles
-// that have ConfigVersion < 1, then saves the migrated config.
+// maybeMigratePasswords encrypts any plaintext SyncEnv and QueueSyncEnv passwords
+// in profiles that have ConfigVersion < 1, then saves the migrated config.
 func (c *Config) maybeMigratePasswords() error {
 	migrated := false
 	for i := range c.Profiles {
@@ -417,10 +451,20 @@ func (c *Config) maybeMigratePasswords() error {
 		}
 		for j := range p.Environments {
 			for k := range p.Environments[j].Services {
-				for l := range p.Environments[j].Services[k].SyncEnvs {
-					se := &p.Environments[j].Services[k].SyncEnvs[l]
+				svc := &p.Environments[j].Services[k]
+				for l := range svc.SyncEnvs {
+					se := &svc.SyncEnvs[l]
 					if se.Password != "" && !crypto.IsEncrypted(se.Password) {
 						if err := se.SetPassword(se.Password); err != nil {
+							return err
+						}
+						migrated = true
+					}
+				}
+				for l := range svc.QueueSyncEnvs {
+					qse := &svc.QueueSyncEnvs[l]
+					if qse.Password != "" && !crypto.IsEncrypted(qse.Password) {
+						if err := qse.SetPassword(qse.Password); err != nil {
 							return err
 						}
 						migrated = true
@@ -436,12 +480,42 @@ func (c *Config) maybeMigratePasswords() error {
 	return nil
 }
 
+// Save writes the config atomically: it marshals to YAML, writes to a temp file
+// in the same directory, then renames it over the target. This prevents a
+// crash mid-write from corrupting the config file.
 func (c *Config) Save() error {
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath(), data, 0644)
+	path := configPath()
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	tmp, err := os.CreateTemp(dir, ".config-*.yaml.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("close temp config: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0644); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("chmod temp config: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename config: %w", err)
+	}
+	return nil
 }
 
 func (c *Config) AddProfile(p Profile) error {
