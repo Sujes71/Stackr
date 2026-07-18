@@ -131,6 +131,10 @@ func (m *ErrorListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, errorKeys.esc):
+			if m.showDetail {
+				m.showDetail = false
+				return m, nil
+			}
 			return m, func() tea.Msg { return NavigateTo{Screen: NavHome} }
 
 		case key.Matches(msg, errorKeys.up):
@@ -177,7 +181,7 @@ func (m *ErrorListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *ErrorListModel) View() string {
 	if len(m.errors) == 0 {
-		return styles.StyleHelp.Render("\n  No errors yet\n")
+		return styles.StyleHelp.Render("\n  No errors recorded\n")
 	}
 
 	var b strings.Builder
