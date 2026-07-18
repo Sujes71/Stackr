@@ -411,7 +411,7 @@ func (m *AddQueueSyncEnvModel) save() tea.Cmd {
 			User:      strings.TrimSpace(m.userInput.Value()),
 		}
 		if err := qse.SetPassword(m.passInput.Value()); err != nil {
-			return ErrorMsg(fmt.Sprintf("encrypt password: %v", err))
+			return ErrorMsg{Context: "queuesyncenv", Message: fmt.Sprintf("encrypt password: %v", err)}
 		}
 
 		switch m.queueType {
@@ -434,7 +434,7 @@ func (m *AddQueueSyncEnvModel) save() tea.Cmd {
 
 		svc := m.findService()
 		if svc == nil {
-			return ErrorMsg(fmt.Sprintf("service %q not found in %s/%s", m.serviceName, m.profile.Name, m.envName))
+			return ErrorMsg{Context: "queuesyncenv", Message: fmt.Sprintf("service %q not found in %s/%s", m.serviceName, m.profile.Name, m.envName)}
 		}
 
 		if m.editMode {
@@ -452,7 +452,7 @@ func (m *AddQueueSyncEnvModel) save() tea.Cmd {
 
 		m.profile.UpdatedAt = time.Now()
 		if err := m.cfg.UpdateProfile(*m.profile); err != nil {
-			return ErrorMsg(err.Error())
+			return ErrorMsg{Context: "queuesyncenv", Message: err.Error()}
 		}
 
 		return queueSyncEnvSavedMsg{

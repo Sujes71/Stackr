@@ -1056,7 +1056,7 @@ func (m *AddServiceModel) saveLocalProcess(name, command, workDir string) tea.Cm
 		}
 		m.profile.UpdatedAt = time.Now()
 		if err := m.cfg.UpdateProfile(*m.profile); err != nil {
-			return ErrorMsg(err.Error())
+			return ErrorMsg{Context: "add_service", Message: err.Error()}
 		}
 		return svcSavedMsg{}
 	}
@@ -1101,7 +1101,7 @@ func (m *AddServiceModel) saveService() tea.Cmd {
 		for _, env := range m.profile.Environments {
 			if env.Name == m.envName {
 				if err := checkPortConflicts(m.svc, env.Services); err != nil {
-					return ErrorMsg(err.Error())
+					return ErrorMsg{Context: "add_service", Message: err.Error()}
 				}
 				break
 			}
@@ -1117,11 +1117,11 @@ func (m *AddServiceModel) saveService() tea.Cmd {
 		}
 		m.profile.UpdatedAt = time.Now()
 		if err := m.cfg.UpdateProfile(*m.profile); err != nil {
-			return ErrorMsg(err.Error())
+			return ErrorMsg{Context: "add_service", Message: err.Error()}
 		}
 		// Regenerate compose
 		if _, err := config.GenerateCompose(*m.profile, m.envName); err != nil {
-			return ErrorMsg("compose gen: " + err.Error())
+			return ErrorMsg{Context: "add_service", Message: "compose gen: " + err.Error()}
 		}
 		return svcSavedMsg{}
 	}

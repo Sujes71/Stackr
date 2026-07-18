@@ -190,7 +190,7 @@ func (m *NewProfileModel) saveProfile() tea.Cmd {
 			ActiveEnv:    m.envs[0],
 		}
 		if err := m.cfg.AddProfile(profile); err != nil {
-			return ErrorMsg(err.Error())
+			return ErrorMsg{Context: "new_profile", Message: err.Error()}
 		}
 		return ProfileSavedMsg{Config: m.cfg}
 	}

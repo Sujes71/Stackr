@@ -17,6 +17,7 @@ const (
 	NavDBOps
 	NavQueueOps
 	NavMockOps
+	NavErrors
 )
 
 // NavigateTo is a tea.Msg that tells the root App to switch screens.
@@ -49,8 +50,12 @@ type mockOpsDoneMsg struct {
 	err    error
 }
 
-// ErrorMsg carries an error string to surface in the footer.
-type ErrorMsg string
+// ErrorMsg carries a structured error to surface in the footer and register
+// in the ErrorRegistry. Context tags the source (e.g. "add_syncenv").
+type ErrorMsg struct {
+	Context string
+	Message string
+}
 
 // ── Discovery Messages ──
 

@@ -383,7 +383,7 @@ func (m *AddSyncEnvModel) save() tea.Cmd {
 			Database: strings.TrimSpace(m.dbInput.Value()),
 		}
 		if err := syncEnv.SetPassword(m.passInput.Value()); err != nil {
-			return ErrorMsg(fmt.Sprintf("encrypt password: %v", err))
+			return ErrorMsg{Context: "add_syncenv", Message: fmt.Sprintf("encrypt password: %v", err)}
 		}
 		if m.dbType == "mongo" {
 			syncEnv.AuthDB = strings.TrimSpace(m.authDBInput.Value())
@@ -394,7 +394,7 @@ func (m *AddSyncEnvModel) save() tea.Cmd {
 
 		svc := m.findService()
 		if svc == nil {
-			return ErrorMsg(fmt.Sprintf("service %q not found in %s/%s", m.serviceName, m.profile.Name, m.envName))
+			return ErrorMsg{Context: "add_syncenv", Message: fmt.Sprintf("service %q not found in %s/%s", m.serviceName, m.profile.Name, m.envName)}
 		}
 
 		if m.editMode {
@@ -412,7 +412,7 @@ func (m *AddSyncEnvModel) save() tea.Cmd {
 
 		m.profile.UpdatedAt = time.Now()
 		if err := m.cfg.UpdateProfile(*m.profile); err != nil {
-			return ErrorMsg(err.Error())
+			return ErrorMsg{Context: "add_syncenv", Message: err.Error()}
 		}
 
 		return wizardSavedMsg{

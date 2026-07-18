@@ -316,7 +316,7 @@ func (m *ProfileViewModel) executeDockerAction(action string) tea.Cmd {
 }
 
 var profileKeys = struct {
-	back, up, down, enter, start, stop, addSvc, svcDelete, dbOps, queueOps, mockOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort, viewConfig, stats, pull, shell, tab key.Binding
+	back, up, down, enter, start, stop, addSvc, svcDelete, dbOps, queueOps, mockOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort, viewConfig, stats, pull, shell, tab, errors key.Binding
 }{
 	back:           key.NewBinding(key.WithKeys("esc")),
 	up:             key.NewBinding(key.WithKeys("up")),
@@ -341,6 +341,7 @@ var profileKeys = struct {
 	pull:           key.NewBinding(key.WithKeys("p")),
 	shell:          key.NewBinding(key.WithKeys("h")),
 	tab:            key.NewBinding(key.WithKeys("tab")),
+	errors:         key.NewBinding(key.WithKeys("E")),
 }
 
 func (m *ProfileViewModel) Init() tea.Cmd {
@@ -1709,6 +1710,14 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.refreshStatus()
 			})
 
+		case key.Matches(msg, profileKeys.errors):
+			m.persistActiveEnv()
+			m.deleteArmed = false
+			m.deleteEnvArmed = false
+			m.resetArmed = false
+			m.keyPending = ""
+			return m, func() tea.Msg { return NavigateTo{Screen: NavErrors} }
+
 		case key.Matches(msg, profileKeys.tab):
 			m.keyPending = ""
 			m.deleteArmed = false
@@ -2185,6 +2194,7 @@ func (m *ProfileViewModel) View() string {
 			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("← →", "envs"),
 			styles.HelpItem("tab", "command"),
+			styles.HelpItem("E", "errors"),
 		))
 	}
 

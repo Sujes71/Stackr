@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -21,6 +22,7 @@ const (
 	ScreenDBOps
 	ScreenQueueOps
 	ScreenMockOps
+	ScreenErrors
 )
 
 // App is the root Bubble Tea model.
@@ -39,8 +41,11 @@ type App struct {
 	addService  *views.AddServiceModel
 	dbOps       *views.DBOpsModel
 	queueOps    *views.QueueOpsModel
-	mockOps     *views.MockOpsModel
-	err         string
+	mockOps       *views.MockOpsModel
+	err           string
+	errorRegistry *views.ErrorRegistry
+	errFlash      string
+	errorView     *views.ErrorListModel
 }
 
 func New(cfg *config.Config) *App {
@@ -50,6 +55,7 @@ func New(cfg *config.Config) *App {
 		screen:          ScreenHome,
 		home:            home,
 		profileNavState: make(map[string]views.ProfileNavState),
+		errorRegistry:   views.NewErrorRegistry(),
 	}
 }
 
@@ -91,11 +97,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.home.Init()
 
 	case views.ErrorMsg:
-		a.err = string(msg)
-		return a, nil
+		a.errorRegistry.Add(msg.Context, msg.Message)
+		a.errFlash = msg.Message
+		return a, views.ClearActionAfter(5 * time.Second)
 
 	case views.ClearActionMsg:
 		a.err = ""
+		a.errFlash = ""
 
 	case views.SpinnerTickMsg:
 		// Route spinner to active screen AND to non-active models that are busy
@@ -129,6 +137,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 	a.err = ""
+	a.errFlash = ""
 	a.captureProfileNavState(nav)
 	if a.screen == ScreenHome {
 		a.homeCursor = a.home.Cursor()
@@ -217,6 +226,11 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+	case views.NavErrors:
+		a.screen = ScreenErrors
+		a.errorView = views.NewErrorList(a.errorRegistry.All())
+		a.errorView.SetSize(a.width, a.height)
+		return a, a.errorView.Init()
 	}
 	return a, nil
 }
@@ -266,6 +280,12 @@ func (a *App) updateActive(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, c := a.mockOps.Update(msg)
 		a.mockOps = m.(*views.MockOpsModel)
 		cmd = c
+	case ScreenErrors:
+		if a.errorView != nil {
+			m, c := a.errorView.Update(msg)
+			a.errorView = m.(*views.ErrorListModel)
+			cmd = c
+		}
 	}
 	return a, cmd
 }
@@ -324,6 +344,8 @@ func (a *App) breadcrumb() string {
 		if a.mockOps != nil {
 			return "profiles / " + a.mockOps.ProfileName() + " / " + a.mockOps.EnvName() + " / " + a.mockOps.ServiceName() + " / MockServer Ops"
 		}
+	case ScreenErrors:
+		return "errors"
 	}
 	return ""
 }
@@ -344,6 +366,10 @@ func (a *App) renderBody() string {
 		return a.queueOps.View()
 	case ScreenMockOps:
 		return a.mockOps.View()
+	case ScreenErrors:
+		if a.errorView != nil {
+			return a.errorView.View()
+		}
 	}
 	return ""
 }
@@ -351,9 +377,15 @@ func (a *App) renderBody() string {
 func (a *App) renderFooter() string {
 	sep := styles.Separator(a.width)
 	quitLine := styles.StyleHelp.Render("ctrl+c quit")
-	if a.err != "" {
-		errLine := styles.StyleError.Render("  ✗ " + a.err)
-		return lipgloss.JoinVertical(lipgloss.Left, sep, errLine, quitLine)
+
+	var lines []string
+	if a.errFlash != "" {
+		lines = append(lines, styles.StyleError.Render("  ✗ "+a.errFlash))
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, sep, quitLine)
+	if a.err != "" {
+		lines = append(lines, styles.StyleError.Render("  ✗ "+a.err))
+	}
+	lines = append(lines, quitLine)
+	lines = append([]string{sep}, lines...)
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
