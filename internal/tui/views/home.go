@@ -33,7 +33,6 @@ type HomeModel struct {
 	importFiles       []string // available export files not yet imported
 	importCursor      int
 	importDeleteArmed bool
-	importErr         string
 	importing         bool
 
 	// ── Pending Ops / Spinner ──
@@ -99,12 +98,12 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.pendingOps, "import")
 		m.importing = false
 		if msg.err != "" {
-			m.importErr = styles.ErrorLine(msg.err)
-			return m, nil
+			return m, func() tea.Msg {
+				return ErrorMsg{Context: "import", Message: msg.err}
+			}
 		}
 		m.profiles = msg.profiles
 		m.showImport = false
-		m.importErr = ""
 		return m, nil
 
 	case ClearActionMsg:
@@ -135,7 +134,6 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				name := m.importFiles[m.importCursor]
 				path := filepath.Join(config.StackrDir(), "exports", name+".yaml")
 				m.importing = true
-				m.importErr = ""
 				m.pendingOps["import"] = "importing"
 				return m, tea.Batch(
 					func() tea.Msg {
@@ -169,8 +167,9 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				name := m.importFiles[m.importCursor]
 				path := filepath.Join(config.StackrDir(), "exports", name+".yaml")
 				if err := os.Remove(path); err != nil {
-					m.importErr = styles.ErrorLine("Failed to delete: " + err.Error())
-					return m, ClearActionAfter(3 * time.Second)
+					return m, func() tea.Msg {
+						return ErrorMsg{Context: "import", Message: "failed to delete: " + err.Error()}
+					}
 				}
 				m.importFiles = append(m.importFiles[:m.importCursor], m.importFiles[m.importCursor+1:]...)
 				if m.importCursor >= len(m.importFiles) && m.importCursor > 0 {
@@ -304,7 +303,6 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.deleteArmed = false
 			m.showImport = true
 			m.importCursor = 0
-			m.importErr = ""
 			return m, nil
 
 		default:
@@ -345,9 +343,6 @@ func (m *HomeModel) View() string {
 		b.WriteString("\n")
 		if m.importing {
 			b.WriteString(opsRenderSpinnerDot(m.spinnerFrame, "Importing") + "\n")
-		}
-		if m.importErr != "" {
-			b.WriteString(m.importErr + "\n")
 		}
 		return b.String()
 	}

@@ -22,13 +22,13 @@ const (
 )
 
 type NewProfileModel struct {
-	cfg           *config.Config
-	step          newProfileStep
-	name          textinput.Model
-	desc          textinput.Model
-	envs          []string // environment names being built
-	envInput      textinput.Model
-	err           string
+	cfg         *config.Config
+	step        newProfileStep
+	name        textinput.Model
+	desc        textinput.Model
+	envs        []string // environment names being built
+	envInput    textinput.Model
+	fieldErrors map[string]string // inline validation errors per field
 	confirmRemove bool // double-tap d protection
 	height        int  // terminal height, set via WindowSizeMsg
 }
@@ -48,12 +48,13 @@ func NewNewProfile(cfg *config.Config) *NewProfileModel {
 	envInput.CharLimit = 12
 
 	return &NewProfileModel{
-		cfg:      cfg,
-		step:     npStepName,
-		name:     name,
-		desc:     desc,
-		envInput: envInput,
-		envs:     []string{"local"}, // sensible default — always present
+		cfg:         cfg,
+		step:        npStepName,
+		name:        name,
+		desc:        desc,
+		envInput:    envInput,
+		envs:        []string{"local"}, // sensible default — always present
+		fieldErrors: make(map[string]string),
 	}
 }
 
@@ -123,7 +124,14 @@ func (m *NewProfileModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *NewProfileModel) advance() (tea.Model, tea.Cmd) {
-	m.err = ""
+	// Clear field error for current step
+	switch m.step {
+	case npStepName:
+		delete(m.fieldErrors, "name")
+	case npStepEnvs:
+		delete(m.fieldErrors, "env")
+	}
+
 	switch m.step {
 	case npStepName:
 		name := strings.TrimSpace(m.name.Value())
@@ -132,7 +140,7 @@ func (m *NewProfileModel) advance() (tea.Model, tea.Cmd) {
 		}
 		for _, p := range m.cfg.Profiles {
 			if p.Name == name {
-				m.err = "a profile with that name already exists"
+				m.fieldErrors["name"] = "already exists"
 				return m, nil
 			}
 		}
@@ -153,20 +161,20 @@ func (m *NewProfileModel) advance() (tea.Model, tea.Cmd) {
 			// Text in input → add environment and stay
 			if !contains(m.envs, val) {
 				if len(m.envs) >= 5 {
-					m.err = "maximum 5 environments allowed"
+					m.fieldErrors["env"] = "max 5 environments"
 					m.envInput.Reset()
 					return m, nil
 				}
 				// AUDIT-004: reject names with characters invalid for compose
 				// identifiers, matching the validation profile_view enforces.
 				if config.SanitizeComposeName(val) != val {
-					m.err = "environment name may only contain letters, numbers, underscores, and hyphens"
+					m.fieldErrors["env"] = "letters, numbers, _ and - only"
 					return m, nil
 				}
 				m.envs = append(m.envs, val)
 			}
 			m.envInput.Reset()
-			m.err = ""
+			delete(m.fieldErrors, "env")
 			return m, nil
 		}
 		// Empty input → proceed to save
@@ -201,10 +209,14 @@ func (m *NewProfileModel) updateInputs(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.step {
 	case npStepName:
 		m.name, cmd = m.name.Update(msg)
+		// Clear error when user types
+		delete(m.fieldErrors, "name")
 	case npStepDesc:
 		m.desc, cmd = m.desc.Update(msg)
 	case npStepEnvs:
 		m.envInput, cmd = m.envInput.Update(msg)
+		// Clear error when user types
+		delete(m.fieldErrors, "env")
 	}
 	return m, cmd
 }
@@ -218,7 +230,11 @@ func (m *NewProfileModel) View() string {
 	switch m.step {
 	case npStepName:
 		focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
-		b.WriteString("  " + focusStyle.Render("Profile name: ") + m.name.View() + "\n")
+		b.WriteString("  " + focusStyle.Render("Profile name: ") + m.name.View())
+		if errMsg, ok := m.fieldErrors["name"]; ok {
+			b.WriteString("  " + styles.StyleError.Render("⚠ "+errMsg))
+		}
+		b.WriteString("\n")
 		b.WriteString(styles.StyleSubtitle.Render("  Will be used as folder name: ~/.stackr/<name>/"))
 
 	case npStepDesc:
@@ -258,6 +274,9 @@ func (m *NewProfileModel) View() string {
 		b.WriteString(styles.StyleSubtitle.Render("  Add more?"))
 		b.WriteString("\n")
 		b.WriteString("  " + m.envInput.View())
+		if errMsg, ok := m.fieldErrors["env"]; ok {
+			b.WriteString("  " + styles.StyleError.Render("⚠ "+errMsg))
+		}
 		b.WriteString("\n")
 		b.WriteString(styles.StyleSubtitle.Render("  Type a name and press ↵ to add it  |  ↵ empty to continue"))
 		if m.canRemoveEnv() {
@@ -270,10 +289,6 @@ func (m *NewProfileModel) View() string {
 		}
 	}
 
-	if m.err != "" {
-		b.WriteString("\n")
-		b.WriteString(styles.ErrorLine(m.err))
-	}
 	b.WriteString("\n\n")
 	if m.step == npStepEnvs {
 		// Line 1: contextual actions (affect env fields)

@@ -90,11 +90,11 @@ type AddServiceModel struct {
 	runCmdWorkDir textinput.Model
 	runCmdFocus   int // 0=name, 1=command, 2=workdir
 
-	// error shown inline by the step view
-	errInline    bool
-	err          string
+	// inline validation errors per field
+	fieldErrors map[string]string
+
 	height       int // terminal height (chrome already subtracted), set via SetSize
-	width        int // terminal width, set via SetSize
+	width        int // terminal width, set via WindowSizeMsg
 	spinnerFrame int // animated spinner frame for search/tag-fetch (AUDIT-027)
 }
 
@@ -178,6 +178,7 @@ func NewAddService(cfg *config.Config, p *config.Profile, envName string) *AddSe
 		runCmdCmd:        rc,
 		runCmdWorkDir:    rw,
 		protectedEnvKeys: make(map[string]bool),
+		fieldErrors:      make(map[string]string),
 	}
 }
 
@@ -187,7 +188,6 @@ func (m *AddServiceModel) ProfileName() string { return m.profile.Name }
 // to the given step. Call this when navigating BACK to a step so
 // keyboard input goes to the right field.
 func (m *AddServiceModel) resetServiceData() {
-	m.err = ""
 	m.ports = nil
 	m.envVars = nil
 	m.volumes = nil
@@ -298,7 +298,6 @@ func (m *AddServiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ClearActionMsg:
-		m.err = ""
 		return m, nil
 
 	case hubSearchResultMsg:
@@ -321,6 +320,20 @@ func (m *AddServiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		// Auto-clear field errors when user types
+		switch m.step {
+		case svcStepName:
+			delete(m.fieldErrors, "name")
+		case svcStepPorts:
+			delete(m.fieldErrors, "port")
+		case svcStepEnvVars:
+			delete(m.fieldErrors, "env")
+		case svcStepVolumes:
+			delete(m.fieldErrors, "volume")
+		case svcStepRunCommand:
+			delete(m.fieldErrors, "run")
+		}
+
 		if key.Matches(msg, addSvcBack) {
 			m.portsDeleteArmed = false
 			m.envVarsDeleteArmed = false
@@ -355,11 +368,9 @@ func (m *AddServiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.sourcePath = ""
 					return m, nil
 				}
-				m.err = ""
 				m.step--
 				return m, m.refocusInputs(m.step)
 			default:
-				m.err = ""
 				m.step--
 				return m, m.refocusInputs(m.step)
 			}
@@ -387,12 +398,10 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.nameFocus = 1
 					m.imageInput.Blur()
 					m.nameInput.Focus()
-					m.err = ""
 				} else {
 					m.nameFocus = 0
 					m.nameInput.Blur()
 					m.imageInput.Focus()
-					m.err = ""
 				}
 				return m, textinput.Blink
 			case key.Matches(msg, addSvcNext):
@@ -414,7 +423,6 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.nameFocus = 1
 					m.imageInput.Blur()
 					m.nameInput.Focus()
-					m.err = ""
 					return m, textinput.Blink
 				}
 				// Enter on service name: advance to ports
@@ -426,14 +434,13 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					if env.Name == m.envName {
 						for _, svc := range env.Services {
 							if svc.Name == m.svc.Name {
-								m.err = "service name already exists"
+								m.fieldErrors["name"] = "already exists"
 								return m, nil
 							}
 						}
 						break
 					}
 				}
-				m.err = ""
 				m.step = svcStepPorts
 				m.nameInput.Blur()
 				m.portHost.Focus()
@@ -450,14 +457,13 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					if env.Name == m.envName {
 						for _, svc := range env.Services {
 							if svc.Name == m.svc.Name {
-								m.err = "service name already exists"
+								m.fieldErrors["name"] = "already exists"
 								return m, nil
 							}
 						}
 						break
 					}
 				}
-				m.err = ""
 				m.step = svcStepPorts
 				m.nameInput.Blur()
 				m.portHost.Focus()
@@ -725,7 +731,6 @@ func (m *AddServiceModel) handlePorts(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.portsDeleteArmed = false
 		m.resetArmed = false
 		m.svc.Ports = m.ports
-		m.err = ""
 		m.step = svcStepEnvVars
 		m.envKey.Focus()
 		return m, textinput.Blink
@@ -826,7 +831,6 @@ func (m *AddServiceModel) handleEnvVars(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.envVarsDeleteArmed = false
 		m.resetArmed = false
 		m.svc.EnvVars = m.envVars
-		m.err = ""
 		m.step = svcStepVolumes
 		m.volSource.Focus()
 		return m, textinput.Blink
@@ -912,13 +916,13 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if src != "" {
 			// Validate: bind mount needs a path-like source
 			if !m.volNamed && !strings.HasPrefix(src, "./") && !strings.HasPrefix(src, "/") && !strings.HasPrefix(src, "~") {
-				m.err = "bind mount source should start with ./ or / — press tab to switch to named volume"
+				m.fieldErrors["volume"] = "source must start with ./ or /"
 				return m, nil
 			}
 			// Resolve target automatically from image
 			tgt := m.resolveVolumeTarget()
 			if tgt == "" {
-				m.err = "unknown volume target for this image — remove the volume or switch to a known image"
+				m.fieldErrors["volume"] = "unknown volume target for this image"
 				return m, nil
 			}
 			// If target already exists, UPDATE the source instead of adding
@@ -938,7 +942,6 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					Named:  m.volNamed,
 				})
 			}
-			m.err = ""
 			m.resetArmed = false
 			m.volSource.SetValue("")
 			m.volSource.Focus()
@@ -947,7 +950,6 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Empty source → advance to next step
 		m.resetArmed = false
 		m.svc.Volumes = m.volumes
-		m.err = ""
 		m.step = svcStepReview
 	case key.Matches(msg, addSvcReset):
 		if !m.volNamed {
@@ -1017,20 +1019,19 @@ func (m *AddServiceModel) handleRunCommand(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 			if env.Name == m.envName {
 				for _, svc := range env.Services {
 					if svc.Name == name || svc.ComposeName() == name {
-						m.err = "name already exists"
+						m.fieldErrors["name"] = "already exists"
 						return m, nil
 					}
 				}
 				for _, lp := range env.LocalProcesses {
 					if lp.Name == name {
-						m.err = "name already exists"
+						m.fieldErrors["name"] = "already exists"
 						return m, nil
 					}
 				}
 				break
 			}
 		}
-		m.err = ""
 		return m, m.saveLocalProcess(name, cmdStr, strings.TrimSpace(m.runCmdWorkDir.Value()))
 
 	case key.Matches(msg, addSvcTab):
@@ -1199,7 +1200,6 @@ func (m *AddServiceModel) updateActiveInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 // ── View ─────────────────────────────────────────────────────────────────────
 
 func (m *AddServiceModel) View() string {
-	m.errInline = false
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(styles.StyleTitle.Render(fmt.Sprintf(" Add Service — %s / %s ", m.profile.Name, m.envName)))
@@ -1228,9 +1228,6 @@ func (m *AddServiceModel) View() string {
 		b.WriteString(m.viewReview())
 	}
 
-	if m.err != "" && !m.errInline {
-		b.WriteString("\n" + styles.ErrorLine(m.err) + "\n")
-	}
 	return b.String()
 }
 
@@ -1422,22 +1419,30 @@ func (m *AddServiceModel) viewName() string {
 			b.WriteString("  " + m.imageInput.View() + "\n")
 			b.WriteString("  Docker image to pull (e.g. postgres:16, mongo:4.2)\n")
 			b.WriteString("\n  " + styles.BackHelp(styles.HelpItem("↑ ↓", "next field"), styles.HelpItem("↵", "next")))
-		} else {
-			// Step 2: confirm/enter service name
-			b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
-			focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
-			b.WriteString("  " + focusStyle.Render("Service name: ") + m.nameInput.View() + "\n")
-			b.WriteString("  Used as the compose service key and container name suffix\n")
-			b.WriteString("\n  " + styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "next")))
-		}
 	} else {
+		// Step 2: confirm/enter service name
 		b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
 		focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
-		b.WriteString("  " + focusStyle.Render("Service name: ") + m.nameInput.View() + "\n")
+		b.WriteString("  " + focusStyle.Render("Service name: ") + m.nameInput.View())
+		if errMsg, ok := m.fieldErrors["name"]; ok {
+			b.WriteString("  " + styles.StyleError.Render("⚠ "+errMsg))
+		}
+		b.WriteString("\n")
 		b.WriteString("  Used as the compose service key and container name suffix\n")
-		b.WriteString("\n" + styles.BackHelp(styles.HelpItem("↵", "next")))
+		b.WriteString("\n  " + styles.BackHelp(styles.HelpItem("↑ ↓", "switch field"), styles.HelpItem("↵", "next")))
 	}
-	return b.String()
+} else {
+	b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	b.WriteString("  " + focusStyle.Render("Service name: ") + m.nameInput.View())
+	if errMsg, ok := m.fieldErrors["name"]; ok {
+		b.WriteString("  " + styles.StyleError.Render("⚠ "+errMsg))
+	}
+	b.WriteString("\n")
+	b.WriteString("  Used as the compose service key and container name suffix\n")
+	b.WriteString("\n" + styles.BackHelp(styles.HelpItem("↵", "next")))
+}
+return b.String()
 }
 
 func (m *AddServiceModel) viewPorts() string {
@@ -1454,7 +1459,11 @@ func (m *AddServiceModel) viewPorts() string {
 		contLabel = focusStyle
 	}
 
-	b.WriteString("  " + hostLabel.Render("Host port:      ") + m.portHost.View() + "\n")
+	b.WriteString("  " + hostLabel.Render("Host port:      ") + m.portHost.View())
+	if errMsg, ok := m.fieldErrors["port"]; ok {
+		b.WriteString("  " + styles.StyleError.Render("⚠ "+errMsg))
+	}
+	b.WriteString("\n")
 	b.WriteString("  " + contLabel.Render("Container port: ") + m.portContainer.View() + "\n\n")
 	win := opsWindow(len(m.ports), max(0, len(m.ports)-1), 1, m.height, addSvcOverheadFormList)
 	if win.hasAbove {
@@ -1561,7 +1570,11 @@ func (m *AddServiceModel) viewEnvVars() string {
 		valLabel = focusStyle
 	}
 
-	b.WriteString("  " + keyLabel.Render("Key:  ") + m.envKey.View() + "\n")
+	b.WriteString("  " + keyLabel.Render("Key:  ") + m.envKey.View())
+	if errMsg, ok := m.fieldErrors["env"]; ok {
+		b.WriteString("  " + styles.StyleError.Render("⚠ "+errMsg))
+	}
+	b.WriteString("\n")
 	b.WriteString("  " + valLabel.Render("Value:") + m.envVal.View() + "\n\n")
 	win := opsWindow(len(m.envVars), max(0, len(m.envVars)-1), 1, m.height, addSvcOverheadFormList)
 	if win.hasAbove {
@@ -1617,7 +1630,11 @@ func (m *AddServiceModel) viewVolumes() string {
 		label = normalStyle
 	}
 
-	b.WriteString("  " + label.Render("Source: ") + m.volSource.View() + "  " + styles.StyleCode.Render(namedLabel) + "\n\n")
+	b.WriteString("  " + label.Render("Source: ") + m.volSource.View())
+	if errMsg, ok := m.fieldErrors["volume"]; ok {
+		b.WriteString("  " + styles.StyleError.Render("⚠ "+errMsg))
+	}
+	b.WriteString("  " + styles.StyleCode.Render(namedLabel) + "\n\n")
 	win := opsWindow(len(m.volumes), max(0, len(m.volumes)-1), 1, m.height, addSvcOverheadFormList)
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
@@ -1638,10 +1655,6 @@ func (m *AddServiceModel) viewVolumes() string {
 	if m.resetArmed {
 		b.WriteString(styles.StyleError.Render("  Press ctrl+r again to reset to defaults"))
 		b.WriteString("\n")
-	}
-	if m.err != "" {
-		b.WriteString(styles.ErrorLine(m.err) + "\n")
-		m.errInline = true
 	}
 	b.WriteString("\n")
 	helpItems := []styles.HelpItemResult{
