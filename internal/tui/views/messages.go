@@ -116,6 +116,14 @@ type svcRmDoneMsg struct {
 	svcName string
 }
 
+// ── Add Service validation Messages ──
+
+// portConflictMsg carries a port conflict error back to AddServiceModel
+// so it renders inside the review panel, not in the global footer.
+type portConflictMsg struct {
+	err string
+}
+
 // ── Spinner Messages ──
 
 type SpinnerTickMsg struct{}

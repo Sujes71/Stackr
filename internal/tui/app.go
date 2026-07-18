@@ -378,15 +378,9 @@ func (a *App) renderBody() string {
 func (a *App) renderFooter() string {
 	sep := styles.Separator(a.width)
 	quitLine := styles.StyleHelp.Render("ctrl+c quit")
-
-	var lines []string
-	if a.errFlash != "" {
-		lines = append(lines, styles.StyleError.Render("  ✗ "+a.errFlash))
-	}
 	if a.err != "" {
-		lines = append(lines, styles.StyleError.Render("  ✗ "+a.err))
+		errLine := styles.StyleError.Render("  ✗ " + a.err)
+		return lipgloss.JoinVertical(lipgloss.Left, sep, errLine, quitLine)
 	}
-	lines = append(lines, quitLine)
-	lines = append([]string{sep}, lines...)
-	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return lipgloss.JoinVertical(lipgloss.Left, sep, quitLine)
 }

@@ -319,6 +319,10 @@ func (m *AddServiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name, EnvName: m.envName, ServiceName: m.svc.Name}
 		}
 
+	case portConflictMsg:
+		m.fieldErrors["port"] = msg.err
+		return m, nil
+
 	case tea.KeyMsg:
 		// Auto-clear field errors when user types
 		switch m.step {
@@ -338,6 +342,8 @@ func (m *AddServiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.portsDeleteArmed = false
 			m.envVarsDeleteArmed = false
 			m.resetArmed = false
+			// Clear port error when navigating back from review
+			delete(m.fieldErrors, "port")
 			if m.step == svcStepSource {
 				return m, func() tea.Msg {
 					return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name, EnvName: m.envName}
@@ -1102,7 +1108,7 @@ func (m *AddServiceModel) saveService() tea.Cmd {
 		for _, env := range m.profile.Environments {
 			if env.Name == m.envName {
 				if err := checkPortConflicts(m.svc, env.Services); err != nil {
-					return ErrorMsg{Context: "add_service", Message: err.Error()}
+					return portConflictMsg{err: err.Error()}
 				}
 				break
 			}
@@ -1721,6 +1727,12 @@ func (m *AddServiceModel) viewReview() string {
 	b.WriteString("\n\n")
 	button := styles.StyleButton.Render(" Save service ")
 	b.WriteString(lipgloss.PlaceHorizontal(panelW, lipgloss.Center, button) + "\n")
+
+	// Show port conflict error inline inside the review panel
+	if errMsg, ok := m.fieldErrors["port"]; ok {
+		b.WriteString("\n")
+		b.WriteString(styles.StyleError.Render("  ✗ "+errMsg))
+	}
 
 	b.WriteString("\n")
 	b.WriteString(styles.BackHelp(styles.HelpItem("↵", "save")))
