@@ -54,7 +54,7 @@ func NewHome(cfg *config.Config) *HomeModel {
 }
 
 var homeKeys = struct {
-	up, down, enter, new, delete, export, import_, errors key.Binding
+	up, down, enter, new, delete, export, import_ key.Binding
 }{
 	up:      key.NewBinding(key.WithKeys("up")),
 	down:    key.NewBinding(key.WithKeys("down")),
@@ -63,7 +63,6 @@ var homeKeys = struct {
 	delete:  key.NewBinding(key.WithKeys("d")),
 	export:  key.NewBinding(key.WithKeys("x")),
 	import_: key.NewBinding(key.WithKeys("i")),
-	errors:  key.NewBinding(key.WithKeys("E")),
 }
 
 func (m *HomeModel) Init() tea.Cmd { return nil }
@@ -306,12 +305,6 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.importErr = ""
 			return m, nil
 
-		case key.Matches(msg, homeKeys.errors):
-			m.deleteArmed = false
-			return m, func() tea.Msg {
-				return NavigateTo{Screen: NavErrors}
-			}
-
 		default:
 			m.deleteArmed = false
 			m.deleting = ""
@@ -422,7 +415,6 @@ func (m *HomeModel) View() string {
 	b.WriteString("  " + styles.InlineHelp(
 		styles.HelpItem("↑ ↓", "navigate"),
 		styles.HelpItem("↵", "open"),
-		styles.HelpItem("E", "errors"),
 	))
 
 	return b.String()
