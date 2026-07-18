@@ -21,6 +21,7 @@ import (
 
 type ProfileViewModel struct {
 	cfg            *config.Config
+	errorRegistry  *ErrorRegistry
 	profile        *config.Profile
 	activeEnv      int
 	cursor         int
@@ -105,7 +106,7 @@ type ProfileNavState struct {
 	Environments  map[string]ProfileEnvState
 }
 
-func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
+func NewProfileView(cfg *config.Config, p *config.Profile, errorRegistry *ErrorRegistry) *ProfileViewModel {
 	ti := textinput.New()
 	ti.Placeholder = "env name"
 	ti.CharLimit = 5
@@ -118,6 +119,7 @@ func NewProfileView(cfg *config.Config, p *config.Profile) *ProfileViewModel {
 
 	m := &ProfileViewModel{
 		cfg:                    cfg,
+		errorRegistry:          errorRegistry,
 		profile:                p,
 		envState:               make(map[string]ProfileEnvState),
 		envInput:               ti,
@@ -836,8 +838,8 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Tab while showing → keep showing (no toggle, no timer)
 				return m, nil
 			}
-			// E → navigate to errors view
-			if msg.String() == "E" || msg.String() == "e" {
+			// E → navigate to errors view (only if there are errors)
+			if (msg.String() == "E" || msg.String() == "e") && m.errorRegistry != nil && m.errorRegistry.Len() > 0 {
 				m.showingShortcuts = false
 				m.persistActiveEnv()
 				m.deleteArmed = false
@@ -2698,12 +2700,16 @@ func (m *ProfileViewModel) renderShortcuts() string {
 	var sections []string
 
 	// Navigation — always present
-	nav := section("Navigation", []pair{
+	navItems := []pair{
 		{"← →", "switch env"},
 		{"↑ ↓", "navigate"},
 		{"esc", "back"},
-		{"E", "errors"},
-	})
+	}
+	// Only show errors option if there are errors
+	if m.errorRegistry != nil && m.errorRegistry.Len() > 0 {
+		navItems = append(navItems, pair{"E", "errors"})
+	}
+	nav := section("Navigation", navItems)
 	sections = append(sections, nav, "")
 
 	if m.isPortForwardEnv() {

@@ -17,15 +17,16 @@ import (
 )
 
 type HomeModel struct {
-	cfg          *config.Config
-	cursor       int
-	profiles     []config.Profile
-	deleteArmed  bool
-	deleting     string // non-empty → typed confirmation for deletion of this profile
-	confirmInput textinput.Model
-	lastResult   string
-	height       int // terminal height, set via WindowSizeMsg
-	width        int // terminal width, set via WindowSizeMsg
+	cfg           *config.Config
+	errorRegistry *ErrorRegistry
+	cursor        int
+	profiles      []config.Profile
+	deleteArmed   bool
+	deleting      string // non-empty → typed confirmation for deletion of this profile
+	confirmInput  textinput.Model
+	lastResult    string
+	height        int // terminal height, set via WindowSizeMsg
+	width         int // terminal width, set via WindowSizeMsg
 
 	// ── Export / Import ──
 	showImport        bool
@@ -40,16 +41,17 @@ type HomeModel struct {
 	spinnerFrame int
 }
 
-func NewHome(cfg *config.Config) *HomeModel {
+func NewHome(cfg *config.Config, errorRegistry *ErrorRegistry) *HomeModel {
 	ti := textinput.New()
 	ti.Prompt = ""
 	ti.CharLimit = 100
 
 	return &HomeModel{
-		cfg:          cfg,
-		profiles:     cfg.Profiles,
-		confirmInput: ti,
-		pendingOps:   make(map[string]string),
+		cfg:           cfg,
+		errorRegistry: errorRegistry,
+		profiles:      cfg.Profiles,
+		confirmInput:  ti,
+		pendingOps:    make(map[string]string),
 	}
 }
 

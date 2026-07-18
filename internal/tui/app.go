@@ -49,13 +49,14 @@ type App struct {
 }
 
 func New(cfg *config.Config) *App {
-	home := views.NewHome(cfg)
+	errorRegistry := views.NewErrorRegistry()
+	home := views.NewHome(cfg, errorRegistry)
 	return &App{
 		cfg:             cfg,
 		screen:          ScreenHome,
 		home:            home,
 		profileNavState: make(map[string]views.ProfileNavState),
-		errorRegistry:   views.NewErrorRegistry(),
+		errorRegistry:   errorRegistry,
 	}
 }
 
@@ -91,7 +92,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case views.ProfileSavedMsg:
 		a.cfg = msg.Config
 		a.homeCursor = a.home.Cursor()
-		a.home = views.NewHome(a.cfg)
+		a.home = views.NewHome(a.cfg, a.errorRegistry)
 		a.home.SetCursor(a.homeCursor)
 		a.screen = ScreenHome
 		return a, a.home.Init()
@@ -146,7 +147,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 
 	case views.NavHome:
 		a.screen = ScreenHome
-		a.home = views.NewHome(a.cfg)
+		a.home = views.NewHome(a.cfg, a.errorRegistry)
 		a.home.SetSize(a.width, a.height)
 		a.home.SetCursor(a.homeCursor)
 		return a, a.home.Init()
@@ -163,7 +164,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 			if a.profileView == nil || a.profileView.ProfileName() != nav.ProfileName {
 				// Different profile or first time — create new (leaving state
 				// already captured by captureProfileNavState at top of handleNav)
-				a.profileView = views.NewProfileView(a.cfg, p)
+				a.profileView = views.NewProfileView(a.cfg, p, a.errorRegistry)
 				if state, ok := a.profileNavState[nav.ProfileName]; ok {
 					a.profileView.RestoreNavState(state)
 				}
