@@ -130,7 +130,7 @@ func NewMockOps(cfg *config.Config, p *config.Profile, envName, serviceName stri
 	m.paramTextarea.ShowLineNumbers = false
 	m.paramTextarea.Placeholder = "{\n  \"key\": \"value\"\n}"
 	m.paramTextarea.CharLimit = 0
-	// Resolve service index for mutations
+		// Resolve service index for mutations
 	for i, svc := range m.currentEnv().Services {
 		if svc.Name == serviceName {
 			m.serviceIdx = i
@@ -315,6 +315,24 @@ func (m *MockOpsModel) mockAPICall(endpoint, httpMethod string, body interface{}
 	}
 }
 
+// waitForMockServer polls the MockServer health endpoint with retries.
+// Returns nil when MockServer is ready, or an error after all retries exhausted.
+func waitForMockServer(port string) error {
+	healthURL := fmt.Sprintf("http://localhost:%s/mockserver/status", port)
+	client := &http.Client{Timeout: 3 * time.Second}
+	for attempt := 0; attempt < 10; attempt++ {
+		resp, err := client.Get(healthURL)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode < 500 {
+				return nil // ready
+			}
+		}
+		time.Sleep(time.Duration(min(500*(attempt+1), 3000)) * time.Millisecond) // 500ms, 1s, ..., max 3s
+	}
+	return fmt.Errorf("MockServer did not become ready after 10 attempts")
+}
+
 // ── Init ───────────────────────────────────────────────────────────────────────
 
 func (m *MockOpsModel) Init() tea.Cmd {
@@ -329,7 +347,9 @@ func (m *MockOpsModel) buildActionsList() []actionItem {
 	return []actionItem{
 		// ── Expectations group ──
 		{label: "Create expectation", group: "Expectations", enabled: true,
-			execute: nil}, // params: method, path, status_code, content_type, body
+			execute: nil},
+		{label: "Import expectation", group: "Expectations", enabled: true,
+			execute: nil},
 		{label: "List active expectations", group: "Expectations", enabled: true,
 			execute: m.mockAPICall("/mockserver/retrieve", "PUT", nil, map[string]string{"type": "ACTIVE_EXPECTATIONS"})},
 		{label: "Reset all", group: "Expectations", enabled: true,
@@ -337,7 +357,7 @@ func (m *MockOpsModel) buildActionsList() []actionItem {
 
 		// ── Verification group ──
 		{label: "Verify request", group: "Verification", enabled: true,
-			execute: nil}, // params: method, path, at_least
+			execute: nil},
 		{label: "Retrieve requests", group: "Verification", enabled: true,
 			execute: m.mockAPICall("/mockserver/retrieve", "PUT", nil, map[string]string{"type": "REQUESTS"})},
 	}
@@ -349,6 +369,8 @@ func (m *MockOpsModel) actionParams(act actionItem) []string {
 	switch act.label {
 	case "Create expectation":
 		return []string{"method", "path", "query_params", "status_code", "content_type", "body"}
+	case "Import expectation":
+		return []string{"body"} // raw MockServer JSON — textarea only
 	case "Verify request":
 		return []string{"method", "path", "at_least"}
 	}
@@ -415,6 +437,49 @@ func (m *MockOpsModel) execParamAction(act actionItem) tea.Cmd {
 		}
 
 		return m.mockAPICall("/mockserver/expectation", "PUT", body, nil)
+
+	case "Import expectation":
+		raw := strings.TrimSpace(m.paramValues["body"])
+		// Validate JSON and check for httpRequest key
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+			return func() tea.Msg {
+				return mockOpsDoneMsg{err: fmt.Errorf("Invalid JSON: %s", err)}
+			}
+		}
+		if _, ok := parsed["httpRequest"]; !ok {
+			return func() tea.Msg {
+				return mockOpsDoneMsg{err: fmt.Errorf("Missing httpRequest field.\nExpected a MockServer expectation JSON with httpRequest and httpResponse keys.")}
+			}
+		}
+		// Send raw JSON directly to MockServer
+		return func() tea.Msg {
+			port := m.mockHostPort()
+			apiURL := fmt.Sprintf("http://localhost:%s/mockserver/expectation", port)
+			req, err := http.NewRequest("PUT", apiURL, strings.NewReader(raw))
+			if err != nil {
+				return mockOpsDoneMsg{err: fmt.Errorf("request failed: %w", err)}
+			}
+			req.Header.Set("Content-Type", "application/json")
+			client := &http.Client{Timeout: 10 * time.Second}
+			resp, err := client.Do(req)
+			if err != nil {
+				return mockOpsDoneMsg{err: fmt.Errorf("cannot reach MockServer at localhost:%s — is the service running?\n  %w", port, err)}
+			}
+			defer resp.Body.Close()
+			respData, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode >= 400 {
+				return mockOpsDoneMsg{err: fmt.Errorf("MockServer error (%d): %s", resp.StatusCode, strings.TrimSpace(string(respData)))}
+			}
+			if len(respData) > 0 {
+				trimmed := strings.TrimSpace(string(respData))
+				if trimmed == "{}" {
+					return mockOpsDoneMsg{result: "Expectation imported successfully."}
+				}
+				return mockOpsDoneMsg{result: prettyMockResult(respData)}
+			}
+			return mockOpsDoneMsg{result: "Expectation imported successfully."}
+		}
 
 	case "Verify request":
 		atLeast := 1
@@ -1567,8 +1632,7 @@ func (m *MockOpsModel) viewActions() string {
 	b.WriteString(styles.StyleTitle.Render(
 		fmt.Sprintf(" MockServer Ops — %s / %s / %s ", m.profile.Name, m.envName, m.serviceName)))
 	b.WriteString("\n\n")
-	b.WriteString(styles.StyleSubtitle.Render(
-		"  Target: local (HTTP API)  |  Type: mockserver"))
+	b.WriteString(styles.StyleSubtitle.Render("  Target: local (HTTP API)  |  Type: mockserver"))
 	b.WriteString("\n\n")
 
 	// Param prompting
