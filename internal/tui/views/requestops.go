@@ -1,0 +1,2211 @@
+package views
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/stackr/stackr/internal/config"
+	"github.com/stackr/stackr/internal/tui/styles"
+)
+
+// ── Internal screen enum ──────────────────────────────────────────────────────
+
+type requestOpsScreen int
+
+const (
+	reqScreenList requestOpsScreen = iota
+	reqScreenCreateForm
+	reqScreenEditForm
+	reqScreenVarPrompt
+	reqScreenResult
+	reqScreenAddEnv
+	reqScreenConfirmDelete
+)
+
+// ── Request list item types ────────────────────────────────────────────────────
+
+type requestListItemKind int
+
+const (
+	reqItemURL requestListItemKind = iota
+	reqItemRequest
+	reqItemAddURL
+	reqItemAddRequest
+)
+
+type requestListItem struct {
+	kind     requestListItemKind
+	label    string
+	sublabel string
+	urlIdx   int
+	reqIdx   int
+	enabled  bool
+}
+
+// ── Supported HTTP methods ────────────────────────────────────────────────────
+
+var httpMethods = []string{"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
+
+// ── Model ─────────────────────────────────────────────────────────────────────
+
+type RequestOpsModel struct {
+	cfg     *config.Config
+	profile *config.Profile
+	envName string
+
+	screen requestOpsScreen
+
+	// Environment switching
+	activeEnv int
+
+	// List screen state
+	listCursor  int
+	deleteArmed bool
+	listItems   []requestListItem
+
+	// Create/Edit form state
+	formFocus    int
+	editingIdx   int
+	isURLForm    bool // true = Base URL form, false = Request form
+	methodName   string
+	methodCursor int
+	baseURLIdx   int
+	nameInput    textinput.Model
+	pathInput    textinput.Model
+	isLogin      bool
+	tokenPathInput textinput.Model
+	headerKV     []config.RequestKV
+	headerCursor int
+	paramKV      []config.RequestKV
+	paramCursor  int
+	bodyInput    textarea.Model
+	bodyEditMode bool
+	formError    string
+
+	// KV builder state (headers or params)
+	kvBuilding    bool
+	kvPairs       [][2]string
+	kvPhase       int
+	kvTarget      string // "headers" or "params"
+	kvOrigVal     string
+	kvDeleteArmed bool
+
+	// Variable prompt state
+	varPromptIdx    int
+	varPromptValues map[string]string
+	varPromptInput  textinput.Model
+
+	// Running state
+	pendingOps map[string]string
+	doneOp     string
+	doneOpAt   time.Time
+
+	// Spinner
+	spinnerFrame int
+
+	// Viewport for results
+	resultViewport  viewport.Model
+	viewingResult   bool
+	viewportContent string
+	resultTitle     string
+
+	// Add environment screen
+	newEnvInput textinput.Model
+
+	// Delete environment confirmation
+	deleting    string // env name pending confirmation
+	confirmInput textinput.Model
+
+	// Dimensions
+	width  int
+	height int
+}
+
+// ── Constructor ───────────────────────────────────────────────────────────────
+
+func NewRequestOps(cfg *config.Config, p *config.Profile, envName string) *RequestOpsModel {
+	m := &RequestOpsModel{
+		cfg:            cfg,
+		profile:        p,
+		envName:        envName,
+		pendingOps:     make(map[string]string),
+		nameInput:      textinput.New(),
+		pathInput:      textinput.New(),
+		tokenPathInput: textinput.New(),
+		varPromptInput: textinput.New(),
+		bodyInput:      textarea.New(),
+		resultViewport: viewport.New(0, 0),
+		newEnvInput:    textinput.New(),
+		confirmInput:   textinput.New(),
+	}
+	vp := &m.resultViewport
+	vp.KeyMap.Up.SetKeys("up")
+	vp.KeyMap.Down.SetKeys("down")
+	vp.KeyMap.PageUp.SetKeys()
+	vp.KeyMap.PageDown.SetKeys()
+	vp.KeyMap.HalfPageUp.SetKeys()
+	vp.KeyMap.HalfPageDown.SetKeys()
+	m.nameInput.Placeholder = "Request name"
+	m.pathInput.Placeholder = "/api/v1/users (appended to base)"
+	m.tokenPathInput.Placeholder = "data.token"
+	m.bodyInput.SetHeight(6)
+	m.bodyInput.ShowLineNumbers = false
+	m.bodyInput.Placeholder = "{\n  \"key\": \"value\"\n}"
+	m.bodyInput.CharLimit = 0
+	m.newEnvInput.Placeholder = "environment name"
+	m.newEnvInput.CharLimit = 20
+
+	m.ensureDefaultEnv()
+
+	// Find active env index
+	m.activeEnv = 0
+	found := false
+	for i, env := range m.profile.RequestEnvs {
+		if env.Name == envName {
+			m.activeEnv = i
+			found = true
+			break
+		}
+	}
+	if !found && len(m.profile.RequestEnvs) > 0 {
+		m.envName = m.profile.RequestEnvs[0].Name
+	}
+	return m
+}
+
+// ── Getters ───────────────────────────────────────────────────────────────────
+
+func (m *RequestOpsModel) ProfileName() string { return m.profile.Name }
+func (m *RequestOpsModel) EnvName() string     { return m.envName }
+
+func (m *RequestOpsModel) ServiceKey() string {
+	return m.profile.Name + "/" + m.envName
+}
+
+func (m *RequestOpsModel) ReShow(cfg *config.Config) {
+	if p, ok := cfg.GetProfile(m.profile.Name); ok {
+		m.profile = p
+	}
+	m.deleteArmed = false
+}
+
+func (m *RequestOpsModel) IsBusy() bool {
+	return len(m.pendingOps) > 0
+}
+
+func (m *RequestOpsModel) SetSize(w, h int) {
+	m.width = w
+	m.height = max(0, h-5)
+	m.resultViewport.Width = w - 4
+	if m.viewingResult {
+		lineCount := strings.Count(m.viewportContent, "\n") + 1
+		m.resultViewport.Height = min(lineCount, max(8, m.height-13))
+	} else {
+		m.resultViewport.Height = max(8, m.height-10)
+	}
+	if m.screen == reqScreenCreateForm || m.screen == reqScreenEditForm {
+		m.setBodyTextareaHeight()
+	}
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+func (m *RequestOpsModel) Init() tea.Cmd {
+	m.listItems = m.buildListItems()
+	return nil
+}
+
+// ── Environment helper ────────────────────────────────────────────────────────
+
+func (m *RequestOpsModel) ensureDefaultEnv() {
+	if len(m.profile.RequestEnvs) == 0 {
+		m.profile.RequestEnvs = []config.RequestEnv{{Name: "local"}}
+		m.cfg.UpdateProfile(*m.profile)
+	}
+}
+
+func (m *RequestOpsModel) currentEnv() *config.RequestEnv {
+	for i := range m.profile.RequestEnvs {
+		if m.profile.RequestEnvs[i].Name == m.envName {
+			return &m.profile.RequestEnvs[i]
+		}
+	}
+	return nil
+}
+
+// ── List items builder ────────────────────────────────────────────────────────
+
+func (m *RequestOpsModel) buildListItems() []requestListItem {
+	env := m.currentEnv()
+	if env == nil {
+		return nil
+	}
+	var items []requestListItem
+
+	// Base URLs section header (implicit) + items
+	for i, bu := range env.BaseURLs {
+		items = append(items, requestListItem{
+			kind:     reqItemURL,
+			label:    bu.Name,
+			sublabel: bu.URL,
+			urlIdx:   i,
+			enabled:  true,
+		})
+	}
+	// + Add Base URL
+	items = append(items, requestListItem{
+		kind:    reqItemAddURL,
+		label:   "+ Add Base URL",
+		enabled: true,
+	})
+
+	// Requests section
+	hasURLs := len(env.BaseURLs) > 0
+	for i, req := range env.Requests {
+		items = append(items, requestListItem{
+			kind:     reqItemRequest,
+			label:    req.Name,
+			sublabel: req.Method + " " + req.Path,
+			reqIdx:   i,
+			enabled:  true,
+		})
+		_ = req
+	}
+	// + Add Request
+	items = append(items, requestListItem{
+		kind:    reqItemAddRequest,
+		label:   "+ Add Request",
+		enabled: hasURLs,
+	})
+
+	return items
+}
+
+// ── Update dispatch ───────────────────────────────────────────────────────────
+
+func (m *RequestOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if wm, ok := msg.(tea.WindowSizeMsg); ok {
+		m.SetSize(wm.Width, wm.Height)
+		return m, nil
+	}
+
+	if _, ok := msg.(SpinnerTickMsg); ok {
+		if len(m.pendingOps) > 0 {
+			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
+			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+				return SpinnerTickMsg{}
+			})
+		}
+		if m.doneOp != "" {
+			if time.Since(m.doneOpAt) >= 5*time.Second {
+				m.doneOp = ""
+				m.doneOpAt = time.Time{}
+			} else {
+				m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
+				return m, tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+					return SpinnerTickMsg{}
+				})
+			}
+		}
+		return m, nil
+	}
+
+	// Handle completion messages
+	switch msg := msg.(type) {
+	case requestOpsDoneMsg:
+		var completedLabel string
+		for label := range m.pendingOps {
+			completedLabel = label
+		}
+		m.pendingOps = make(map[string]string)
+
+		if msg.err != nil {
+			m.resultTitle = completedLabel
+			m.viewportContent = formatErrorMsg(msg.err.Error())
+			m.resultViewport.SetContent(m.viewportContent)
+			m.resultViewport.Width = m.width - 4
+			lineCount := strings.Count(m.viewportContent, "\n") + 1
+			m.resultViewport.Height = min(lineCount, max(8, m.height-13))
+			m.resultViewport.YPosition = 0
+			m.resultViewport.GotoTop()
+			m.screen = reqScreenResult
+			m.viewingResult = true
+			return m, spinnerCmd()
+		}
+
+		m.doneOp = completedLabel
+		m.doneOpAt = time.Now()
+
+		if msg.result == "" {
+			m.screen = reqScreenList
+			m.viewingResult = false
+			return m, spinnerCmd()
+		}
+
+		m.resultTitle = completedLabel
+		m.viewportContent = styles.StyleCode.Render(msg.result)
+		m.resultViewport.SetContent(m.viewportContent)
+		m.resultViewport.Width = m.width - 4
+		lineCount := strings.Count(m.viewportContent, "\n") + 1
+		m.resultViewport.Height = min(lineCount, max(8, m.height-13))
+		m.resultViewport.YPosition = 0
+		m.resultViewport.GotoTop()
+		m.screen = reqScreenResult
+		m.viewingResult = true
+		return m, spinnerCmd()
+	}
+
+	// Handle result screen key presses (dismiss on any key)
+	if m.screen == reqScreenResult && m.viewingResult {
+		if _, ok := msg.(tea.KeyMsg); ok {
+			m.screen = reqScreenList
+			m.viewingResult = false
+			m.resultViewport.SetContent("")
+			return m, nil
+		}
+	}
+
+	switch m.screen {
+	case reqScreenCreateForm, reqScreenEditForm:
+		return m.updateForm(msg)
+	case reqScreenVarPrompt:
+		return m.updateVarPrompt(msg)
+	case reqScreenAddEnv:
+		return m.updateAddEnv(msg)
+	case reqScreenConfirmDelete:
+		return m.updateConfirmDelete(msg)
+	default:
+		return m.updateList(msg)
+	}
+}
+
+// ── List screen ───────────────────────────────────────────────────────────────
+
+func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch {
+		case key.Matches(msg, opsKeyBack):
+			m.deleteArmed = false
+			return m, func() tea.Msg {
+				return NavigateTo{Screen: NavProfileView, ProfileName: m.profile.Name, EnvName: m.envName}
+			}
+
+		// Add environment
+		case msg.String() == "n":
+			m.screen = reqScreenAddEnv
+			m.newEnvInput.SetValue("")
+			m.newEnvInput.Focus()
+			m.newEnvInput.CursorEnd()
+			return m, textinput.Blink
+
+		// Contextual add (a key)
+		case key.Matches(msg, opsKeyAdd):
+			m.deleteArmed = false
+			if m.listCursor < len(m.listItems) {
+				item := m.listItems[m.listCursor]
+				switch item.kind {
+				case reqItemURL, reqItemAddURL:
+					return m.startCreateURL()
+				case reqItemRequest, reqItemAddRequest:
+					if item.enabled {
+						return m.startCreateRequest()
+					}
+					return m.startCreateURL()
+				default:
+					return m.startCreateURL()
+				}
+			}
+			return m.startCreateURL()
+
+		// Environment switching
+		case msg.String() == "left":
+			if len(m.profile.RequestEnvs) > 0 {
+				m.activeEnv--
+				if m.activeEnv < 0 {
+					m.activeEnv = len(m.profile.RequestEnvs) - 1
+				}
+				m.envName = m.profile.RequestEnvs[m.activeEnv].Name
+				m.listItems = m.buildListItems()
+				if m.listCursor >= len(m.listItems) {
+					m.listCursor = len(m.listItems) - 1
+				}
+				if m.listCursor < 0 {
+					m.listCursor = 0
+				}
+			}
+			return m, nil
+
+		case msg.String() == "right":
+			if len(m.profile.RequestEnvs) > 0 {
+				m.activeEnv++
+				if m.activeEnv >= len(m.profile.RequestEnvs) {
+					m.activeEnv = 0
+				}
+				m.envName = m.profile.RequestEnvs[m.activeEnv].Name
+				m.listItems = m.buildListItems()
+				if m.listCursor >= len(m.listItems) {
+					m.listCursor = len(m.listItems) - 1
+				}
+				if m.listCursor < 0 {
+					m.listCursor = 0
+				}
+			}
+			return m, nil
+
+		// Delete environment (D key, double-press → confirm screen)
+		case msg.String() == "D":
+			env := m.currentEnv()
+			if env == nil || env.Name == "local" {
+				break
+			}
+			if !m.deleteArmed {
+				m.deleteArmed = true
+				return m, nil
+			}
+			// Second D: show confirmation screen
+			m.deleteArmed = false
+			m.deleting = env.Name
+			m.confirmInput.SetValue("")
+			m.confirmInput.Focus()
+			m.screen = reqScreenConfirmDelete
+			return m, textinput.Blink
+
+		case key.Matches(msg, opsKeyUp):
+			m.deleteArmed = false
+			if m.listCursor > 0 {
+				m.listCursor--
+				// Skip disabled items
+				for m.listCursor > 0 && !m.listItems[m.listCursor].enabled {
+					m.listCursor--
+				}
+			}
+
+		case key.Matches(msg, opsKeyDown):
+			m.deleteArmed = false
+			if m.listCursor < len(m.listItems)-1 {
+				m.listCursor++
+				// Skip disabled items
+				for m.listCursor < len(m.listItems)-1 && !m.listItems[m.listCursor].enabled {
+					m.listCursor++
+				}
+				// If we stopped at a disabled item, go back
+				if m.listCursor < len(m.listItems) && !m.listItems[m.listCursor].enabled {
+					m.listCursor--
+				}
+			}
+
+		case key.Matches(msg, opsKeyEnter):
+			m.deleteArmed = false
+			if m.listCursor < len(m.listItems) {
+				item := m.listItems[m.listCursor]
+				if !item.enabled {
+					return m, nil
+				}
+				switch item.kind {
+				case reqItemURL, reqItemRequest:
+					// Execute request or show URL detail
+					if item.kind == reqItemRequest {
+						env := m.currentEnv()
+						if env != nil && item.reqIdx < len(env.Requests) {
+							return m.startVarPrompt(env.Requests[item.reqIdx])
+						}
+					}
+				case reqItemAddURL:
+					return m.startCreateURL()
+				case reqItemAddRequest:
+					return m.startCreateRequest()
+				}
+			}
+
+		case key.Matches(msg, opsKeyEdit):
+			m.deleteArmed = false
+			if m.listCursor < len(m.listItems) {
+				item := m.listItems[m.listCursor]
+				if item.kind == reqItemRequest && item.enabled {
+					env := m.currentEnv()
+					if env != nil && item.reqIdx < len(env.Requests) {
+						return m.startEditRequest(item.reqIdx)
+					}
+				}
+				if item.kind == reqItemURL && item.enabled {
+					env := m.currentEnv()
+					if env != nil && item.urlIdx < len(env.BaseURLs) {
+						return m.startEditURL(item.urlIdx)
+					}
+				}
+			}
+
+		case key.Matches(msg, opsKeyDelete):
+			if m.listCursor < len(m.listItems) {
+				item := m.listItems[m.listCursor]
+				if !item.enabled {
+					break
+				}
+				// Only allow delete on actual URLs and Requests, not add items
+				if item.kind != reqItemURL && item.kind != reqItemRequest {
+					break
+				}
+				if !m.deleteArmed {
+					m.deleteArmed = true
+				} else {
+					m.deleteArmed = false
+					env := m.currentEnv()
+					if env == nil {
+						break
+					}
+					switch item.kind {
+					case reqItemURL:
+						if item.urlIdx < len(env.BaseURLs) {
+							env.BaseURLs = append(env.BaseURLs[:item.urlIdx], env.BaseURLs[item.urlIdx+1:]...)
+							m.profile.UpdatedAt = time.Now()
+							if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+								m.listItems = m.buildListItems()
+								return m, nil
+							}
+							m.listItems = m.buildListItems()
+							if m.listCursor >= len(m.listItems) && m.listCursor > 0 {
+								m.listCursor--
+							}
+						}
+					case reqItemRequest:
+						if item.reqIdx < len(env.Requests) {
+							env.Requests = append(env.Requests[:item.reqIdx], env.Requests[item.reqIdx+1:]...)
+							m.profile.UpdatedAt = time.Now()
+							if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+								m.listItems = m.buildListItems()
+								return m, nil
+							}
+							m.listItems = m.buildListItems()
+							if m.listCursor >= len(m.listItems) && m.listCursor > 0 {
+								m.listCursor--
+							}
+						}
+					}
+				}
+			}
+
+		default:
+			m.deleteArmed = false
+		}
+	}
+	return m, nil
+}
+
+func (m *RequestOpsModel) viewList() string {
+	var b strings.Builder
+	b.WriteString("\n")
+
+	env := m.currentEnv()
+	envName := m.envName
+	if env != nil {
+		envName = env.Name
+	}
+	b.WriteString(styles.StyleTitle.Render(
+		fmt.Sprintf(" Request Ops — %s / %s ", m.profile.Name, envName)))
+	b.WriteString("\n\n")
+
+	// Environment tabs
+	if len(m.profile.RequestEnvs) > 1 {
+		var tabs []string
+		for i, e := range m.profile.RequestEnvs {
+			if i == m.activeEnv {
+				tabs = append(tabs, styles.StyleBadgeEnv.Render(" "+e.Name+" "))
+			} else {
+				tabs = append(tabs, " "+e.Name+" ")
+			}
+		}
+		b.WriteString("  " + strings.Join(tabs, "  ") + "\n\n")
+	}
+
+	if env == nil {
+		b.WriteString(styles.StyleError.Render("  Environment not found."))
+		b.WriteString("\n")
+		b.WriteString(styles.BackHelp())
+		return b.String()
+	}
+
+	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
+	mutedStyle := styles.StyleSubtitle
+	groupHeaderStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
+	cursorStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+
+	// Windowing
+	totalItems := len(m.listItems)
+	overhead := 14
+	if m.deleteArmed {
+		overhead++
+	}
+	win := opsWindow(totalItems, m.listCursor, 2, m.height, overhead)
+
+	if win.hasAbove {
+		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
+		b.WriteString("\n")
+	}
+
+	// Render items with group headers
+	inURLSection := true
+	for i := win.start; i < win.end; i++ {
+		item := m.listItems[i]
+
+		// Group header transitions
+		if item.kind == reqItemAddRequest && inURLSection {
+			b.WriteString("\n")
+			b.WriteString("  " + groupHeaderStyle.Render("Requests"))
+			b.WriteString("\n")
+			inURLSection = false
+		}
+		if item.kind == reqItemURL && i == win.start {
+			b.WriteString("  " + groupHeaderStyle.Render("Base URLs"))
+			b.WriteString("\n")
+		}
+		if item.kind == reqItemAddURL {
+			// No section header needed, just render the add item
+		}
+		if item.kind == reqItemRequest && inURLSection {
+			b.WriteString("\n")
+			b.WriteString("  " + groupHeaderStyle.Render("Requests"))
+			b.WriteString("\n")
+			inURLSection = false
+		}
+
+		isCursor := i == m.listCursor
+
+		if !item.enabled {
+			b.WriteString(mutedStyle.Render("      "+item.label) + "\n")
+			continue
+		}
+
+		switch item.kind {
+		case reqItemURL:
+			if isCursor {
+				b.WriteString(selStyle.Render(fmt.Sprintf("  > %s", item.label)) + "  " + mutedStyle.Render(item.sublabel) + "\n")
+			} else {
+				b.WriteString("    " + item.label + "  " + mutedStyle.Render(item.sublabel) + "\n")
+			}
+
+		case reqItemRequest:
+			// Method badge
+			methodBadge := renderMethodBadge(item.sublabel[:strings.Index(item.sublabel, " ")])
+			if isCursor {
+				b.WriteString(selStyle.Render("  > "+item.label) + "  " + methodBadge + " " + mutedStyle.Render(item.sublabel[strings.Index(item.sublabel, " ")+1:]) + "\n")
+			} else {
+				b.WriteString("    " + item.label + "  " + methodBadge + " " + mutedStyle.Render(item.sublabel[strings.Index(item.sublabel, " ")+1:]) + "\n")
+			}
+
+		case reqItemAddURL, reqItemAddRequest:
+			if isCursor {
+				b.WriteString(cursorStyle.Render("  > "+item.label) + "\n")
+			} else {
+				b.WriteString("    " + mutedStyle.Render(item.label) + "\n")
+			}
+		}
+	}
+
+	if win.hasBelow {
+		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ↓ %d more", totalItems-win.end)))
+		b.WriteString("\n")
+	}
+
+	if len(m.listItems) == 0 {
+		b.WriteString("\n")
+		b.WriteString(mutedStyle.Render("  No Base URLs or Requests configured."))
+		b.WriteString("\n")
+		b.WriteString(mutedStyle.Render("  Press a to add a Base URL."))
+		b.WriteString("\n")
+	}
+
+	if m.deleteArmed {
+		b.WriteString("\n" + styles.StyleError.Render("  Press d again to confirm removal"))
+		b.WriteString("\n")
+	}
+
+	// Show spinner for in-flight requests
+	for label := range m.pendingOps {
+		b.WriteString("\n  " + m.renderSpinnerDot(label))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	var contextItems []styles.HelpItemResult
+	contextItems = append(contextItems, styles.HelpItem("a", "add"))
+	if m.listCursor < len(m.listItems) {
+		item := m.listItems[m.listCursor]
+		if item.kind == reqItemURL || item.kind == reqItemRequest {
+			contextItems = append(contextItems, styles.HelpItem("e", "edit"))
+			contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
+		}
+	}
+	b.WriteString("      " + styles.InlineHelp(contextItems...))
+	b.WriteString("\n\n")
+	footerItems := []styles.HelpItemResult{
+		styles.HelpItem("↑ ↓", "navigate"),
+		styles.HelpItem("← →", "env"),
+		styles.HelpItem("n", "add env"),
+		styles.HelpItem("↵", "execute"),
+	}
+	env = m.currentEnv()
+	if env != nil && env.Name != "local" {
+		footerItems = append(footerItems, styles.HelpItem("D D", "delete env"))
+	}
+	b.WriteString(styles.BackHelp(footerItems...))
+	return b.String()
+}
+
+// ── Add Environment screen ────────────────────────────────────────────────────
+
+func (m *RequestOpsModel) updateAddEnv(msg tea.Msg) (tea.Model, tea.Cmd) {
+	keyMsg, isKey := msg.(tea.KeyMsg)
+	if !isKey {
+		var cmd tea.Cmd
+		m.newEnvInput, cmd = m.newEnvInput.Update(msg)
+		return m, cmd
+	}
+
+	switch keyMsg.String() {
+	case "esc":
+		m.screen = reqScreenList
+		m.newEnvInput.SetValue("")
+		m.newEnvInput.Blur()
+		return m, nil
+
+	case "enter":
+		name := strings.TrimSpace(m.newEnvInput.Value())
+		if name == "" {
+			return m, nil
+		}
+		// Check for duplicate
+		for _, env := range m.profile.RequestEnvs {
+			if env.Name == name {
+				return m, nil
+			}
+		}
+		// Append new environment
+		m.profile.RequestEnvs = append(m.profile.RequestEnvs, config.RequestEnv{Name: name})
+		m.cfg.UpdateProfile(*m.profile)
+		// Switch to the new env
+		m.activeEnv = len(m.profile.RequestEnvs) - 1
+		m.envName = name
+		m.listItems = m.buildListItems()
+		m.screen = reqScreenList
+		m.newEnvInput.SetValue("")
+		m.newEnvInput.Blur()
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.newEnvInput, cmd = m.newEnvInput.Update(keyMsg)
+	return m, cmd
+}
+
+func (m *RequestOpsModel) viewAddEnv() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(styles.StyleTitle.Render(fmt.Sprintf(" Request Ops — %s / Add Environment ", m.profile.Name)))
+	b.WriteString("\n\n")
+
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	b.WriteString("  " + focusStyle.Render("Environment name: ") + m.newEnvInput.View() + "\n")
+	b.WriteString("\n")
+	b.WriteString("  " + styles.InlineHelp(
+		styles.HelpItem("esc", "cancel"),
+		styles.HelpItem("↵", "create"),
+	))
+	return b.String()
+}
+
+// ── Confirm Delete Environment screen ────────────────────────────────────────
+
+func (m *RequestOpsModel) updateConfirmDelete(msg tea.Msg) (tea.Model, tea.Cmd) {
+	keyMsg, isKey := msg.(tea.KeyMsg)
+	if !isKey {
+		var cmd tea.Cmd
+		m.confirmInput, cmd = m.confirmInput.Update(msg)
+		return m, cmd
+	}
+
+	switch keyMsg.String() {
+	case "esc":
+		m.deleting = ""
+		m.confirmInput.SetValue("")
+		m.confirmInput.Blur()
+		m.screen = reqScreenList
+		return m, nil
+
+	case "enter":
+		if m.confirmInput.Value() == m.deleting {
+			// Confirmed: delete environment
+			envIdx := m.activeEnv
+			m.profile.RequestEnvs = append(
+				m.profile.RequestEnvs[:envIdx],
+				m.profile.RequestEnvs[envIdx+1:]...,
+			)
+			m.profile.UpdatedAt = time.Now()
+			_ = m.cfg.UpdateProfile(*m.profile)
+			m.deleting = ""
+			m.confirmInput.SetValue("")
+			m.confirmInput.Blur()
+			// Switch to remaining env
+			if len(m.profile.RequestEnvs) > 0 {
+				if m.activeEnv >= len(m.profile.RequestEnvs) {
+					m.activeEnv = len(m.profile.RequestEnvs) - 1
+				}
+				m.envName = m.profile.RequestEnvs[m.activeEnv].Name
+			} else {
+				m.activeEnv = 0
+				m.envName = ""
+			}
+			m.screen = reqScreenList
+			m.listItems = m.buildListItems()
+			if m.listCursor >= len(m.listItems) && m.listCursor > 0 {
+				m.listCursor = len(m.listItems) - 1
+			}
+			return m, nil
+		}
+		// Wrong input
+		m.formError = fmt.Sprintf("name does not match — type %q to confirm", m.deleting)
+		m.confirmInput.SetValue("")
+		m.confirmInput.CursorEnd()
+		return m, nil
+
+	default:
+		var cmd tea.Cmd
+		m.confirmInput, cmd = m.confirmInput.Update(keyMsg)
+		return m, cmd
+	}
+}
+
+func (m *RequestOpsModel) viewConfirmDelete() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(styles.StyleTitle.Render(fmt.Sprintf(" Request Ops — %s / Delete Environment ", m.profile.Name)))
+	b.WriteString("\n\n")
+
+	b.WriteString(styles.StylePanelError.Render(
+		styles.StyleError.Render("  ⚠ This will permanently delete the environment and ALL its data"),
+	))
+	b.WriteString("\n\n")
+	nameStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	b.WriteString(styles.StyleSubtitle.Render(
+		fmt.Sprintf("  Type %s to confirm deletion:", nameStyle.Render(fmt.Sprintf("%q", m.deleting))),
+	))
+	b.WriteString("\n\n")
+	b.WriteString("  " + m.confirmInput.View())
+	if m.formError != "" {
+		b.WriteString("\n\n" + formatErrorMsg(m.formError))
+	}
+	b.WriteString("\n\n")
+	b.WriteString(styles.InlineHelp(
+		styles.HelpItem("esc", "cancel"),
+		styles.HelpItem("↵", "confirm"),
+	))
+	b.WriteString("\n")
+	return b.String()
+}
+
+// ── Form (Create / Edit) ─────────────────────────────────────────────────────
+
+func (m *RequestOpsModel) startCreateURL() (tea.Model, tea.Cmd) {
+	m.screen = reqScreenCreateForm
+	m.formFocus = 0
+	m.editingIdx = -1
+	m.isURLForm = true
+	m.nameInput.SetValue("")
+	m.nameInput.Placeholder = "Url"
+	m.pathInput.SetValue("")
+	m.pathInput.Placeholder = "http://localhost:8080"
+	m.formError = ""
+	return m, nil
+}
+
+func (m *RequestOpsModel) startCreateRequest() (tea.Model, tea.Cmd) {
+	m.screen = reqScreenCreateForm
+	m.formFocus = 0
+	m.editingIdx = -2 // -2 = new request
+	m.isURLForm = false
+	m.nameInput.SetValue("")
+	m.nameInput.Placeholder = "Login"
+	m.methodName = "GET"
+	m.methodCursor = 0
+	env := m.currentEnv()
+	if env != nil && len(env.BaseURLs) > 0 {
+		m.baseURLIdx = 0
+	} else {
+		m.baseURLIdx = -1
+	}
+	m.isLogin = false
+	m.nameInput.SetValue("")
+	m.pathInput.SetValue("")
+	m.pathInput.Placeholder = "/api/v1/users (appended to base)"
+	m.tokenPathInput.SetValue("")
+	m.headerKV = nil
+	m.paramKV = nil
+	m.bodyInput.SetValue("")
+	m.formError = ""
+	return m, nil
+}
+
+func (m *RequestOpsModel) startEditURL(idx int) (tea.Model, tea.Cmd) {
+	env := m.currentEnv()
+	if env == nil || idx >= len(env.BaseURLs) {
+		return m, nil
+	}
+	bu := env.BaseURLs[idx]
+	m.screen = reqScreenEditForm
+	m.formFocus = 0
+	m.editingIdx = idx
+	m.isURLForm = true
+	m.nameInput.SetValue(bu.Name)
+	m.nameInput.Placeholder = "Url"
+	m.baseURLIdx = -1
+	m.pathInput.SetValue(bu.URL)
+	m.pathInput.Placeholder = "http://localhost:8080"
+	m.isLogin = false
+	m.tokenPathInput.SetValue("")
+	m.headerKV = nil
+	m.paramKV = nil
+	m.bodyInput.SetValue("")
+	m.formError = ""
+	return m, nil
+}
+
+func (m *RequestOpsModel) startEditRequest(idx int) (tea.Model, tea.Cmd) {
+	env := m.currentEnv()
+	if env == nil || idx >= len(env.Requests) {
+		return m, nil
+	}
+	req := env.Requests[idx]
+	m.screen = reqScreenEditForm
+	m.formFocus = 0
+	m.editingIdx = idx
+	m.isURLForm = false
+	m.nameInput.SetValue(req.Name)
+	m.methodName = req.Method
+	m.methodCursor = 0
+	for i, method := range httpMethods {
+		if method == req.Method {
+			m.methodCursor = i
+			break
+		}
+	}
+	// Find base URL index
+	m.baseURLIdx = -1
+	for i, bu := range env.BaseURLs {
+		if bu.Name == req.BaseURLName {
+			m.baseURLIdx = i
+			break
+		}
+	}
+	m.pathInput.SetValue(req.Path)
+	m.isLogin = req.IsLogin
+	m.tokenPathInput.SetValue(req.TokenPath)
+	m.headerKV = make([]config.RequestKV, len(req.Headers))
+	copy(m.headerKV, req.Headers)
+	m.paramKV = make([]config.RequestKV, len(req.Params))
+	copy(m.paramKV, req.Params)
+	m.bodyInput.SetValue(req.Body)
+	m.formError = ""
+	return m, nil
+}
+
+// formFieldName returns the display name of the current form field.
+func (m *RequestOpsModel) formFieldName(idx int) string {
+	switch idx {
+	case 0:
+		return "Name"
+	case 1:
+		return "Method"
+	case 2:
+		return "Base URL"
+	case 3:
+		return "Path"
+	case 4:
+		return "Is Login"
+	case 5:
+		return "Token Path"
+	case 6:
+		return "Headers"
+	case 7:
+		return "Params"
+	case 8:
+		return "Body"
+	}
+	return ""
+}
+
+// hasBodyField returns true if the current method supports a request body.
+func (m *RequestOpsModel) hasBodyField() bool {
+	methodUpper := strings.ToUpper(m.methodName)
+	return methodUpper == "POST" || methodUpper == "PUT" || methodUpper == "PATCH"
+}
+
+// formFieldCount returns the number of visible form fields.
+func (m *RequestOpsModel) formFieldCount() int {
+	if m.isURLForm {
+		return 2 // Name + URL
+	}
+	// Indices: 0=Name, 1=Method, 2=BaseURL, 3=Path, 4=IsLogin, 5=TokenPath, 6=Headers, 7=Params, 8=Body
+	// TokenPath(5) is a gap when isLogin=false, but max index is always 8 or 7.
+	// formFieldCount returns maxVisibleIndex+1 for boundary checks.
+	if m.hasBodyField() {
+		return 9 // max index = 8 (Body)
+	}
+	return 8 // max index = 7 (Params)
+}
+
+// formVisibleIndex maps a formFocus to the logical field.
+func (m *RequestOpsModel) formVisibleIndex(focus int) int {
+	return focus
+}
+
+func (m *RequestOpsModel) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	keyMsg, isKey := msg.(tea.KeyMsg)
+	if !isKey {
+		var cmd tea.Cmd
+		switch m.formFocus {
+		case 0:
+			m.nameInput, cmd = m.nameInput.Update(msg)
+		case 1:
+			if m.isURLForm {
+				m.pathInput, cmd = m.pathInput.Update(msg)
+			}
+		case 3:
+			m.pathInput, cmd = m.pathInput.Update(msg)
+		case 5:
+			m.tokenPathInput, cmd = m.tokenPathInput.Update(msg)
+		case 8:
+			if m.bodyEditMode {
+				m.bodyInput, cmd = m.bodyInput.Update(msg)
+			}
+		}
+		return m, cmd
+	}
+
+	// KV builder mode
+	if m.kvBuilding {
+		return m.updateKVBuilder(keyMsg)
+	}
+
+	switch keyMsg.String() {
+	case "esc":
+		if m.bodyEditMode {
+			m.bodyInput.Blur()
+			m.bodyEditMode = false
+			return m, nil
+		}
+		m.screen = reqScreenList
+		m.listItems = m.buildListItems()
+		return m, nil
+
+	case "up":
+		if m.formFocus > 0 {
+			m.formFocus--
+			// Skip TokenPath (5) when Is Login is off
+			if !m.isLogin && !m.isURLForm && m.formFocus == 5 {
+				m.formFocus--
+			}
+			// Skip Body (8) when method doesn't support body
+			if !m.isURLForm && m.formFocus == 8 && !m.hasBodyField() {
+				m.formFocus--
+			}
+			m.refreshFormFocus()
+		}
+		return m, nil
+
+	case "down":
+		if m.formFocus < m.formFieldCount()-1 {
+			m.formFocus++
+			// Skip TokenPath (5) when Is Login is off
+			if !m.isLogin && !m.isURLForm && m.formFocus == 5 {
+				m.formFocus++
+			}
+			// Skip Body (8) when method doesn't support body
+			if !m.isURLForm && m.formFocus == 8 && !m.hasBodyField() {
+				m.formFocus++
+			}
+			m.refreshFormFocus()
+		}
+		return m, nil
+
+	case "enter":
+		// Toggle selectors and toggles (only for request form fields)
+		if !m.isURLForm {
+			switch m.formFocus {
+			case 1: // Method selector
+				m.methodCursor = (m.methodCursor + 1) % len(httpMethods)
+				m.methodName = httpMethods[m.methodCursor]
+				// Clamp cursor if Body field just disappeared
+				if m.formFocus >= m.formFieldCount() {
+					m.formFocus = m.formFieldCount() - 1
+				}
+				m.refreshFormFocus()
+				return m, nil
+			case 2: // Base URL selector
+				env := m.currentEnv()
+				if env != nil && len(env.BaseURLs) > 0 {
+					m.baseURLIdx = (m.baseURLIdx + 1) % len(env.BaseURLs)
+				}
+				return m, nil
+		case 4: // Is Login toggle
+			m.isLogin = !m.isLogin
+			// If we just turned off and cursor is on TokenPath, move up
+			if !m.isLogin && m.formFocus == 5 {
+				m.formFocus = 4
+			}
+			// Clamp if cursor is now out of range
+			if m.formFocus >= m.formFieldCount() {
+				m.formFocus = m.formFieldCount() - 1
+			}
+			m.refreshFormFocus()
+			return m, nil
+			case 6: // Headers — enter KV builder
+				m.enterKVBuilder("headers")
+				return m, nil
+			case 7: // Params — enter KV builder
+				m.enterKVBuilder("params")
+				return m, nil
+			case 8: // Body
+				if !m.bodyEditMode {
+					m.bodyInput.Focus()
+					m.bodyEditMode = true
+					return m, nil
+				}
+				// Enter in edit mode = newline, delegate
+				var cmd tea.Cmd
+				m.bodyInput, cmd = m.bodyInput.Update(keyMsg)
+				m.setBodyTextareaHeight()
+				return m, cmd
+			}
+		}
+
+		// On the last field, save
+		if m.formFocus == m.formFieldCount()-1 {
+			return m.saveForm()
+		}
+
+	case "ctrl+s":
+		return m.saveForm()
+
+	case "ctrl+f":
+		if m.formFocus == 8 && m.bodyEditMode {
+			m.formatBody()
+		}
+		return m, nil
+	}
+
+	// Delegate to focused input
+	switch m.formFocus {
+	case 0:
+		var cmd tea.Cmd
+		m.nameInput, cmd = m.nameInput.Update(keyMsg)
+		return m, cmd
+	case 1:
+		if m.isURLForm {
+			var cmd tea.Cmd
+			m.pathInput, cmd = m.pathInput.Update(keyMsg)
+			return m, cmd
+		}
+	case 3:
+		var cmd tea.Cmd
+		m.pathInput, cmd = m.pathInput.Update(keyMsg)
+		return m, cmd
+	case 5:
+		if m.isLogin {
+			var cmd tea.Cmd
+			m.tokenPathInput, cmd = m.tokenPathInput.Update(keyMsg)
+			return m, cmd
+		}
+	case 8:
+		if m.bodyEditMode {
+			var cmd tea.Cmd
+			m.bodyInput, cmd = m.bodyInput.Update(keyMsg)
+			m.setBodyTextareaHeight()
+			return m, cmd
+		}
+	}
+
+	return m, nil
+}
+
+func (m *RequestOpsModel) refreshFormFocus() {
+	// Blur all inputs, focus the current one
+	m.nameInput.Blur()
+	m.pathInput.Blur()
+	m.tokenPathInput.Blur()
+	if m.bodyEditMode {
+		m.bodyInput.Blur()
+		m.bodyEditMode = false
+	}
+	switch m.formFocus {
+	case 0:
+		m.nameInput.Focus()
+	case 3:
+		m.pathInput.Focus()
+	case 5:
+		if m.isLogin {
+			m.tokenPathInput.Focus()
+		}
+	}
+}
+
+func (m *RequestOpsModel) setBodyTextareaHeight() {
+	lines := len(strings.Split(m.bodyInput.Value(), "\n"))
+	maxH := m.height - 20
+	if maxH < 5 {
+		maxH = 5
+	}
+	switch {
+	case lines < 6:
+		m.bodyInput.SetHeight(min(6, maxH))
+	case lines > maxH:
+		m.bodyInput.SetHeight(maxH)
+	default:
+		m.bodyInput.SetHeight(lines)
+	}
+}
+
+func (m *RequestOpsModel) formatBody() {
+	val := m.bodyInput.Value()
+	var pretty bytes.Buffer
+	if json.Indent(&pretty, []byte(val), "", "  ") == nil {
+		m.bodyInput.SetValue(pretty.String())
+		m.setBodyTextareaHeight()
+	}
+}
+
+func (m *RequestOpsModel) saveForm() (tea.Model, tea.Cmd) {
+	name := strings.TrimSpace(m.nameInput.Value())
+	method := m.methodName
+	path := strings.TrimSpace(m.pathInput.Value())
+
+	// Determine if this is a URL save or a request save
+	env := m.currentEnv()
+	if env == nil {
+		m.screen = reqScreenList
+		m.listItems = m.buildListItems()
+		return m, nil
+	}
+
+	// Validate
+	if name == "" {
+		m.formError = "Name is required"
+		return m, nil
+	}
+
+	if m.isURLForm {
+		// Save as Base URL
+		url := path // pathInput holds the URL value in URL form
+		if url == "" {
+			m.formError = "URL is required"
+			return m, nil
+		}
+		if m.screen == reqScreenEditForm && m.editingIdx >= 0 && m.editingIdx < len(env.BaseURLs) {
+			env.BaseURLs[m.editingIdx].Name = name
+			env.BaseURLs[m.editingIdx].URL = url
+		} else {
+			env.BaseURLs = append(env.BaseURLs, config.RequestBaseURL{Name: name, URL: url})
+		}
+		m.profile.UpdatedAt = time.Now()
+		if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+			m.formError = err.Error()
+			return m, nil
+		}
+		m.screen = reqScreenList
+		m.listItems = m.buildListItems()
+		return m, nil
+	}
+
+	// Validate request fields
+	if method == "" {
+		m.formError = "Method is required"
+		return m, nil
+	}
+	if m.baseURLIdx < 0 || m.baseURLIdx >= len(env.BaseURLs) {
+		m.formError = "Base URL is required"
+		return m, nil
+	}
+	if path == "" {
+		m.formError = "Path is required"
+		return m, nil
+	}
+	if m.isLogin && strings.TrimSpace(m.tokenPathInput.Value()) == "" {
+		m.formError = "Token Path is required when Is Login is enabled"
+		return m, nil
+	}
+
+	body := ""
+	if m.bodyInput.Value() != "" {
+		body = m.bodyInput.Value()
+	}
+
+	reqDef := config.RequestDef{
+		Name:        name,
+		Method:      method,
+		BaseURLName: env.BaseURLs[m.baseURLIdx].Name,
+		Path:        path,
+		IsLogin:     m.isLogin,
+		TokenPath:   strings.TrimSpace(m.tokenPathInput.Value()),
+		Headers:     m.headerKV,
+		Params:      m.paramKV,
+		Body:        body,
+	}
+
+	// Check if editing an existing request
+	if m.screen == reqScreenEditForm && m.editingIdx >= 0 && m.editingIdx < len(env.Requests) {
+		env.Requests[m.editingIdx] = reqDef
+	} else {
+		env.Requests = append(env.Requests, reqDef)
+	}
+
+	m.profile.UpdatedAt = time.Now()
+	if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+		m.formError = err.Error()
+		return m, nil
+	}
+
+	m.screen = reqScreenList
+	m.listItems = m.buildListItems()
+	return m, nil
+}
+
+func (m *RequestOpsModel) viewForm() string {
+	var b strings.Builder
+	b.WriteString("\n")
+
+	title := "New Base URL"
+	if m.screen == reqScreenCreateForm {
+		if !m.isURLForm {
+			title = "New Request"
+		}
+	} else if m.screen == reqScreenEditForm {
+		if m.isURLForm {
+			title = "Edit Base URL"
+		} else {
+			title = "Edit Request"
+		}
+	}
+	b.WriteString(styles.StyleTitle.Render(fmt.Sprintf(" Request Ops — %s ", title)))
+	b.WriteString("\n\n")
+
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	normalStyle := lipgloss.NewStyle()
+	mutedStyle := styles.StyleSubtitle
+
+	env := m.currentEnv()
+
+	// Field 0: Name
+	if m.formFocus == 0 {
+		m.nameInput.Focus()
+		b.WriteString("  " + focusStyle.Render("Name:     ") + m.nameInput.View() + "\n")
+	} else {
+		m.nameInput.Blur()
+		b.WriteString("  " + normalStyle.Render("Name:     ") + m.nameInput.View() + "\n")
+	}
+
+	if !m.isURLForm {
+		// Field 1: Method selector
+		methodDisplay := m.methodName
+		if m.formFocus == 1 {
+			b.WriteString("  " + focusStyle.Render("Method:   ") + focusStyle.Render("> "+methodDisplay) + "  " + mutedStyle.Render("(enter to cycle)") + "\n")
+		} else {
+			b.WriteString("  " + normalStyle.Render("Method:   ") + renderMethodBadge(methodDisplay) + "\n")
+		}
+
+		// Field 2: Base URL selector
+		if m.formFocus == 2 {
+			buLabel := "(none)"
+			if m.baseURLIdx >= 0 && env != nil && m.baseURLIdx < len(env.BaseURLs) {
+				buLabel = env.BaseURLs[m.baseURLIdx].Name
+			}
+			b.WriteString("  " + focusStyle.Render("Base URL: ") + focusStyle.Render("> "+buLabel) + "  " + mutedStyle.Render("(enter to cycle)") + "\n")
+		} else {
+			buLabel := "(none)"
+			if m.baseURLIdx >= 0 && env != nil && m.baseURLIdx < len(env.BaseURLs) {
+				buLabel = env.BaseURLs[m.baseURLIdx].Name + "  " + mutedStyle.Render(env.BaseURLs[m.baseURLIdx].URL)
+			}
+			b.WriteString("  " + normalStyle.Render("Base URL: ") + buLabel + "\n")
+		}
+
+		// Field 3: Path
+		if m.formFocus == 3 {
+			m.pathInput.Focus()
+			b.WriteString("  " + focusStyle.Render("Path:     ") + m.pathInput.View() + "\n")
+		} else {
+			m.pathInput.Blur()
+			b.WriteString("  " + normalStyle.Render("Path:     ") + m.pathInput.View() + "\n")
+		}
+
+		// Field 4: Is Login toggle
+		loginVal := "No"
+		if m.isLogin {
+			loginVal = "Yes"
+		}
+		if m.formFocus == 4 {
+			b.WriteString("  " + focusStyle.Render("Is Login: ") + focusStyle.Render("> "+loginVal) + "  " + mutedStyle.Render("(enter to toggle)") + "\n")
+		} else {
+			b.WriteString("  " + normalStyle.Render("Is Login: ") + loginVal + "\n")
+		}
+
+		// Field 5: Token Path (only when IsLogin)
+		if m.isLogin {
+			if m.formFocus == 5 {
+				m.tokenPathInput.Focus()
+				b.WriteString("  " + focusStyle.Render("TokenPath: ") + m.tokenPathInput.View() + "\n")
+			} else {
+				m.tokenPathInput.Blur()
+				b.WriteString("  " + normalStyle.Render("TokenPath: ") + m.tokenPathInput.View() + "\n")
+			}
+		}
+
+		// Headers
+		headerDisplay := "press enter to add"
+		if len(m.headerKV) > 0 {
+			var parts []string
+			for _, kv := range m.headerKV {
+				parts = append(parts, kv.Key+"="+kv.Value)
+			}
+			headerDisplay = strings.Join(parts, ", ")
+			if len(headerDisplay) > 50 {
+				headerDisplay = headerDisplay[:47] + "..."
+			}
+		}
+		if m.formFocus == 6 {
+			b.WriteString("  " + focusStyle.Render("Headers:  ") + focusStyle.Render(headerDisplay) + "\n")
+		} else {
+			b.WriteString("  " + normalStyle.Render("Headers:  ") + mutedStyle.Render(headerDisplay) + "\n")
+		}
+
+		// Params
+		paramDisplay := "press enter to add"
+		if len(m.paramKV) > 0 {
+			var parts []string
+			for _, kv := range m.paramKV {
+				parts = append(parts, kv.Key+"="+kv.Value)
+			}
+			paramDisplay = strings.Join(parts, ", ")
+			if len(paramDisplay) > 50 {
+				paramDisplay = paramDisplay[:47] + "..."
+			}
+		}
+		if m.formFocus == 7 {
+			b.WriteString("  " + focusStyle.Render("Params:   ") + focusStyle.Render(paramDisplay) + "\n")
+		} else {
+			b.WriteString("  " + normalStyle.Render("Params:   ") + mutedStyle.Render(paramDisplay) + "\n")
+		}
+
+		// Field 8: Body (only for POST/PUT/PATCH)
+		methodUpper := strings.ToUpper(m.methodName)
+		if methodUpper == "POST" || methodUpper == "PUT" || methodUpper == "PATCH" {
+			if m.formFocus == 8 && m.bodyEditMode {
+				b.WriteString("  " + focusStyle.Render("Body:     ") + "\n\n")
+				ta := m.bodyInput.View()
+				taStyle := lipgloss.NewStyle().
+					Border(lipgloss.RoundedBorder()).
+					BorderForeground(styles.ColorPrimary).
+					Padding(0, 1)
+				b.WriteString(taStyle.Render(ta))
+				b.WriteString("\n")
+			} else if m.formFocus == 8 {
+				preview := m.bodyInput.Value()
+				if preview == "" {
+					preview = "(press enter to edit)"
+				} else if len(preview) > 60 {
+					preview = preview[:57] + "..."
+				}
+				b.WriteString("  " + focusStyle.Render("Body:     ") + mutedStyle.Render(preview) + "\n")
+			} else {
+				preview := m.bodyInput.Value()
+				if preview == "" {
+					preview = "-"
+				} else if len(preview) > 60 {
+					preview = preview[:57] + "..."
+				}
+				b.WriteString("  " + normalStyle.Render("Body:     ") + mutedStyle.Render(preview) + "\n")
+			}
+		}
+	}
+
+	// URL form: show URL field (field 1)
+	if m.isURLForm {
+		if m.formFocus == 1 {
+			m.pathInput.Focus()
+			m.pathInput.Placeholder = "http://localhost:8080"
+			b.WriteString("  " + focusStyle.Render("URL:      ") + m.pathInput.View() + "\n")
+		} else {
+			m.pathInput.Blur()
+			b.WriteString("  " + normalStyle.Render("URL:      ") + m.pathInput.View() + "\n")
+		}
+	}
+
+	if m.formError != "" {
+		b.WriteString("\n  " + formatErrorMsg(m.formError) + "\n")
+	}
+
+	b.WriteString("\n")
+
+	if m.bodyEditMode {
+		b.WriteString("  " + styles.InlineHelp(
+			styles.HelpItem("esc", "exit edit"),
+			styles.HelpItem("↑ ↓", "field"),
+			styles.HelpItem("ctrl+f", "format"),
+			styles.HelpItem("ctrl+s", "save"),
+		))
+	} else {
+		b.WriteString("  " + styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↑ ↓", "field"),
+			styles.HelpItem("↵", "select/toggle"),
+			styles.HelpItem("ctrl+s", "save"),
+		))
+	}
+
+	return b.String()
+}
+
+// ── KV Builder (for Headers and Params) ──────────────────────────────────────
+
+func (m *RequestOpsModel) enterKVBuilder(target string) {
+	m.kvBuilding = true
+	m.kvTarget = target
+	m.kvPhase = 0
+	m.kvDeleteArmed = false
+	m.kvPairs = nil
+
+	if target == "headers" {
+		m.kvPairs = make([][2]string, len(m.headerKV))
+		for i, kv := range m.headerKV {
+			m.kvPairs[i] = [2]string{kv.Key, kv.Value}
+		}
+	} else {
+		m.kvPairs = make([][2]string, len(m.paramKV))
+		for i, kv := range m.paramKV {
+			m.kvPairs[i] = [2]string{kv.Key, kv.Value}
+		}
+	}
+
+	m.varPromptInput.SetValue("")
+	m.varPromptInput.Focus()
+	m.varPromptInput.Placeholder = "key name (leave empty to finish)"
+	m.varPromptInput.CursorEnd()
+}
+
+func (m *RequestOpsModel) updateKVBuilder(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.kvBuilding = false
+		m.kvPairs = nil
+		m.varPromptInput.SetValue("")
+		m.varPromptInput.Blur()
+		return m, nil
+
+	case "enter":
+		val := strings.TrimSpace(m.varPromptInput.Value())
+		m.varPromptInput.SetValue("")
+
+		if m.kvPhase == 0 {
+			if val == "" {
+				// Finish builder
+				m.finishKVBuilder()
+				return m, nil
+			}
+			m.kvPairs = append(m.kvPairs, [2]string{val, ""})
+			m.kvPhase = 1
+			m.varPromptInput.Placeholder = "value for " + val
+			m.varPromptInput.CursorEnd()
+		} else {
+			if len(m.kvPairs) > 0 {
+				m.kvPairs[len(m.kvPairs)-1][1] = val
+			}
+			m.kvPhase = 0
+			m.varPromptInput.Placeholder = "key name (leave empty to finish)"
+			m.varPromptInput.CursorEnd()
+		}
+		m.kvDeleteArmed = false
+		return m, nil
+
+	case "ctrl+d":
+		if len(m.kvPairs) == 0 || m.kvPhase != 0 {
+			m.kvDeleteArmed = false
+			break
+		}
+		if m.kvDeleteArmed {
+			m.kvPairs = m.kvPairs[:len(m.kvPairs)-1]
+			m.kvDeleteArmed = false
+		} else {
+			m.kvDeleteArmed = true
+		}
+		return m, nil
+
+	default:
+		m.kvDeleteArmed = false
+		if m.varPromptInput.Focused() {
+			var cmd tea.Cmd
+			m.varPromptInput, cmd = m.varPromptInput.Update(msg)
+			return m, cmd
+		}
+	}
+	return m, nil
+}
+
+func (m *RequestOpsModel) finishKVBuilder() {
+	kvs := make([]config.RequestKV, len(m.kvPairs))
+	for i, p := range m.kvPairs {
+		kvs[i] = config.RequestKV{Key: p[0], Value: p[1]}
+	}
+	if m.kvTarget == "headers" {
+		m.headerKV = kvs
+	} else {
+		m.paramKV = kvs
+	}
+	m.kvBuilding = false
+	m.kvPairs = nil
+	m.varPromptInput.SetValue("")
+	m.varPromptInput.Blur()
+}
+
+func (m *RequestOpsModel) viewKVBuilder() string {
+	var b strings.Builder
+	target := "Headers"
+	if m.kvTarget == "params" {
+		target = "Params"
+	}
+	b.WriteString(styles.StyleSubtitle.Render("  "+target) + "\n\n")
+
+	pairStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent)
+	if len(m.kvPairs) > 0 {
+		b.WriteString("  " + styles.StyleHelp.Render("Current pairs:") + "\n")
+		for _, p := range m.kvPairs {
+			b.WriteString("    " + pairStyle.Render(p[0]) + "  →  " + p[1] + "\n")
+		}
+		b.WriteString("\n")
+	}
+
+	promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	if m.kvPhase == 0 {
+		b.WriteString("  " + promptStyle.Render("▸ Key") + "  (leave empty to finish)\n\n")
+	} else {
+		k := m.kvPairs[len(m.kvPairs)-1][0]
+		b.WriteString("  " + promptStyle.Render("▸ Value for "+k) + "\n\n")
+	}
+	b.WriteString("  " + m.varPromptInput.View() + "\n")
+
+	if m.kvDeleteArmed {
+		b.WriteString("\n" + styles.StyleError.Render("  Press ctrl+d again to remove last pair") + "\n")
+	}
+
+	helpItems := []styles.HelpItemResult{
+		styles.HelpItem("esc", "cancel"),
+		styles.HelpItem("↵", "confirm"),
+	}
+	if len(m.kvPairs) > 0 && m.kvPhase == 0 {
+		helpItems = append(helpItems, styles.HelpItem("ctrl+d ctrl+d", "delete last"))
+	}
+	b.WriteString("\n  " + styles.InlineHelp(helpItems...))
+	return b.String()
+}
+
+// ── Variable prompt ───────────────────────────────────────────────────────────
+
+// varRe matches {var_name} patterns (but not {token}).
+var varRe = regexp.MustCompile(`\{(\w+)\}`)
+
+func (m *RequestOpsModel) startVarPrompt(req config.RequestDef) (tea.Model, tea.Cmd) {
+	env := m.currentEnv()
+	if env == nil {
+		m.screen = reqScreenList
+		return m, nil
+	}
+
+	// Collect all {var} references from body, headers, params, path
+	allRefs := req.VariableRefs
+	textsToScan := []string{req.Path, req.Body}
+	for _, h := range req.Headers {
+		textsToScan = append(textsToScan, h.Key, h.Value)
+	}
+	for _, p := range req.Params {
+		textsToScan = append(textsToScan, p.Key, p.Value)
+	}
+	for _, text := range textsToScan {
+		matches := varRe.FindAllStringSubmatch(text, -1)
+		for _, match := range matches {
+			name := match[1]
+			if name == "token" {
+				continue
+			}
+			found := false
+			for _, ref := range allRefs {
+				if ref == name {
+					found = true
+					break
+				}
+			}
+			if !found {
+				allRefs = append(allRefs, name)
+			}
+		}
+	}
+
+	if len(allRefs) == 0 {
+		// No variables needed, execute directly
+		return m.executeRequest(req)
+	}
+
+	// Initialize prompt values
+	m.varPromptValues = make(map[string]string)
+	for _, name := range allRefs {
+		// Check if already has a value in env.Variables
+		for _, ev := range env.Variables {
+			if ev.Name == name {
+				m.varPromptValues[name] = ev.Value
+				break
+			}
+		}
+	}
+
+	m.varPromptIdx = 0
+	m.screen = reqScreenVarPrompt
+	m.refreshVarPromptInput()
+
+	// Store the request to execute later
+	// We'll use pendingOps as a temporary holder for the request definition
+	return m, nil
+}
+
+func (m *RequestOpsModel) refreshVarPromptInput() {
+	env := m.currentEnv()
+	if env == nil || m.varPromptIdx >= len(m.varPromptValues) {
+		return
+	}
+	// Get the current variable name
+	i := 0
+	for name := range m.varPromptValues {
+		if i == m.varPromptIdx {
+			m.varPromptInput.SetValue("")
+			m.varPromptInput.Placeholder = name
+			m.varPromptInput.Focus()
+			m.varPromptInput.CursorEnd()
+			return
+		}
+		i++
+	}
+}
+
+// varPromptNames returns the ordered list of variable names.
+func (m *RequestOpsModel) varPromptNames() []string {
+	var names []string
+	for name := range m.varPromptValues {
+		names = append(names, name)
+	}
+	return names
+}
+
+func (m *RequestOpsModel) updateVarPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
+	keyMsg, isKey := msg.(tea.KeyMsg)
+	if !isKey {
+		var cmd tea.Cmd
+		m.varPromptInput, cmd = m.varPromptInput.Update(keyMsg)
+		return m, cmd
+	}
+
+	names := m.varPromptNames()
+	if m.varPromptIdx >= len(names) {
+		m.screen = reqScreenList
+		return m, nil
+	}
+
+	switch keyMsg.String() {
+	case "esc":
+		m.screen = reqScreenList
+		m.varPromptValues = nil
+		return m, nil
+
+	case "up":
+		if m.varPromptIdx > 0 {
+			// Save current value
+			val := strings.TrimSpace(m.varPromptInput.Value())
+			names[m.varPromptIdx] = names[m.varPromptIdx] // no-op, just for clarity
+			m.varPromptValues[names[m.varPromptIdx]] = val
+			m.varPromptIdx--
+			m.refreshVarPromptInput()
+		}
+		return m, nil
+
+	case "down":
+		if m.varPromptIdx < len(names)-1 {
+			val := strings.TrimSpace(m.varPromptInput.Value())
+			m.varPromptValues[names[m.varPromptIdx]] = val
+			m.varPromptIdx++
+			m.refreshVarPromptInput()
+		}
+		return m, nil
+
+	case "enter":
+		val := strings.TrimSpace(m.varPromptInput.Value())
+		// If user typed nothing and there's an existing value, keep existing
+		if val == "" {
+			if existing, ok := m.varPromptValues[names[m.varPromptIdx]]; ok && existing != "" {
+				val = existing
+			}
+		}
+		m.varPromptValues[names[m.varPromptIdx]] = val
+		m.varPromptIdx++
+		if m.varPromptIdx >= len(names) {
+			// All variables collected — execute
+			return m.executeRequestFromPrompt()
+		}
+		m.refreshVarPromptInput()
+		return m, nil
+
+	case "r":
+		// Re-prompt all variables
+		m.varPromptIdx = 0
+		m.refreshVarPromptInput()
+		return m, nil
+	}
+
+	// Delegate to input
+	var cmd tea.Cmd
+	m.varPromptInput, cmd = m.varPromptInput.Update(keyMsg)
+	return m, cmd
+}
+
+func (m *RequestOpsModel) viewVarPrompt() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(styles.StyleTitle.Render(fmt.Sprintf(" Request Ops — %s / %s ", m.profile.Name, m.envName)))
+	b.WriteString("\n\n")
+
+	b.WriteString(styles.StyleSubtitle.Render("  Enter variable values") + "\n\n")
+
+	names := m.varPromptNames()
+	cursorStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	filledStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	emptyStyle := styles.StyleSubtitle
+
+	linePad := lipgloss.NewStyle().Width(60)
+
+	env := m.currentEnv()
+
+	for i, name := range names {
+		if i == m.varPromptIdx {
+			line := "  " + cursorStyle.Render("> "+name+"  ") + m.varPromptInput.View()
+			b.WriteString(linePad.Render(line) + "\n")
+		} else if v, ok := m.varPromptValues[name]; ok && v != "" {
+			display := v
+			if len(display) > 40 {
+				display = display[:37] + "..."
+			}
+			line := "    " + name + "  " + filledStyle.Render(display)
+			b.WriteString(linePad.Render(line) + "\n")
+		} else {
+			line := "    " + name + "  " + emptyStyle.Render("(no value)")
+			b.WriteString(linePad.Render(line) + "\n")
+		}
+	}
+
+	b.WriteString("\n")
+
+	// Show existing value info
+	if m.varPromptIdx < len(names) {
+		currentName := names[m.varPromptIdx]
+		if env != nil {
+			for _, ev := range env.Variables {
+				if ev.Name == currentName && ev.Value != "" {
+					b.WriteString("  " + emptyStyle.Render(fmt.Sprintf("Existing value: %s", ev.Value)) + "\n\n")
+					break
+				}
+			}
+		}
+	}
+
+	b.WriteString("  " + styles.InlineHelp(
+		styles.HelpItem("esc", "cancel"),
+		styles.HelpItem("↑ ↓", "navigate"),
+		styles.HelpItem("↵", "next"),
+		styles.HelpItem("r", "re-prompt all"),
+	))
+	return b.String()
+}
+
+// ── HTTP Execution ────────────────────────────────────────────────────────────
+
+func (m *RequestOpsModel) executeRequestFromPrompt() (tea.Model, tea.Cmd) {
+	env := m.currentEnv()
+	if env == nil {
+		m.screen = reqScreenList
+		return m, nil
+	}
+
+	// Find which request we're executing (from the list cursor)
+	if m.listCursor >= len(m.listItems) {
+		m.screen = reqScreenList
+		return m, nil
+	}
+	item := m.listItems[m.listCursor]
+	if item.kind != reqItemRequest || item.reqIdx >= len(env.Requests) {
+		m.screen = reqScreenList
+		return m, nil
+	}
+
+	req := env.Requests[item.reqIdx]
+	return m.doExecuteRequest(req)
+}
+
+func (m *RequestOpsModel) executeRequest(req config.RequestDef) (tea.Model, tea.Cmd) {
+	m.screen = reqScreenList
+	return m.doExecuteRequest(req)
+}
+
+func (m *RequestOpsModel) doExecuteRequest(req config.RequestDef) (tea.Model, tea.Cmd) {
+	env := m.currentEnv()
+	if env == nil {
+		m.screen = reqScreenList
+		return m, nil
+	}
+
+	// Find base URL
+	var baseURL string
+	for _, bu := range env.BaseURLs {
+		if bu.Name == req.BaseURLName {
+			baseURL = bu.URL
+			break
+		}
+	}
+	if baseURL == "" {
+		m.screen = reqScreenList
+		m.listItems = m.buildListItems()
+		return m, nil
+	}
+
+	// Get token
+	token := ""
+	for _, ev := range env.Variables {
+		if ev.Name == "_token" {
+			token = ev.Value
+			break
+		}
+	}
+
+	// Build request
+	fullURL := strings.TrimRight(baseURL, "/") + req.Path
+
+	// Substitute variables
+	vars := m.varPromptValues
+	if vars == nil {
+		vars = make(map[string]string)
+	}
+
+	// Add query params
+	if len(req.Params) > 0 {
+		var paramParts []string
+		for _, p := range req.Params {
+			key := m.substituteVars(p.Key, vars, token)
+			val := m.substituteVars(p.Value, vars, token)
+			paramParts = append(paramParts, key+"="+val)
+		}
+		fullURL += "?" + strings.Join(paramParts, "&")
+	}
+
+	// Build body
+	var bodyReader io.Reader
+	if req.Body != "" {
+		substitutedBody := m.substituteVars(req.Body, vars, token)
+		bodyReader = bytes.NewReader([]byte(substitutedBody))
+	}
+
+	httpReq, err := http.NewRequest(req.Method, fullURL, bodyReader)
+	if err != nil {
+		m.screen = reqScreenList
+		m.listItems = m.buildListItems()
+		return m, nil
+	}
+
+	// Add headers
+	for _, h := range req.Headers {
+		key := m.substituteVars(h.Key, vars, token)
+		val := m.substituteVars(h.Value, vars, token)
+		httpReq.Header.Set(key, val)
+	}
+	if req.Body != "" && httpReq.Header.Get("Content-Type") == "" {
+		httpReq.Header.Set("Content-Type", "application/json")
+	}
+	label := req.Name
+	m.pendingOps[label] = "running"
+
+	return m, tea.Batch(
+		func() tea.Msg {
+			client := &http.Client{Timeout: 10 * time.Second}
+			resp, err := client.Do(httpReq)
+			if err != nil {
+				return requestOpsDoneMsg{err: fmt.Errorf("request failed: %w", err)}
+			}
+			defer resp.Body.Close()
+
+			respData, _ := io.ReadAll(resp.Body)
+
+			// If login request, extract token
+			if req.IsLogin && req.TokenPath != "" && len(respData) > 0 {
+				extracted := extractTokenFromJSON(respData, req.TokenPath)
+				if extracted != "" {
+					// Store token in env.Variables
+					found := false
+					for i, ev := range env.Variables {
+						if ev.Name == "_token" {
+							env.Variables[i].Value = extracted
+							found = true
+							break
+						}
+					}
+					if !found {
+						env.Variables = append(env.Variables, config.RequestEnvVar{
+							Name:  "_token",
+							Value: extracted,
+						})
+					}
+					// Persist
+					_ = m.cfg.UpdateProfile(*m.profile)
+				}
+			}
+
+			// Format response
+			statusLine := fmt.Sprintf("HTTP %d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
+			if len(respData) > 0 {
+				var pretty bytes.Buffer
+				if json.Indent(&pretty, respData, "", "  ") == nil {
+					return requestOpsDoneMsg{result: statusLine + "\n\n" + pretty.String()}
+				}
+				return requestOpsDoneMsg{result: statusLine + "\n\n" + string(respData)}
+			}
+			return requestOpsDoneMsg{result: statusLine}
+		},
+		spinnerCmd(),
+	)
+}
+
+// ── Substitution helpers ──────────────────────────────────────────────────────
+
+func (m *RequestOpsModel) substituteVars(s string, vars map[string]string, token string) string {
+	result := s
+	for k, v := range vars {
+		result = strings.ReplaceAll(result, "{"+k+"}", v)
+	}
+	result = strings.ReplaceAll(result, "{token}", token)
+	return result
+}
+
+func extractTokenFromJSON(data []byte, dotPath string) string {
+	if dotPath == "" {
+		return ""
+	}
+	var raw interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return ""
+	}
+	parts := strings.Split(dotPath, ".")
+	current := raw
+	for _, part := range parts {
+		switch v := current.(type) {
+		case map[string]interface{}:
+			val, ok := v[part]
+			if !ok {
+				return ""
+			}
+			current = val
+		default:
+			return ""
+		}
+	}
+	switch v := current.(type) {
+	case string:
+		return v
+	case float64:
+		return fmt.Sprintf("%g", v)
+	case bool:
+		return fmt.Sprintf("%t", v)
+	default:
+		b, _ := json.Marshal(v)
+		return string(b)
+	}
+}
+
+// ── View dispatch ─────────────────────────────────────────────────────────────
+
+func (m *RequestOpsModel) View() string {
+	switch m.screen {
+	case reqScreenCreateForm, reqScreenEditForm:
+		if m.kvBuilding {
+			return m.viewKVBuilder()
+		}
+		return m.viewForm()
+	case reqScreenVarPrompt:
+		return m.viewVarPrompt()
+	case reqScreenResult:
+		return m.viewResult()
+	case reqScreenAddEnv:
+		return m.viewAddEnv()
+	case reqScreenConfirmDelete:
+		return m.viewConfirmDelete()
+	default:
+		return m.viewList()
+	}
+}
+
+func (m *RequestOpsModel) viewResult() string {
+	if !m.viewingResult {
+		return m.viewList()
+	}
+	scrollHint := ""
+	atTop := m.resultViewport.AtTop()
+	atBottom := m.resultViewport.AtBottom()
+	switch {
+	case !atTop && !atBottom:
+		scrollHint = "\n  " + styles.StyleHelp.Render("▲ up  ▼ down") + "\n"
+	case !atTop:
+		scrollHint = "\n  " + styles.StyleHelp.Render("▲ up") + "\n"
+	case !atBottom:
+		scrollHint = "\n  " + styles.StyleHelp.Render("▼ down") + "\n"
+	}
+	titleLine := styles.StyleHeader.Render("  " + m.resultTitle + "  —  result")
+	return titleLine + "\n\n" + m.resultViewport.View() + scrollHint + "\n  " + styles.StyleHelp.Render("press any key to close")
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+func (m *RequestOpsModel) renderSpinnerDot(op string) string {
+	return opsRenderSpinnerDot(m.spinnerFrame, op)
+}
+
+// renderMethodBadge renders a colored badge for an HTTP method.
+func renderMethodBadge(method string) string {
+	var color lipgloss.TerminalColor
+	switch method {
+	case "GET":
+		color = styles.ColorPrimary
+	case "POST":
+		color = styles.ColorAccent
+	case "PUT":
+		color = styles.ColorCyan
+	case "DELETE":
+		color = lipgloss.Color("#FF5555") // red
+	case "PATCH":
+		color = styles.ColorCyan
+	default:
+		color = styles.ColorMuted
+	}
+	return lipgloss.NewStyle().
+		Foreground(color).
+		Bold(true).
+		Render(strings.ToUpper(method))
+}

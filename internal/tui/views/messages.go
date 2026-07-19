@@ -17,6 +17,7 @@ const (
 	NavDBOps
 	NavQueueOps
 	NavMockOps
+	NavRequestOps
 	NavErrors
 )
 
@@ -46,6 +47,12 @@ type queueOpsDoneMsg struct {
 
 // mockOpsDoneMsg is sent when a MockServer operation action completes.
 type mockOpsDoneMsg struct {
+	result string
+	err    error
+}
+
+// requestOpsDoneMsg is sent when a Request Ops operation completes.
+type requestOpsDoneMsg struct {
 	result string
 	err    error
 }

@@ -44,6 +44,7 @@ type Profile struct {
 	UpdatedAt           time.Time     `yaml:"updated_at"`
 	Environments        []Environment `yaml:"environments"`
 	ActiveEnv           string        `yaml:"active_env"`
+	RequestEnvs         []RequestEnv  `yaml:"request_envs,omitempty"`
 	LegacyDBOpsMigrated bool          `yaml:"legacy_db_ops_migrated,omitempty"`
 	ConfigVersion       int           `yaml:"config_version,omitempty"` // 0 = legacy/plaintext, 1 = encrypted passwords
 }
@@ -260,6 +261,50 @@ func (q QueueSyncEnv) Validate() map[string]string {
 // DumpDir returns the directory path for custom action output of this queue sync environment.
 func (q QueueSyncEnv) DumpDir(profileName, envName, serviceName string) string {
 	return filepath.Join(ProfileDir(profileName), envName, "queue-ops", serviceName, q.Name)
+}
+
+// ── Request Ops types ────────────────────────────────────────────────────────
+
+// RequestEnv is an independent environment for Request Ops (separate from Docker environments).
+// Each RequestEnv has its own base URLs, requests, and variables.
+type RequestEnv struct {
+	Name       string          `yaml:"name"`                  // e.g. "local", "dev"
+	BaseURLs   []RequestBaseURL `yaml:"base_urls,omitempty"`
+	Requests   []RequestDef    `yaml:"requests,omitempty"`
+	Variables  []RequestEnvVar `yaml:"variables,omitempty"`
+}
+
+// RequestBaseURL defines a base URL within a RequestEnv.
+type RequestBaseURL struct {
+	Name string `yaml:"name"` // display name, e.g. "API Gateway", "Auth Service"
+	URL  string `yaml:"url"`  // e.g. http://localhost:8094
+}
+
+// RequestDef defines an HTTP request within an environment.
+type RequestDef struct {
+	Name         string            `yaml:"name"`
+	Method       string            `yaml:"method"`        // GET, POST, PUT, DELETE, PATCH, etc.
+	BaseURLName  string            `yaml:"base_url_name"` // references RequestBaseURL.Name
+	Path         string            `yaml:"path"`          // e.g. /api/v1/users
+	IsLogin      bool              `yaml:"is_login,omitempty"`
+	TokenPath    string            `yaml:"token_path,omitempty"`    // JSON path for token extraction, e.g. data.token
+	Headers      []RequestKV       `yaml:"headers,omitempty"`
+	Params       []RequestKV       `yaml:"params,omitempty"`
+	Body         string            `yaml:"body,omitempty"`
+	VariableRefs []string          `yaml:"variable_refs,omitempty"` // [{var_name}] referenced in body/headers/params
+}
+
+// RequestKV is a key-value pair for headers or query params.
+type RequestKV struct {
+	Key   string `yaml:"key"`
+	Value string `yaml:"value"`
+}
+
+// RequestEnvVar defines an environment-level variable for Request Ops.
+// Values can reference {token} or be literal strings.
+type RequestEnvVar struct {
+	Name  string `yaml:"name"`            // e.g. "session_id", "pepe"
+	Value string `yaml:"value,omitempty"` // current value; may be empty
 }
 
 // PortForward defines a K8s port-forward configuration.

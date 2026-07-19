@@ -326,7 +326,7 @@ func (m *ProfileViewModel) executeDockerAction(action string) tea.Cmd {
 }
 
 var profileKeys = struct {
-	back, up, down, enter, start, stop, addSvc, svcDelete, dbOps, queueOps, mockOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort, viewConfig, stats, pull, shell, tab key.Binding
+	back, up, down, enter, start, stop, addSvc, svcDelete, dbOps, queueOps, mockOps, requestOps, switchEnvLeft, switchEnvRight, addEnv, envDelete, resetVol, k8sDiscover, editPort, viewConfig, stats, pull, shell, tab key.Binding
 }{
 	back:           key.NewBinding(key.WithKeys("esc")),
 	up:             key.NewBinding(key.WithKeys("up")),
@@ -339,6 +339,7 @@ var profileKeys = struct {
 	dbOps:          key.NewBinding(key.WithKeys("o")),
 	queueOps:       key.NewBinding(key.WithKeys("q")),
 	mockOps:        key.NewBinding(key.WithKeys("m")),
+	requestOps:     key.NewBinding(key.WithKeys("u")),
 	switchEnvLeft:  key.NewBinding(key.WithKeys("left")),
 	switchEnvRight: key.NewBinding(key.WithKeys("right")),
 	addEnv:         key.NewBinding(key.WithKeys("n")),
@@ -873,6 +874,30 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					envName = m.profile.Environments[m.activeEnv].Name
 				}
 				return m, func() tea.Msg { return NavigateTo{Screen: NavErrors, ProfileName: m.profile.Name, EnvName: envName} }
+			}
+			// U → navigate to Request Ops
+			if msg.String() == "u" {
+				m.showingShortcuts = false
+				m.deleteArmed = false
+				m.deleteEnvArmed = false
+				m.resetArmed = false
+				m.keyPending = ""
+				return m, func() tea.Msg {
+					return NavigateTo{Screen: NavRequestOps, ProfileName: m.profile.Name}
+				}
+			}
+			// D → arm env delete (dismissible from normal mode)
+			if msg.String() == "D" {
+				if len(m.profile.Environments) > 0 {
+					envName := m.profile.Environments[m.activeEnv].Name
+					if envName != "local" {
+						m.showingShortcuts = false
+						m.deleteEnvArmed = true
+						return m, nil
+					}
+				}
+				m.showingShortcuts = false
+				return m, nil
 			}
 			// Any other key → dismiss overlay (swallow the dismissing key,
 			// consistent with viewingService/viewingProcess/showStats overlays).
@@ -1652,6 +1677,18 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case key.Matches(msg, profileKeys.requestOps):
+			m.deleteArmed = false
+			m.deleteEnvArmed = false
+			m.resetArmed = false
+			m.keyPending = ""
+			return m, func() tea.Msg {
+				return NavigateTo{
+					Screen:      NavRequestOps,
+					ProfileName: m.profile.Name,
+				}
+			}
+
 		case key.Matches(msg, profileKeys.viewConfig):
 			m.keyPending = ""
 			m.deleteArmed = false
@@ -2243,11 +2280,17 @@ func (m *ProfileViewModel) View() string {
 	} else if m.inputtingEnv {
 		b.WriteString(styles.BackHelp())
 	} else {
-		b.WriteString(styles.BackHelp(
+		footerItems := []styles.HelpItemResult{
 			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("← →", "envs"),
 			styles.HelpItem("tab", "command"),
-		))
+		}
+		// Show D delete env hint when current env is non-local
+		env := m.currentEnv()
+		if env != nil && env.Name != "local" {
+			footerItems = append(footerItems, styles.HelpItem("D D", "delete env"))
+		}
+		b.WriteString(styles.BackHelp(footerItems...))
 	}
 
 	return b.String()
@@ -2847,6 +2890,7 @@ func (m *ProfileViewModel) renderShortcuts() string {
 		if len(m.profile.Environments) > 0 && m.currentEnv() != nil && m.currentEnv().Name != "local" {
 			stackItems = append(stackItems, pair{"D D", "delete env"})
 		}
+		stackItems = append(stackItems, pair{"u", "request ops"})
 		sections = append(sections, section("Env / Stack", stackItems))
 	} else {
 		svcs := m.currentEnvServices()
@@ -2911,6 +2955,7 @@ func (m *ProfileViewModel) renderShortcuts() string {
 		if m.extraEnvCount() < 3 {
 			stackItems = append(stackItems, pair{"n", "new env"})
 		}
+		stackItems = append(stackItems, pair{"u", "request ops"})
 		if len(m.profile.Environments) > 0 && env != nil && env.Name != "local" {
 			stackItems = append(stackItems, pair{"D D", "delete env"})
 		}

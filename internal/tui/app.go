@@ -23,6 +23,7 @@ const (
 	ScreenDBOps
 	ScreenQueueOps
 	ScreenMockOps
+	ScreenRequestOps
 	ScreenErrors
 )
 
@@ -43,6 +44,7 @@ type App struct {
 	dbOps       *views.DBOpsModel
 	queueOps    *views.QueueOpsModel
 	mockOps       *views.MockOpsModel
+	requestOps    *views.RequestOpsModel
 	err           string
 	errorRegistry *views.ErrorRegistry
 	errFlash      string
@@ -125,6 +127,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if a.screen != ScreenMockOps && a.mockOps != nil && a.mockOps.IsBusy() {
 			_, c := a.mockOps.Update(msg)
+			extra = append(extra, c)
+		}
+		if a.screen != ScreenRequestOps && a.requestOps != nil && a.requestOps.IsBusy() {
+			_, c := a.requestOps.Update(msg)
 			extra = append(extra, c)
 		}
 		if len(extra) > 0 {
@@ -228,6 +234,28 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+	case views.NavRequestOps:
+		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
+			a.screen = ScreenRequestOps
+			envName := nav.EnvName
+			// Default to first RequestEnv if no env specified or not found
+			if envName == "" {
+				if len(p.RequestEnvs) > 0 {
+					envName = p.RequestEnvs[0].Name
+				} else {
+					envName = "local"
+				}
+			}
+			if a.requestOps == nil || a.requestOps.EnvName() != envName {
+				a.requestOps = views.NewRequestOps(a.cfg, p, envName)
+				a.requestOps.SetSize(a.width, a.height)
+				return a, a.requestOps.Init()
+			}
+			a.requestOps.ReShow(a.cfg)
+			a.requestOps.SetSize(a.width, a.height)
+			return a, nil
+		}
+
 	case views.NavErrors:
 		a.screen = ScreenErrors
 		a.errorView = views.NewErrorList(a.errorRegistry.All(), nav.ProfileName, nav.EnvName)
@@ -282,6 +310,12 @@ func (a *App) updateActive(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, c := a.mockOps.Update(msg)
 		a.mockOps = m.(*views.MockOpsModel)
 		cmd = c
+	case ScreenRequestOps:
+		if a.requestOps != nil {
+			m, c := a.requestOps.Update(msg)
+			a.requestOps = m.(*views.RequestOpsModel)
+			cmd = c
+		}
 	case ScreenErrors:
 		if a.errorView != nil {
 			m, c := a.errorView.Update(msg)
@@ -371,6 +405,10 @@ func (a *App) breadcrumb() string {
 		if a.mockOps != nil {
 			return "profiles / " + a.mockOps.ProfileName() + " / " + a.mockOps.EnvName() + " / " + a.mockOps.ServiceName() + " / MockServer Ops"
 		}
+	case ScreenRequestOps:
+		if a.requestOps != nil {
+			return "profiles / " + a.requestOps.ProfileName() + " / " + a.requestOps.EnvName() + " / Request Ops"
+		}
 	case ScreenErrors:
 		return "errors"
 	}
@@ -393,6 +431,10 @@ func (a *App) renderBody() string {
 		return a.queueOps.View()
 	case ScreenMockOps:
 		return a.mockOps.View()
+	case ScreenRequestOps:
+		if a.requestOps != nil {
+			return a.requestOps.View()
+		}
 	case ScreenErrors:
 		if a.errorView != nil {
 			return a.errorView.View()
