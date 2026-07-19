@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -298,7 +299,32 @@ func (a *App) View() string {
 	body := a.renderBody()
 	footer := a.renderFooter()
 	sep := styles.Separator(a.width)
-	return lipgloss.JoinVertical(lipgloss.Left, header, sep, body, "\n", footer)
+	// Safety net: truncate any line that exceeds terminal width.
+	body = styles.TruncateLines(body, a.width)
+
+	// Build the full output and pad with blank lines to fill the terminal.
+	// Bubbletea uses a diff renderer — lines not overwritten by the new
+	// render stay visible, causing ghost artifacts when switching views.
+	// Padding ensures every terminal line is written on each frame.
+	var out strings.Builder
+	out.WriteString(header)
+	out.WriteString("\n")
+	out.WriteString(sep)
+	out.WriteString("\n")
+	out.WriteString(body)
+	// Count how many lines we've written so far.
+	lines := strings.Count(out.String(), "\n") + 1
+	// Footer will add ~3 more lines (sep + quit + possible error).
+	footerLines := 3
+	needed := a.height - footerLines
+	if needed > lines {
+		for i := 0; i < needed-lines; i++ {
+			out.WriteString("\n")
+		}
+	}
+	out.WriteString("\n")
+	out.WriteString(footer)
+	return out.String()
 }
 
 func (a *App) renderHeader() string {

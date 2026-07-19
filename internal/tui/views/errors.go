@@ -96,7 +96,7 @@ type ErrorListModel struct {
 	errors     []AppError
 	cursor     int
 	width      int
-	height      int
+	height     int
 	viewport   viewport.Model
 	showDetail bool
 	profileName string // profile to return to on esc
@@ -106,7 +106,7 @@ type ErrorListModel struct {
 // NewErrorList creates an error list view from a snapshot of errors.
 func NewErrorList(errors []AppError, profileName, envName string) *ErrorListModel {
 	vp := viewport.New(0, 0) // sized later via SetSize
-	vp.Style = lipgloss.NewStyle().PaddingLeft(2)
+	vp.Style = lipgloss.NewStyle().PaddingLeft(0)
 	return &ErrorListModel{
 		errors:      errors,
 		viewport:    vp,
@@ -128,11 +128,9 @@ func (m *ErrorListModel) Init() tea.Cmd { return nil }
 
 func (m *ErrorListModel) SetSize(w, h int) {
 	m.width = w
-	m.height = max(0, h-5) // App chrome
-	// Viewport takes bottom 40% of available space when showing detail
-	vpHeight := int(float64(m.height) * 0.4)
-	m.viewport.Width = w - 4
-	m.viewport.Height = max(0, vpHeight-2)
+	m.height = max(0, h-4) // App chrome: header + separator + footer
+	m.viewport.Width = w
+	m.viewport.Height = m.height
 }
 
 func (m *ErrorListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -145,6 +143,7 @@ func (m *ErrorListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, errorKeys.esc):
 			if m.showDetail {
 				m.showDetail = false
+				m.viewport.GotoTop()
 				return m, nil
 			}
 			return m, func() tea.Msg {
@@ -158,47 +157,48 @@ func (m *ErrorListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, errorKeys.up):
 			if m.showDetail {
 				m.showDetail = false
+				m.viewport.GotoTop()
 			} else if m.cursor > 0 {
 				m.cursor--
 			}
+			m.scrollCursorIntoView()
 			return m, nil
 
 		case key.Matches(msg, errorKeys.down):
 			if m.showDetail {
 				m.showDetail = false
+				m.viewport.GotoTop()
 			} else if m.cursor < len(m.errors)-1 {
 				m.cursor++
 			}
+			m.scrollCursorIntoView()
 			return m, nil
 
 		case key.Matches(msg, errorKeys.enter):
 			if len(m.errors) > 0 {
 				m.showDetail = !m.showDetail
-				if m.showDetail && m.cursor < len(m.errors) {
-					err := m.errors[m.cursor]
-					detail := err.Message
-					if err.Detail != "" {
-						detail = err.Detail
-					}
-					content := fmt.Sprintf("[%s] %s\n\n%s",
-						err.Timestamp.Format("2006-01-02 15:04:05"),
-						err.Context,
-						detail)
-					m.viewport.SetContent(content)
+				if m.showDetail {
+					m.viewport.GotoTop()
 				}
 			}
 			return m, nil
 		}
 	}
 
-	// Handle viewport scrolling when detail is shown
-	if m.showDetail {
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m, cmd
-	}
-
 	return m, nil
+}
+
+// scrollCursorIntoView adjusts the viewport's Y offset so the cursor row is visible.
+// Row layout: separator(1) + header(1) + separator(1) + error rows (1 per error).
+func (m *ErrorListModel) scrollCursorIntoView() {
+	cursorRow := m.cursor + 3 // +3 for the 3 header lines above the first error
+	visible := m.height
+
+	if cursorRow < m.viewport.YOffset {
+		m.viewport.YOffset = cursorRow
+	} else if cursorRow >= m.viewport.YOffset+visible {
+		m.viewport.YOffset = cursorRow - visible + 1
+	}
 }
 
 func (m *ErrorListModel) View() string {
@@ -206,75 +206,92 @@ func (m *ErrorListModel) View() string {
 		return styles.StyleHelp.Render("\n  No errors recorded\n")
 	}
 
-	var b strings.Builder
-
-	// Table header
-	header := fmt.Sprintf("  %-20s %-20s %s", "DATE", "CONTEXT", "MESSAGE")
-	b.WriteString(lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true).Render(header))
-	b.WriteString("\n")
-	b.WriteString(styles.StyleHelp.Render("  " + strings.Repeat("─", m.width-4)))
-	b.WriteString("\n")
-
-	// Calculate visible rows (reserve space for detail if shown)
-	tableHeight := m.height
-	if m.showDetail {
-		tableHeight = m.height - m.viewport.Height - 3
-	}
-	if tableHeight < 3 {
-		tableHeight = 3
+	// Available content width (terminal width minus 2 indent on each side).
+	avail := m.width - 4
+	if avail < 20 {
+		avail = 20
 	}
 
-	// Render error rows
-	startRow := 0
-	if m.cursor >= tableHeight {
-		startRow = m.cursor - tableHeight + 1
+	// Build the full content as a single string, every line truncated to avail.
+	var content strings.Builder
+
+	// Separator line.
+	content.WriteString(strings.Repeat("─", avail))
+	content.WriteString("\n")
+
+	// Table header: DATE(10)  CONTEXT(up to 20)  MESSAGE(rest).
+	dateW := 10
+	ctxW := 20
+	overhead := dateW + 2 + ctxW + 2 // column widths + gaps
+	msgW := avail - overhead
+	if msgW < 10 {
+		msgW = 10
 	}
 
-	for i := startRow; i < len(m.errors) && i-startRow < tableHeight; i++ {
-		err := m.errors[i]
+	header := fmt.Sprintf("%-*s  %-*s  %s", dateW, "DATE", ctxW, "CONTEXT", "MESSAGE")
+	content.WriteString(header)
+	content.WriteString("\n")
+	content.WriteString(strings.Repeat("─", avail))
+	content.WriteString("\n")
+
+	// Render error rows, each line truncated.
+	for i, err := range m.errors {
 		cursor := "  "
 		if i == m.cursor {
 			cursor = "▸ "
 		}
 
 		date := err.Timestamp.Format("15:04:05")
-		context := err.Context
-		// Collapse multiline errors into a single line and truncate to fit.
+
+		ctx := err.Context
+		if len(ctx) > ctxW {
+			ctx = ctx[:ctxW-3] + "..."
+		}
+
 		msg := strings.ReplaceAll(err.Message, "\n", " ")
-		msg = strings.Join(strings.Fields(msg), " ") // collapse multiple spaces
-		// Reserve space: cursor(2) + date(20) + space + context(20) + space = 44
-		maxMsg := m.width - 44
-		if maxMsg < 10 {
-			maxMsg = 10
-		}
-		if len(msg) > maxMsg {
-			msg = msg[:maxMsg-3] + "..."
+		msg = strings.Join(strings.Fields(msg), " ")
+		if len(msg) > msgW {
+			msg = msg[:msgW-3] + "..."
 		}
 
-		row := fmt.Sprintf("%s%-20s %-20s %s", cursor, date, context, msg)
+		row := fmt.Sprintf("%s%-*s  %-*s  %s", cursor, dateW, date, ctxW, ctx, msg)
+		// Hard-truncate the entire row to avail (safety net).
+		if len(row) > avail {
+			row = row[:avail-3] + "..."
+		}
+
 		if i == m.cursor {
-			b.WriteString(lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true).Render(row))
+			content.WriteString(lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true).Render(row))
 		} else {
-			b.WriteString(row)
+			content.WriteString(row)
 		}
-		b.WriteString("\n")
+		content.WriteString("\n")
 	}
 
-	// Show detail viewport if expanded
+	// If detail is shown, append it below the table.
 	if m.showDetail && m.cursor < len(m.errors) {
-		b.WriteString("\n")
-		b.WriteString(styles.StyleHelp.Render("  ── Error Detail ──"))
-		b.WriteString("\n")
-		b.WriteString(m.viewport.View())
+		err := m.errors[m.cursor]
+		detail := err.Message
+		if err.Detail != "" {
+			detail = err.Detail
+		}
+		content.WriteString("\n")
+		content.WriteString(strings.Repeat("─", avail))
+		content.WriteString("\n")
+		content.WriteString(fmt.Sprintf("[%s] %s\n", err.Timestamp.Format("2006-01-02 15:04:05"), err.Context))
+		content.WriteString(strings.Repeat("─", avail))
+		content.WriteString("\n")
+		// Truncate each detail line to avail.
+		for _, line := range strings.Split(detail, "\n") {
+			if len(line) > avail {
+				line = line[:avail-3] + "..."
+			}
+			content.WriteString(line)
+			content.WriteString("\n")
+		}
 	}
 
-	// Footer help
-	b.WriteString("\n")
-	b.WriteString(styles.InlineHelp(
-		styles.HelpItem("↑ ↓", "navigate"),
-		styles.HelpItem("↵", "expand"),
-		styles.HelpItem("esc", "back"),
-	))
+	m.viewport.SetContent(content.String())
 
-	return b.String()
+	return m.viewport.View()
 }

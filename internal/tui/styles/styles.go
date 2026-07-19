@@ -257,6 +257,34 @@ func Separator(width int) string {
 		Render(strings.Repeat("─", width))
 }
 
+// TruncateLines hard-truncates every line in s so none exceeds maxW visible chars.
+// Uses lipgloss.Width() for correct Unicode + ANSI measurement.
+// Overflow lines get "..." appended. Returns s unchanged if maxW <= 0.
+func TruncateLines(s string, maxW int) string {
+	if maxW <= 0 {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if lipgloss.Width(line) > maxW {
+			// Truncate rune by rune until we fit.
+			runes := []rune(line)
+			var truncated []rune
+			width := 0
+			for _, r := range runes {
+				w := lipgloss.Width(string(r))
+				if width+w > maxW-3 {
+					break
+				}
+				truncated = append(truncated, r)
+				width += w
+			}
+			lines[i] = string(truncated) + "..."
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // ForwardDot returns a colored state indicator for port-forward states.
 func ForwardDot(state portforward.ForwardState) string {
 	var c lipgloss.Color
