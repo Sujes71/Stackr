@@ -42,7 +42,6 @@ const (
 	reqItemURL requestListItemKind = iota
 	reqItemRequest
 	reqItemAddURL
-	reqItemAddRequest
 )
 
 type requestListItem struct {
@@ -52,6 +51,10 @@ type requestListItem struct {
 	urlIdx   int
 	reqIdx   int
 	enabled  bool
+	// Tree hierarchy
+	isChild   bool // true if this is a child request under a folder
+	parentIdx int  // urlIdx of parent folder (for requests)
+	depth     int  // 0 = top level, 1 = child
 }
 
 // ── Supported HTTP methods ────────────────────────────────────────────────────
@@ -71,9 +74,14 @@ type RequestOpsModel struct {
 	activeEnv int
 
 	// List screen state
-	listCursor  int
-	deleteArmed bool
-	listItems   []requestListItem
+	listCursor       int
+	deleteArmed      bool
+	deleteArmedIsEnv bool   // true when D (env delete) is armed, false for d (item delete)
+	listItems        []requestListItem
+
+	// Tree state
+	expandedURLs map[int]bool // tracks which URL folders are expanded (key = urlIdx)
+	parentURLIdx int          // when creating a request from a folder context, pre-select this URL (-1 = none)
 
 	// Create/Edit form state
 	formFocus    int
@@ -142,6 +150,8 @@ func NewRequestOps(cfg *config.Config, p *config.Profile, envName string) *Reque
 		profile:        p,
 		envName:        envName,
 		pendingOps:     make(map[string]string),
+		expandedURLs:   make(map[int]bool),
+		parentURLIdx:   -1,
 		nameInput:      textinput.New(),
 		pathInput:      textinput.New(),
 		tokenPathInput: textinput.New(),
@@ -255,40 +265,35 @@ func (m *RequestOpsModel) buildListItems() []requestListItem {
 	}
 	var items []requestListItem
 
-	// Base URLs section header (implicit) + items
-	for i, bu := range env.BaseURLs {
-		items = append(items, requestListItem{
-			kind:     reqItemURL,
-			label:    bu.Name,
-			sublabel: bu.URL,
-			urlIdx:   i,
-			enabled:  true,
-		})
-	}
-	// + Add Base URL
-	items = append(items, requestListItem{
-		kind:    reqItemAddURL,
-		label:   "+ Add Base URL",
-		enabled: true,
-	})
-
-	// Requests section
-	hasURLs := len(env.BaseURLs) > 0
+	// Group requests by BaseURLName
+	reqsByURL := make(map[string][]int) // baseURLName -> []reqIdx
 	for i, req := range env.Requests {
-		items = append(items, requestListItem{
-			kind:     reqItemRequest,
-			label:    req.Name,
-			sublabel: req.Method + " " + req.Path,
-			reqIdx:   i,
-			enabled:  true,
-		})
-		_ = req
+		reqsByURL[req.BaseURLName] = append(reqsByURL[req.BaseURLName], i)
 	}
-	// + Add Request
+
+	// Render each Base URL as a folder
+	for i, bu := range env.BaseURLs {
+		expanded := m.expandedURLs[i]
+		items = append(items, requestListItem{
+			kind: reqItemURL, label: bu.Name, sublabel: bu.URL,
+			urlIdx: i, enabled: true, depth: 0,
+		})
+		if expanded {
+			for _, reqIdx := range reqsByURL[bu.Name] {
+				req := env.Requests[reqIdx]
+				items = append(items, requestListItem{
+					kind: reqItemRequest, label: req.Name,
+					sublabel: req.Method + " " + req.Path,
+					reqIdx: reqIdx, enabled: true,
+					isChild: true, parentIdx: i, depth: 1,
+				})
+			}
+		}
+	}
+
+	// + Add Endpoint Group at the end
 	items = append(items, requestListItem{
-		kind:    reqItemAddRequest,
-		label:   "+ Add Request",
-		enabled: hasURLs,
+		kind: reqItemAddURL, label: "+ Add Folder", enabled: true, depth: 0,
 	})
 
 	return items
@@ -418,12 +423,9 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.listCursor < len(m.listItems) {
 				item := m.listItems[m.listCursor]
 				switch item.kind {
-				case reqItemURL, reqItemAddURL:
-					return m.startCreateURL()
-				case reqItemRequest, reqItemAddRequest:
-					if item.enabled {
-						return m.startCreateRequest()
-					}
+				case reqItemURL:
+					return m.startCreateRequestForURL(item.urlIdx)
+				case reqItemAddURL:
 					return m.startCreateURL()
 				default:
 					return m.startCreateURL()
@@ -439,6 +441,7 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activeEnv = len(m.profile.RequestEnvs) - 1
 				}
 				m.envName = m.profile.RequestEnvs[m.activeEnv].Name
+				m.expandedURLs = make(map[int]bool)
 				m.listItems = m.buildListItems()
 				if m.listCursor >= len(m.listItems) {
 					m.listCursor = len(m.listItems) - 1
@@ -456,6 +459,7 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activeEnv = 0
 				}
 				m.envName = m.profile.RequestEnvs[m.activeEnv].Name
+				m.expandedURLs = make(map[int]bool)
 				m.listItems = m.buildListItems()
 				if m.listCursor >= len(m.listItems) {
 					m.listCursor = len(m.listItems) - 1
@@ -463,6 +467,30 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.listCursor < 0 {
 					m.listCursor = 0
 				}
+			}
+			return m, nil
+
+		// Expand all / Collapse all
+		case msg.String() == " ":
+			m.deleteArmed = false
+			env := m.currentEnv()
+			if env == nil || len(env.BaseURLs) == 0 {
+				break
+			}
+			// If any collapsed → expand all; if all expanded → collapse all
+			anyCollapsed := false
+			for i := range env.BaseURLs {
+				if !m.expandedURLs[i] {
+					anyCollapsed = true
+					break
+				}
+			}
+			for i := range env.BaseURLs {
+				m.expandedURLs[i] = anyCollapsed
+			}
+			m.listItems = m.buildListItems()
+			if m.listCursor >= len(m.listItems) {
+				m.listCursor = max(0, len(m.listItems)-1)
 			}
 			return m, nil
 
@@ -474,6 +502,7 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if !m.deleteArmed {
 				m.deleteArmed = true
+				m.deleteArmedIsEnv = true
 				return m, nil
 			}
 			// Second D: show confirmation screen
@@ -516,18 +545,21 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				switch item.kind {
-				case reqItemURL, reqItemRequest:
-					// Execute request or show URL detail
-					if item.kind == reqItemRequest {
-						env := m.currentEnv()
-						if env != nil && item.reqIdx < len(env.Requests) {
-							return m.startVarPrompt(env.Requests[item.reqIdx], false)
-						}
+				case reqItemURL:
+					// Toggle expand/collapse
+					m.expandedURLs[item.urlIdx] = !m.expandedURLs[item.urlIdx]
+					m.listItems = m.buildListItems()
+					if m.listCursor >= len(m.listItems) {
+						m.listCursor = max(0, len(m.listItems)-1)
+					}
+				case reqItemRequest:
+					// Execute request
+					env := m.currentEnv()
+					if env != nil && item.reqIdx < len(env.Requests) {
+						return m.startVarPrompt(env.Requests[item.reqIdx], false)
 					}
 				case reqItemAddURL:
 					return m.startCreateURL()
-				case reqItemAddRequest:
-					return m.startCreateRequest()
 				}
 			}
 
@@ -574,6 +606,7 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if !m.deleteArmed {
 					m.deleteArmed = true
+					m.deleteArmedIsEnv = false
 				} else {
 					m.deleteArmed = false
 					env := m.currentEnv()
@@ -583,7 +616,27 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 					switch item.kind {
 					case reqItemURL:
 						if item.urlIdx < len(env.BaseURLs) {
+							// Delete folder + all child requests
+							buName := env.BaseURLs[item.urlIdx].Name
+							var newReqs []config.RequestDef
+							for _, r := range env.Requests {
+								if r.BaseURLName != buName {
+									newReqs = append(newReqs, r)
+								}
+							}
+							env.Requests = newReqs
 							env.BaseURLs = append(env.BaseURLs[:item.urlIdx], env.BaseURLs[item.urlIdx+1:]...)
+							// Shift expandedURLs keys for indices after the deleted one
+							delete(m.expandedURLs, item.urlIdx)
+							newExpanded := make(map[int]bool)
+							for k, v := range m.expandedURLs {
+								if k > item.urlIdx {
+									newExpanded[k-1] = v
+								} else {
+									newExpanded[k] = v
+								}
+							}
+							m.expandedURLs = newExpanded
 							m.profile.UpdatedAt = time.Now()
 							if err := m.cfg.UpdateProfile(*m.profile); err != nil {
 								m.listItems = m.buildListItems()
@@ -653,7 +706,6 @@ func (m *RequestOpsModel) viewList() string {
 
 	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 	mutedStyle := styles.StyleSubtitle
-	groupHeaderStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 	cursorStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 
 	// Windowing
@@ -669,32 +721,9 @@ func (m *RequestOpsModel) viewList() string {
 		b.WriteString("\n")
 	}
 
-	// Render items with group headers
-	inURLSection := true
+	// Render hierarchical tree
 	for i := win.start; i < win.end; i++ {
 		item := m.listItems[i]
-
-		// Group header transitions
-		if item.kind == reqItemAddRequest && inURLSection {
-			b.WriteString("\n")
-			b.WriteString("  " + groupHeaderStyle.Render("Requests"))
-			b.WriteString("\n")
-			inURLSection = false
-		}
-		if item.kind == reqItemURL && i == win.start {
-			b.WriteString("  " + groupHeaderStyle.Render("Base URLs"))
-			b.WriteString("\n")
-		}
-		if item.kind == reqItemAddURL {
-			// No section header needed, just render the add item
-		}
-		if item.kind == reqItemRequest && inURLSection {
-			b.WriteString("\n")
-			b.WriteString("  " + groupHeaderStyle.Render("Requests"))
-			b.WriteString("\n")
-			inURLSection = false
-		}
-
 		isCursor := i == m.listCursor
 
 		if !item.enabled {
@@ -704,22 +733,29 @@ func (m *RequestOpsModel) viewList() string {
 
 		switch item.kind {
 		case reqItemURL:
+			// Folder with ▸ / ▾ icon
+			icon := "▸"
+			if m.expandedURLs[item.urlIdx] {
+				icon = "▾"
+			}
 			if isCursor {
-				b.WriteString(selStyle.Render(fmt.Sprintf("  > %s", item.label)) + "  " + mutedStyle.Render(item.sublabel) + "\n")
+				b.WriteString(selStyle.Render(fmt.Sprintf("  > %s %s", icon, item.label)) + "  " + mutedStyle.Render(item.sublabel) + "\n")
 			} else {
-				b.WriteString("    " + item.label + "  " + mutedStyle.Render(item.sublabel) + "\n")
+				b.WriteString(fmt.Sprintf("    %s %s", icon, item.label) + "  " + mutedStyle.Render(item.sublabel) + "\n")
 			}
 
 		case reqItemRequest:
-			// Method badge
-			methodBadge := renderMethodBadge(item.sublabel[:strings.Index(item.sublabel, " ")])
+			// Child request with └ prefix and method badge
+			methodIdx := strings.Index(item.sublabel, " ")
+			methodBadge := renderMethodBadge(item.sublabel[:methodIdx])
+			path := item.sublabel[methodIdx+1:]
 			if isCursor {
-				b.WriteString(selStyle.Render("  > "+item.label) + "  " + methodBadge + " " + mutedStyle.Render(item.sublabel[strings.Index(item.sublabel, " ")+1:]) + "\n")
+				b.WriteString(selStyle.Render("  >  └ "+item.label) + "  " + methodBadge + " " + mutedStyle.Render(path) + "\n")
 			} else {
-				b.WriteString("    " + item.label + "  " + methodBadge + " " + mutedStyle.Render(item.sublabel[strings.Index(item.sublabel, " ")+1:]) + "\n")
+				b.WriteString("      └ " + item.label + "  " + methodBadge + " " + mutedStyle.Render(path) + "\n")
 			}
 
-		case reqItemAddURL, reqItemAddRequest:
+		case reqItemAddURL:
 			if isCursor {
 				b.WriteString(cursorStyle.Render("  > "+item.label) + "\n")
 			} else {
@@ -735,14 +771,18 @@ func (m *RequestOpsModel) viewList() string {
 
 	if len(m.listItems) == 0 {
 		b.WriteString("\n")
-		b.WriteString(mutedStyle.Render("  No Base URLs or Requests configured."))
+		b.WriteString(mutedStyle.Render("  No folders configured."))
 		b.WriteString("\n")
-		b.WriteString(mutedStyle.Render("  Press a to add a Base URL."))
+		b.WriteString(mutedStyle.Render("  Press a to add one."))
 		b.WriteString("\n")
 	}
 
 	if m.deleteArmed {
-		b.WriteString("\n" + styles.StyleError.Render("  Press d again to confirm removal"))
+		if m.deleteArmedIsEnv {
+			b.WriteString("\n" + styles.StyleError.Render("  Press D again to confirm removal"))
+		} else {
+			b.WriteString("\n" + styles.StyleError.Render("  Press d again to confirm removal"))
+		}
 		b.WriteString("\n")
 	}
 
@@ -754,10 +794,13 @@ func (m *RequestOpsModel) viewList() string {
 
 	b.WriteString("\n")
 	var contextItems []styles.HelpItemResult
-	contextItems = append(contextItems, styles.HelpItem("a", "add"))
 	if m.listCursor < len(m.listItems) {
 		item := m.listItems[m.listCursor]
-		if item.kind == reqItemURL || item.kind == reqItemRequest {
+		if item.kind == reqItemURL {
+			contextItems = append(contextItems, styles.HelpItem("a", "add"))
+			contextItems = append(contextItems, styles.HelpItem("e", "edit"))
+			contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
+		} else if item.kind == reqItemRequest {
 			contextItems = append(contextItems, styles.HelpItem("e", "edit"))
 			contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
 		}
@@ -771,11 +814,20 @@ func (m *RequestOpsModel) viewList() string {
 		footerItems = append(footerItems, styles.HelpItem("← →", "env"))
 	}
 	footerItems = append(footerItems, styles.HelpItem("n", "add env"))
-	if m.listCursor < len(m.listItems) && m.listItems[m.listCursor].kind == reqItemRequest {
-		footerItems = append(footerItems, styles.HelpItem("↵", "execute"))
-		footerItems = append(footerItems, styles.HelpItem("⌥↵", "re-prompt"))
-	}
 	env = m.currentEnv()
+	if env != nil && len(env.BaseURLs) > 0 {
+		footerItems = append(footerItems, styles.HelpItem("⎵", "expand/collapse all"))
+	}
+	if m.listCursor < len(m.listItems) {
+		item := m.listItems[m.listCursor]
+		switch item.kind {
+		case reqItemRequest:
+			footerItems = append(footerItems, styles.HelpItem("↵", "execute"))
+			footerItems = append(footerItems, styles.HelpItem("⌥↵", "re-prompt"))
+		case reqItemURL:
+			footerItems = append(footerItems, styles.HelpItem("↵", "expand/collapse"))
+		}
+	}
 	if env != nil && env.Name != "local" {
 		footerItems = append(footerItems, styles.HelpItem("D D", "delete env"))
 	}
@@ -976,6 +1028,13 @@ func (m *RequestOpsModel) startCreateRequest() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *RequestOpsModel) startCreateRequestForURL(urlIdx int) (tea.Model, tea.Cmd) {
+	m.parentURLIdx = urlIdx
+	result, cmd := m.startCreateRequest()
+	m.baseURLIdx = urlIdx
+	return result, cmd
+}
+
 func (m *RequestOpsModel) startEditURL(idx int) (tea.Model, tea.Cmd) {
 	env := m.currentEnv()
 	if env == nil || idx >= len(env.BaseURLs) {
@@ -1087,6 +1146,27 @@ func (m *RequestOpsModel) formFieldCount() int {
 // formVisibleIndex maps a formFocus to the logical field.
 func (m *RequestOpsModel) formVisibleIndex(focus int) int {
 	return focus
+}
+
+// formHasEnterAction returns true if Enter does something useful on the current field.
+func (m *RequestOpsModel) formHasEnterAction() bool {
+	if m.isURLForm {
+		return false // Name and URL are plain text inputs
+	}
+	switch m.formFocus {
+	case 1: // Method cycles
+		return true
+	case 2: // Base URL cycles
+		return true
+	case 4: // Is Login toggles
+		return true
+	case 6, 7: // Headers/Params → KV builder
+		return true
+	case 8: // Body → edit mode
+		return true
+	default:
+		return false // Name, Path, TokenPath are text inputs
+	}
 }
 
 func (m *RequestOpsModel) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1593,12 +1673,22 @@ func (m *RequestOpsModel) viewForm() string {
 			styles.HelpItem("ctrl+s", "save"),
 		))
 	} else {
-		b.WriteString("  " + styles.InlineHelp(
+		helpItems := []styles.HelpItemResult{
 			styles.HelpItem("esc", "cancel"),
 			styles.HelpItem("↑ ↓", "field"),
-			styles.HelpItem("↵", "select/toggle"),
-			styles.HelpItem("ctrl+s", "save"),
-		))
+		}
+		// Only show ↵ hint when Enter actually does something
+		if m.formHasEnterAction() {
+			if m.formFocus == 6 || m.formFocus == 7 {
+				helpItems = append(helpItems, styles.HelpItem("↵", "edit"))
+			} else if m.formFocus == 8 {
+				helpItems = append(helpItems, styles.HelpItem("↵", "edit"))
+			} else {
+				helpItems = append(helpItems, styles.HelpItem("↵", "select/toggle"))
+			}
+		}
+		helpItems = append(helpItems, styles.HelpItem("ctrl+s", "save"))
+		b.WriteString("  " + styles.InlineHelp(helpItems...))
 	}
 
 	return b.String()
