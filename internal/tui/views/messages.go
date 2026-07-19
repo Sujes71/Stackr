@@ -132,6 +132,7 @@ type composeStartFailedMsg struct {
 	envName   string
 	compName  string
 	err       error
+	rawDetail string // full raw Docker output for the detail view
 }
 
 // ── Spinner Messages ──

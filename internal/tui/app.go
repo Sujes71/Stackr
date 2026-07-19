@@ -229,7 +229,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 
 	case views.NavErrors:
 		a.screen = ScreenErrors
-		a.errorView = views.NewErrorList(a.errorRegistry.All())
+		a.errorView = views.NewErrorList(a.errorRegistry.All(), nav.ProfileName, nav.EnvName)
 		a.errorView.SetSize(a.width, a.height)
 		return a, a.errorView.Init()
 	}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -103,29 +104,70 @@ func runDocker(args ...string) error {
 	return nil
 }
 
+// ansiRegexp matches ANSI escape sequences (colors, cursor movement, etc.)
+// that Docker compose embeds in its progress output.
+var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+
 // friendlyError wraps an exec error with the command's stderr output.
 // When the docker daemon is not running it shows a clear message instead of "exit status 1".
 func friendlyError(err error, stderr string) error {
 	stderr = strings.TrimSpace(stderr)
 
+	// Strip ANSI escape codes from Docker compose progress output so
+	// pattern matching works and the error is human-readable.
+	clean := ansiRegexp.ReplaceAllString(stderr, "")
+	clean = strings.TrimSpace(clean)
+
 	// Also check the error string itself for common patterns
 	errMsg := err.Error()
 
 	switch {
-	case strings.Contains(stderr, "Cannot connect to the Docker daemon"),
-		strings.Contains(stderr, "failed to connect to the docker API"),
-		strings.Contains(stderr, "dial unix"),
-		strings.Contains(stderr, "Is the docker daemon running"),
+	case strings.Contains(clean, "Cannot connect to the Docker daemon"),
+		strings.Contains(clean, "failed to connect to the docker API"),
+		strings.Contains(clean, "dial unix"),
+		strings.Contains(clean, "Is the docker daemon running"),
 		strings.Contains(errMsg, "dial unix"),
 		strings.Contains(errMsg, "connection refused"):
 		return fmt.Errorf("Docker daemon is not running. Start Docker Desktop or the daemon and try again.")
 
-	case strings.Contains(stderr, "no such file or directory") && strings.Contains(stderr, "docker-compose.yml"):
+	case strings.Contains(clean, "no such file or directory") && strings.Contains(clean, "docker-compose.yml"):
 		return fmt.Errorf("Compose file not found for this environment. Add services first.")
 
+	case strings.Contains(clean, "manifest for") && strings.Contains(clean, "not found"),
+		strings.Contains(clean, "manifest unknown"),
+		strings.Contains(clean, "no such image"),
+		strings.Contains(clean, "pull access denied"),
+		strings.Contains(clean, "repository does not exist"),
+		strings.Contains(errMsg, "not found") && strings.Contains(clean, "Pulling"):
+		// Try to extract the image name for a cleaner message.
+		for _, prefix := range []string{"manifest for ", "pull access denied for "} {
+			if idx := strings.Index(clean, prefix); idx >= 0 {
+				after := clean[idx+len(prefix):]
+				if end := strings.IndexAny(after, ":,.\n"); end > 0 {
+					return fmt.Errorf("Image %s not found — check the image name and try again.", after[:end])
+				}
+			}
+		}
+		return fmt.Errorf("Image not found — check the image name and try again.")
+
 	default:
-		if stderr != "" {
-			return fmt.Errorf("%s", stderr)
+		if clean != "" {
+			// Collapse multiline Docker compose output into a single line.
+			lines := strings.Split(clean, "\n")
+			for i := range lines {
+				lines[i] = strings.TrimSpace(lines[i])
+			}
+			// Take only the last meaningful line (the actual error, not progress).
+			for i := len(lines) - 1; i >= 0; i-- {
+				if lines[i] != "" && !strings.HasPrefix(lines[i], "⠋") && !strings.HasPrefix(lines[i], "⠙") &&
+					!strings.HasPrefix(lines[i], "⠸") && !strings.HasPrefix(lines[i], "⠴") &&
+					!strings.HasPrefix(lines[i], "⠦") && !strings.HasPrefix(lines[i], "⠧") &&
+					!strings.HasPrefix(lines[i], "⠏") && !strings.HasPrefix(lines[i], "⠹") &&
+					!strings.HasPrefix(lines[i], "+") && !strings.HasPrefix(lines[i], "[") {
+					return fmt.Errorf("%s", lines[i])
+				}
+			}
+			return fmt.Errorf("%s", lines[0])
 		}
 		return err
 	}
@@ -183,6 +225,22 @@ func Up(profileName, envName string) error {
 
 func UpService(profileName, envName, serviceName string) error {
 	return runDocker(composeArgs(profileName, envName, "up", "-d", serviceName)...)
+}
+
+// UpServiceWithDetail runs docker compose up for a service and returns both
+// a friendly error (for table rows) and the raw Docker output (for detail views).
+func UpServiceWithDetail(profileName, envName, serviceName string) (friendlyErr error, rawOutput string) {
+	args := composeArgs(profileName, envName, "up", "-d", serviceName)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	// Capture stdout+stderr combined — compose writes errors to stderr
+	combined, err := cmd.CombinedOutput()
+	raw := strings.TrimSpace(string(combined))
+	if err != nil {
+		return friendlyError(err, raw), raw
+	}
+	return nil, ""
 }
 
 func Down(profileName, envName string) error {

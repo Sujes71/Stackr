@@ -19,7 +19,8 @@ type AppError struct {
 	ID        int
 	Timestamp time.Time
 	Context   string // e.g. "add_syncenv", "add_service"
-	Message   string
+	Message   string // short summary for table row
+	Detail    string // full error text for detail view (empty = same as Message)
 }
 
 // ErrorRegistry is a thread-safe, FIFO-bounded store for application errors.
@@ -42,6 +43,12 @@ func NewErrorRegistry() *ErrorRegistry {
 // Add registers a new error with the given context tag and message.
 // If the registry is at capacity, the oldest entry is evicted (FIFO).
 func (r *ErrorRegistry) Add(context, message string) {
+	r.AddWithDetail(context, message, "")
+}
+
+// AddWithDetail registers an error with both a short summary (for table rows)
+// and a full detail message (for the expanded detail view).
+func (r *ErrorRegistry) AddWithDetail(context, message, detail string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -51,6 +58,7 @@ func (r *ErrorRegistry) Add(context, message string) {
 		Timestamp: time.Now(),
 		Context:   context,
 		Message:   message,
+		Detail:    detail,
 	}
 
 	if len(r.entries) >= r.cap {
@@ -88,18 +96,22 @@ type ErrorListModel struct {
 	errors     []AppError
 	cursor     int
 	width      int
-	height     int
+	height      int
 	viewport   viewport.Model
 	showDetail bool
+	profileName string // profile to return to on esc
+	envName     string // env to return to on esc
 }
 
 // NewErrorList creates an error list view from a snapshot of errors.
-func NewErrorList(errors []AppError) *ErrorListModel {
+func NewErrorList(errors []AppError, profileName, envName string) *ErrorListModel {
 	vp := viewport.New(0, 0) // sized later via SetSize
 	vp.Style = lipgloss.NewStyle().PaddingLeft(2)
 	return &ErrorListModel{
-		errors:   errors,
-		viewport: vp,
+		errors:      errors,
+		viewport:    vp,
+		profileName: profileName,
+		envName:     envName,
 	}
 }
 
@@ -135,7 +147,13 @@ func (m *ErrorListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showDetail = false
 				return m, nil
 			}
-			return m, func() tea.Msg { return NavigateTo{Screen: NavHome} }
+			return m, func() tea.Msg {
+				return NavigateTo{
+					Screen:      NavProfileView,
+					ProfileName: m.profileName,
+					EnvName:     m.envName,
+				}
+			}
 
 		case key.Matches(msg, errorKeys.up):
 			if m.showDetail {
@@ -158,11 +176,15 @@ func (m *ErrorListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showDetail = !m.showDetail
 				if m.showDetail && m.cursor < len(m.errors) {
 					err := m.errors[m.cursor]
-					detail := fmt.Sprintf("[%s] %s\n\n%s",
+					detail := err.Message
+					if err.Detail != "" {
+						detail = err.Detail
+					}
+					content := fmt.Sprintf("[%s] %s\n\n%s",
 						err.Timestamp.Format("2006-01-02 15:04:05"),
 						err.Context,
-						err.Message)
-					m.viewport.SetContent(detail)
+						detail)
+					m.viewport.SetContent(content)
 				}
 			}
 			return m, nil
@@ -217,9 +239,16 @@ func (m *ErrorListModel) View() string {
 
 		date := err.Timestamp.Format("15:04:05")
 		context := err.Context
-		msg := err.Message
-		if len(msg) > 50 {
-			msg = msg[:47] + "..."
+		// Collapse multiline errors into a single line and truncate to fit.
+		msg := strings.ReplaceAll(err.Message, "\n", " ")
+		msg = strings.Join(strings.Fields(msg), " ") // collapse multiple spaces
+		// Reserve space: cursor(2) + date(20) + space + context(20) + space = 44
+		maxMsg := m.width - 44
+		if maxMsg < 10 {
+			maxMsg = 10
+		}
+		if len(msg) > maxMsg {
+			msg = msg[:maxMsg-3] + "..."
 		}
 
 		row := fmt.Sprintf("%s%-20s %-20s %s", cursor, date, context, msg)
