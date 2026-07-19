@@ -238,7 +238,7 @@ func (m *ErrorListModel) View() string {
 	for i, err := range m.errors {
 		cursor := "  "
 		if i == m.cursor {
-			cursor = "▸ "
+			cursor = "> "
 		}
 
 		date := err.Timestamp.Format("15:04:05")
