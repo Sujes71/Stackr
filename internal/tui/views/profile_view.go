@@ -93,9 +93,6 @@ type ProfileViewModel struct {
 	// marked as failedContainers so the user can manually restart it.
 	unstableSince    map[string]time.Time // containerName → first restart detection
 	failedContainers map[string]bool      // containerName → stopped due to crash-loop
-
-	// ── Transient Action Errors ──
-	actionErr string // last action error (compose up failed, etc.) — cleared on next status refresh
 }
 
 type ProfileEnvState struct {
@@ -744,8 +741,10 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.pendingOps, cn)
 		delete(m.unstableSince, cn)
 		m.failedContainers[cn] = true
-		m.actionErr = formatErrorMsg("start failed: " + msg.err.Error())
-		return m, ClearActionAfter(8 * time.Second)
+		if m.errorRegistry != nil {
+			m.errorRegistry.Add("compose_up", msg.err.Error())
+		}
+		return m, nil
 
 	case SpinnerTickMsg:
 		if len(m.pendingOps) > 0 || m.dockerStarting {
@@ -757,7 +756,6 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinnerFrame = 0
 
 	case ClearActionMsg:
-		m.actionErr = ""
 
 	case statsTickMsg:
 		if !m.showStats || m.statsContainer == "" {
@@ -2173,11 +2171,6 @@ func (m *ProfileViewModel) View() string {
 		} else {
 			b.WriteString(m.renderServices(env))
 		}
-	}
-
-	// Show transient action errors (e.g. compose up failed)
-	if m.actionErr != "" {
-		b.WriteString("\n  " + m.actionErr + "\n")
 	}
 
 	if m.deleteArmed {
