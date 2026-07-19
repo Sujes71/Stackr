@@ -104,7 +104,8 @@ type RequestOpsModel struct {
 
 	// Variable prompt state
 	varPromptIdx    int
-	varPromptValues map[string]string
+	varPromptNames  []string           // ordered list of variable names (stable order)
+	varPromptValues map[string]string  // name -> value
 	varPromptInput  textinput.Model
 
 	// Running state
@@ -520,13 +521,26 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if item.kind == reqItemRequest {
 						env := m.currentEnv()
 						if env != nil && item.reqIdx < len(env.Requests) {
-							return m.startVarPrompt(env.Requests[item.reqIdx])
+							return m.startVarPrompt(env.Requests[item.reqIdx], false)
 						}
 					}
 				case reqItemAddURL:
 					return m.startCreateURL()
 				case reqItemAddRequest:
 					return m.startCreateRequest()
+				}
+			}
+
+		case msg.String() == "alt+enter":
+			// Force re-prompt all variables
+			m.deleteArmed = false
+			if m.listCursor < len(m.listItems) {
+				item := m.listItems[m.listCursor]
+				if item.kind == reqItemRequest && item.enabled {
+					env := m.currentEnv()
+					if env != nil && item.reqIdx < len(env.Requests) {
+						return m.startVarPrompt(env.Requests[item.reqIdx], true)
+					}
 				}
 			}
 
@@ -752,9 +766,14 @@ func (m *RequestOpsModel) viewList() string {
 	b.WriteString("\n\n")
 	footerItems := []styles.HelpItemResult{
 		styles.HelpItem("↑ ↓", "navigate"),
-		styles.HelpItem("← →", "env"),
-		styles.HelpItem("n", "add env"),
-		styles.HelpItem("↵", "execute"),
+	}
+	if len(m.profile.RequestEnvs) > 1 {
+		footerItems = append(footerItems, styles.HelpItem("← →", "env"))
+	}
+	footerItems = append(footerItems, styles.HelpItem("n", "add env"))
+	if m.listCursor < len(m.listItems) && m.listItems[m.listCursor].kind == reqItemRequest {
+		footerItems = append(footerItems, styles.HelpItem("↵", "execute"))
+		footerItems = append(footerItems, styles.HelpItem("⌥↵", "re-prompt"))
 	}
 	env = m.currentEnv()
 	if env != nil && env.Name != "local" {
@@ -1110,6 +1129,11 @@ func (m *RequestOpsModel) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "up":
+		if m.formFocus == 8 && m.bodyEditMode {
+			if m.bodyInput.Line() > 0 {
+				break // textarea handles cursor up within text
+			}
+		}
 		if m.formFocus > 0 {
 			m.formFocus--
 			// Skip TokenPath (5) when Is Login is off
@@ -1125,6 +1149,12 @@ func (m *RequestOpsModel) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "down":
+		if m.formFocus == 8 && m.bodyEditMode {
+			totalLines := len(strings.Split(m.bodyInput.Value(), "\n"))
+			if m.bodyInput.Line() < totalLines-1 {
+				break // textarea handles cursor down within text
+			}
+		}
 		if m.formFocus < m.formFieldCount()-1 {
 			m.formFocus++
 			// Skip TokenPath (5) when Is Login is off
@@ -1280,7 +1310,7 @@ func (m *RequestOpsModel) formatBody() {
 	val := m.bodyInput.Value()
 	var pretty bytes.Buffer
 	if json.Indent(&pretty, []byte(val), "", "  ") == nil {
-		m.bodyInput.SetValue(pretty.String())
+		m.bodyInput.SetValue(strings.TrimRight(pretty.String(), "\n"))
 		m.setBodyTextareaHeight()
 	}
 }
@@ -1721,7 +1751,9 @@ func (m *RequestOpsModel) viewKVBuilder() string {
 // varRe matches {var_name} patterns (but not {token}).
 var varRe = regexp.MustCompile(`\{(\w+)\}`)
 
-func (m *RequestOpsModel) startVarPrompt(req config.RequestDef) (tea.Model, tea.Cmd) {
+// startVarPrompt checks variables and decides whether to prompt or execute directly.
+// forcePrompt=true means always show the prompt (used by Option+Enter).
+func (m *RequestOpsModel) startVarPrompt(req config.RequestDef, forcePrompt bool) (tea.Model, tea.Cmd) {
 	env := m.currentEnv()
 	if env == nil {
 		m.screen = reqScreenList
@@ -1762,10 +1794,43 @@ func (m *RequestOpsModel) startVarPrompt(req config.RequestDef) (tea.Model, tea.
 		return m.executeRequest(req)
 	}
 
-	// Initialize prompt values
+	// Check if all variables already have cached values
+	if !forcePrompt {
+		allCached := true
+		for _, name := range allRefs {
+			found := false
+			for _, ev := range env.Variables {
+				if ev.Name == name && ev.Value != "" {
+					found = true
+					break
+				}
+			}
+			if !found {
+				allCached = false
+				break
+			}
+		}
+		if allCached {
+			// All variables have values — execute directly
+			m.varPromptValues = make(map[string]string)
+			for _, name := range allRefs {
+				for _, ev := range env.Variables {
+					if ev.Name == name {
+						m.varPromptValues[name] = ev.Value
+						break
+					}
+				}
+			}
+			return m.executeRequest(req)
+		}
+	}
+
+	// Initialize prompt values from env cache (pre-fill what we have)
 	m.varPromptValues = make(map[string]string)
+	m.varPromptNames = make([]string, len(allRefs))
+	copy(m.varPromptNames, allRefs) // stable order from allRefs slice
 	for _, name := range allRefs {
-		// Check if already has a value in env.Variables
+		m.varPromptValues[name] = "" // always register, default empty
 		for _, ev := range env.Variables {
 			if ev.Name == name {
 				m.varPromptValues[name] = ev.Value
@@ -1778,37 +1843,28 @@ func (m *RequestOpsModel) startVarPrompt(req config.RequestDef) (tea.Model, tea.
 	m.screen = reqScreenVarPrompt
 	m.refreshVarPromptInput()
 
-	// Store the request to execute later
-	// We'll use pendingOps as a temporary holder for the request definition
 	return m, nil
 }
 
 func (m *RequestOpsModel) refreshVarPromptInput() {
-	env := m.currentEnv()
-	if env == nil || m.varPromptIdx >= len(m.varPromptValues) {
+	if m.varPromptIdx >= len(m.varPromptNames) {
 		return
 	}
-	// Get the current variable name
-	i := 0
-	for name := range m.varPromptValues {
-		if i == m.varPromptIdx {
-			m.varPromptInput.SetValue("")
-			m.varPromptInput.Placeholder = name
-			m.varPromptInput.Focus()
-			m.varPromptInput.CursorEnd()
-			return
-		}
-		i++
+	name := m.varPromptNames[m.varPromptIdx]
+	// Pre-fill with existing value if available
+	if existing, ok := m.varPromptValues[name]; ok && existing != "" {
+		m.varPromptInput.SetValue(existing)
+	} else {
+		m.varPromptInput.SetValue("")
 	}
+	m.varPromptInput.Placeholder = name
+	m.varPromptInput.Focus()
+	m.varPromptInput.CursorEnd()
 }
 
 // varPromptNames returns the ordered list of variable names.
-func (m *RequestOpsModel) varPromptNames() []string {
-	var names []string
-	for name := range m.varPromptValues {
-		names = append(names, name)
-	}
-	return names
+func (m *RequestOpsModel) getVarPromptNames() []string {
+	return m.varPromptNames
 }
 
 func (m *RequestOpsModel) updateVarPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1819,7 +1875,7 @@ func (m *RequestOpsModel) updateVarPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	names := m.varPromptNames()
+	names := m.getVarPromptNames()
 	if m.varPromptIdx >= len(names) {
 		m.screen = reqScreenList
 		return m, nil
@@ -1829,13 +1885,13 @@ func (m *RequestOpsModel) updateVarPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.screen = reqScreenList
 		m.varPromptValues = nil
+		m.varPromptNames = nil
 		return m, nil
 
 	case "up":
 		if m.varPromptIdx > 0 {
 			// Save current value
 			val := strings.TrimSpace(m.varPromptInput.Value())
-			names[m.varPromptIdx] = names[m.varPromptIdx] // no-op, just for clarity
 			m.varPromptValues[names[m.varPromptIdx]] = val
 			m.varPromptIdx--
 			m.refreshVarPromptInput()
@@ -1868,11 +1924,6 @@ func (m *RequestOpsModel) updateVarPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshVarPromptInput()
 		return m, nil
 
-	case "r":
-		// Re-prompt all variables
-		m.varPromptIdx = 0
-		m.refreshVarPromptInput()
-		return m, nil
 	}
 
 	// Delegate to input
@@ -1889,53 +1940,45 @@ func (m *RequestOpsModel) viewVarPrompt() string {
 
 	b.WriteString(styles.StyleSubtitle.Render("  Enter variable values") + "\n\n")
 
-	names := m.varPromptNames()
-	cursorStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
-	filledStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
-	emptyStyle := styles.StyleSubtitle
-
-	linePad := lipgloss.NewStyle().Width(60)
-
-	env := m.currentEnv()
+	names := m.getVarPromptNames()
+	purpleStyle := lipgloss.NewStyle().Foreground(styles.ColorPurple).Bold(true)
+	valStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 
 	for i, name := range names {
-		if i == m.varPromptIdx {
-			line := "  " + cursorStyle.Render("> "+name+"  ") + m.varPromptInput.View()
-			b.WriteString(linePad.Render(line) + "\n")
-		} else if v, ok := m.varPromptValues[name]; ok && v != "" {
+		if i < m.varPromptIdx {
+			// Already filled
+			v := m.varPromptValues[name]
 			display := v
 			if len(display) > 40 {
 				display = display[:37] + "..."
 			}
-			line := "    " + name + "  " + filledStyle.Render(display)
-			b.WriteString(linePad.Render(line) + "\n")
+			b.WriteString("  " + purpleStyle.Render("{"+name+"}") + " " + valStyle.Render(display) + "\n")
+		} else if i == m.varPromptIdx {
+			// Current — input
+			b.WriteString("  " + purpleStyle.Render("{"+name+"}") + " " + m.varPromptInput.View() + "\n")
 		} else {
-			line := "    " + name + "  " + emptyStyle.Render("(no value)")
-			b.WriteString(linePad.Render(line) + "\n")
-		}
-	}
-
-	b.WriteString("\n")
-
-	// Show existing value info
-	if m.varPromptIdx < len(names) {
-		currentName := names[m.varPromptIdx]
-		if env != nil {
-			for _, ev := range env.Variables {
-				if ev.Name == currentName && ev.Value != "" {
-					b.WriteString("  " + emptyStyle.Render(fmt.Sprintf("Existing value: %s", ev.Value)) + "\n\n")
-					break
+			// Upcoming — show cached value if exists, otherwise empty
+			if v, ok := m.varPromptValues[name]; ok && v != "" {
+				display := v
+				if len(display) > 40 {
+					display = display[:37] + "..."
 				}
+				b.WriteString("  " + purpleStyle.Render("{"+name+"}") + " " + valStyle.Render(display) + "\n")
+			} else {
+				b.WriteString("  " + purpleStyle.Render("{"+name+"}") + " \n")
 			}
 		}
 	}
 
-	b.WriteString("  " + styles.InlineHelp(
+	b.WriteString("\n")
+	helpItems := []styles.HelpItemResult{
 		styles.HelpItem("esc", "cancel"),
-		styles.HelpItem("↑ ↓", "navigate"),
 		styles.HelpItem("↵", "next"),
-		styles.HelpItem("r", "re-prompt all"),
-	))
+	}
+	if len(names) > 1 {
+		helpItems = append(helpItems, styles.HelpItem("↑ ↓", "navigate"))
+	}
+	b.WriteString("  " + styles.InlineHelp(helpItems...))
 	return b.String()
 }
 
@@ -1947,6 +1990,28 @@ func (m *RequestOpsModel) executeRequestFromPrompt() (tea.Model, tea.Cmd) {
 		m.screen = reqScreenList
 		return m, nil
 	}
+
+	// Persist prompted variable values to env.Variables
+	for name, val := range m.varPromptValues {
+		if name == "token" || val == "" {
+			continue
+		}
+		found := false
+		for i, ev := range env.Variables {
+			if ev.Name == name {
+				env.Variables[i].Value = val
+				found = true
+				break
+			}
+		}
+		if !found {
+			env.Variables = append(env.Variables, config.RequestEnvVar{
+				Name:  name,
+				Value: val,
+			})
+		}
+	}
+	_ = m.cfg.UpdateProfile(*m.profile)
 
 	// Find which request we're executing (from the list cursor)
 	if m.listCursor >= len(m.listItems) {
@@ -1999,13 +2064,20 @@ func (m *RequestOpsModel) doExecuteRequest(req config.RequestDef) (tea.Model, te
 	}
 
 	// Build request
-	fullURL := strings.TrimRight(baseURL, "/") + req.Path
+	path := req.Path
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	fullURL := strings.TrimRight(baseURL, "/") + path
 
 	// Substitute variables
 	vars := m.varPromptValues
 	if vars == nil {
 		vars = make(map[string]string)
 	}
+
+	// Substitute variables in URL path
+	fullURL = m.substituteVars(fullURL, vars, token)
 
 	// Add query params
 	if len(req.Params) > 0 {
