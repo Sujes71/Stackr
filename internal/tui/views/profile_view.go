@@ -2250,26 +2250,74 @@ func (m *ProfileViewModel) cardWidth() int {
 }
 
 // serviceWindow computes the visible window for Docker service cards.
-// It delegates to the shared opsWindow helper, passing the average card
-// height so the centering logic works with variable-height cards.
+// Unlike the shared opsWindow helper (which uses average item height),
+// this method respects each card's actual height so variable-port cards
+// (e.g. activemq with 3 ports vs kafka with 1) never overflow the viewport.
 func (m *ProfileViewModel) serviceWindow(total int, heights []int) itemWindow {
 	if total == 0 || m.height <= 0 {
 		return itemWindow{start: 0, end: total}
 	}
 	cursor := min(m.cursor, total-1) // clamp in case cursor is from a different view
 	overhead := m.estimateItemOverhead()
-	avgH := 1
-	if total > 0 {
-		sum := 0
-		for _, h := range heights {
-			sum += h
-		}
-		avgH = sum / total
-		if avgH < 1 {
-			avgH = 1
+	// +1 accounts for the trailing "\n" appended by renderServices.
+	avail := m.height - overhead - 1
+	if avail <= 0 {
+		return itemWindow{
+			start:    cursor,
+			end:      min(cursor+1, total),
+			hasAbove: cursor > 0,
+			hasBelow: cursor+1 < total,
 		}
 	}
-	return opsWindow(total, cursor, avgH, m.height, overhead)
+
+	// First pass: find the maximum window that fits without scroll indicators.
+	win := fitItemsFromCursor(cursor, total, heights, avail)
+
+	// If windowing results in scroll indicators, they add ~1 line of overhead.
+	// Shrink the window by that margin so the header stays on screen.
+	if win.start > 0 || win.end < total {
+		win = fitItemsFromCursor(cursor, total, heights, avail-1)
+	}
+
+	return win
+}
+
+// fitItemsFromCursor expands a window outward from cursor, respecting actual
+// item heights. It prefers expanding down first (toward later items), then up,
+// stopping when the next item would exceed the available space.
+func fitItemsFromCursor(cursor, total int, heights []int, avail int) itemWindow {
+	if avail <= 0 {
+		return itemWindow{
+			start:    cursor,
+			end:      min(cursor+1, total),
+			hasAbove: cursor > 0,
+			hasBelow: cursor+1 < total,
+		}
+	}
+
+	start := cursor
+	end := cursor + 1
+	used := heights[cursor]
+
+	for used < avail {
+		// Prefer expanding down (toward later items), then up.
+		if end < total && used+heights[end] <= avail {
+			used += heights[end]
+			end++
+		} else if start > 0 && used+heights[start-1] <= avail {
+			used += heights[start-1]
+			start--
+		} else {
+			break
+		}
+	}
+
+	return itemWindow{
+		start:    start,
+		end:      end,
+		hasAbove: start > 0,
+		hasBelow: end < total,
+	}
 }
 
 func forwardCardHeight(h *portforward.PortForwardHandle) int {
