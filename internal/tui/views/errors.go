@@ -228,7 +228,7 @@ func (m *ErrorListModel) View() string {
 		msgW = 10
 	}
 
-	header := fmt.Sprintf("%-*s  %-*s  %s", dateW, "DATE", ctxW, "CONTEXT", "MESSAGE")
+	header := fmt.Sprintf("  %-*s  %-*s  %s", dateW, "DATE", ctxW, "CONTEXT", "MESSAGE")
 	content.WriteString(header)
 	content.WriteString("\n")
 	content.WriteString(strings.Repeat("─", avail))
