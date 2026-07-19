@@ -124,6 +124,16 @@ type portConflictMsg struct {
 	err string
 }
 
+// ── Compose Start Failure Messages ──
+
+// composeStartFailedMsg is sent when docker.UpService fails (e.g. image not found).
+// The profile view uses this to show the error and mark the container as failed.
+type composeStartFailedMsg struct {
+	envName   string
+	compName  string
+	err       error
+}
+
 // ── Spinner Messages ──
 
 type SpinnerTickMsg struct{}

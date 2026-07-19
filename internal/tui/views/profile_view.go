@@ -93,6 +93,9 @@ type ProfileViewModel struct {
 	// marked as failedContainers so the user can manually restart it.
 	unstableSince    map[string]time.Time // containerName → first restart detection
 	failedContainers map[string]bool      // containerName → stopped due to crash-loop
+
+	// ── Transient Action Errors ──
+	actionErr string // last action error (compose up failed, etc.) — cleared on next status refresh
 }
 
 type ProfileEnvState struct {
@@ -259,7 +262,9 @@ func (m *ProfileViewModel) executeDockerAction(action string) tea.Cmd {
 		m.pendingOps[cn] = "starting"
 		return tea.Batch(
 			func() tea.Msg {
-				_ = docker.UpService(m.profile.Name, envName, compName)
+				if err := docker.UpService(m.profile.Name, envName, compName); err != nil {
+					return composeStartFailedMsg{envName: envName, compName: compName, err: err}
+				}
 				// Stop every other service in the environment so only the
 				// toggled one stays running after Docker daemon comes up.
 				env := m.currentEnv()
@@ -306,9 +311,13 @@ func (m *ProfileViewModel) executeDockerAction(action string) tea.Cmd {
 		var cmds []tea.Cmd
 		for i := range env.Services {
 			svc := env.Services[i]
+			envN := env.Name
+			compN := svc.ComposeName()
 			cmds = append(cmds, func() tea.Msg {
-				_ = docker.UpService(m.profile.Name, env.Name, svc.ComposeName())
-				return m.refreshStatusForEnv(env.Name)
+				if err := docker.UpService(m.profile.Name, envN, compN); err != nil {
+					return composeStartFailedMsg{envName: envN, compName: compN, err: err}
+				}
+				return m.refreshStatusForEnv(envN)
 			})
 		}
 		cmds = append(cmds, func() tea.Msg { return SpinnerTickMsg{} })
@@ -730,6 +739,14 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rememberCurrentEnvSelection()
 		return m, m.loadStatus()
 
+	case composeStartFailedMsg:
+		cn := containerName(m.profile.Name, msg.envName, msg.compName)
+		delete(m.pendingOps, cn)
+		delete(m.unstableSince, cn)
+		m.failedContainers[cn] = true
+		m.actionErr = formatErrorMsg("start failed: " + msg.err.Error())
+		return m, ClearActionAfter(8 * time.Second)
+
 	case SpinnerTickMsg:
 		if len(m.pendingOps) > 0 || m.dockerStarting {
 			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
@@ -740,6 +757,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinnerFrame = 0
 
 	case ClearActionMsg:
+		m.actionErr = ""
 
 	case statsTickMsg:
 		if !m.showStats || m.statsContainer == "" {
@@ -1239,9 +1257,13 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						delete(m.failedContainers, cn)
 						delete(m.unstableSince, cn)
 						m.pendingOps[cn] = "starting"
+						envName := env.Name
+						compName := svc.ComposeName()
 						return m, tea.Batch(
 							func() tea.Msg {
-								_ = docker.UpService(m.profile.Name, envName, compName)
+								if err := docker.UpService(m.profile.Name, envName, compName); err != nil {
+									return composeStartFailedMsg{envName: envName, compName: compName, err: err}
+								}
 								return m.refreshStatusForEnv(envName)
 							},
 							func() tea.Msg { return m.refreshStatusForEnv(envName) },
@@ -1273,7 +1295,9 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.pendingOps[cn] = "starting"
 					return m, tea.Batch(
 						func() tea.Msg {
-							_ = docker.UpService(m.profile.Name, envName, compName)
+							if err := docker.UpService(m.profile.Name, envName, compName); err != nil {
+								return composeStartFailedMsg{envName: envName, compName: compName, err: err}
+							}
 							return m.refreshStatusForEnv(envName)
 						},
 						func() tea.Msg { return m.refreshStatusForEnv(envName) },
@@ -1346,9 +1370,13 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var cmds []tea.Cmd
 				for i := range env.Services {
 					svc := env.Services[i]
+					envN := env.Name
+					compN := svc.ComposeName()
 					cmds = append(cmds, func() tea.Msg {
-						_ = docker.UpService(m.profile.Name, env.Name, svc.ComposeName())
-						return m.refreshStatusForEnv(env.Name)
+						if err := docker.UpService(m.profile.Name, envN, compN); err != nil {
+							return composeStartFailedMsg{envName: envN, compName: compN, err: err}
+						}
+						return m.refreshStatusForEnv(envN)
 					})
 				}
 				cmds = append(cmds, func() tea.Msg { return m.refreshStatusForEnv(env.Name) }, func() tea.Msg { return SpinnerTickMsg{} })
@@ -2145,6 +2173,11 @@ func (m *ProfileViewModel) View() string {
 		} else {
 			b.WriteString(m.renderServices(env))
 		}
+	}
+
+	// Show transient action errors (e.g. compose up failed)
+	if m.actionErr != "" {
+		b.WriteString("\n  " + m.actionErr + "\n")
 	}
 
 	if m.deleteArmed {
