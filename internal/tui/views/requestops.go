@@ -133,6 +133,7 @@ type RequestOpsModel struct {
 	resultTitle     string
 	resultRaw       string // unstyled result for clipboard copy
 	copied          bool   // show "copied" feedback
+	copyFeedback    string // brief feedback message in list view
 
 	// Add environment screen
 	newEnvInput textinput.Model
@@ -565,6 +566,7 @@ func (m *RequestOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		m.copyFeedback = "" // clear feedback on any key
 		switch {
 		case key.Matches(msg, opsKeyBack):
 			m.deleteArmed = false
@@ -736,6 +738,22 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+
+		case msg.String() == "c":
+			// Copy request as cURL to clipboard
+			m.deleteArmed = false
+			m.copyFeedback = ""
+			if m.listCursor < len(m.listItems) {
+				item := m.listItems[m.listCursor]
+				if item.kind == reqItemRequest && item.enabled {
+					if item.reqIdx < len(m.profile.RequestDefs) {
+						curl := m.buildCurl(m.profile.RequestDefs[item.reqIdx])
+						_ = clipboard.WriteAll(curl)
+						m.copyFeedback = "✓ copied cURL"
+					}
+				}
+			}
+			return m, nil
 
 		case key.Matches(msg, opsKeyEdit):
 			m.deleteArmed = false
@@ -947,6 +965,11 @@ func (m *RequestOpsModel) viewList() string {
 		b.WriteString("\n")
 	}
 
+	if m.copyFeedback != "" {
+		b.WriteString("\n" + styles.StyleSuccess.Render("  "+m.copyFeedback))
+		b.WriteString("\n")
+	}
+
 	// Show spinner for in-flight requests
 	for label := range m.pendingOps {
 		b.WriteString("\n  " + m.renderSpinnerDot(label))
@@ -962,6 +985,7 @@ func (m *RequestOpsModel) viewList() string {
 			contextItems = append(contextItems, styles.HelpItem("e", "edit"))
 			contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
 		} else if item.kind == reqItemRequest {
+			contextItems = append(contextItems, styles.HelpItem("c", "copy cURL"))
 			contextItems = append(contextItems, styles.HelpItem("e", "edit"))
 			contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
 		}
@@ -2452,6 +2476,51 @@ func (m *RequestOpsModel) doExecuteRequest(req config.RequestDef) (tea.Model, te
 		},
 		spinnerCmd(),
 	)
+}
+
+// ── cURL builder ─────────────────────────────────────────────────────────────
+
+func (m *RequestOpsModel) buildCurl(req config.RequestDef) string {
+	var b strings.Builder
+	b.WriteString("curl")
+
+	// Method
+	if req.Method != "" && req.Method != "GET" {
+		b.WriteString(" -X " + req.Method)
+	}
+
+	// URL
+	baseURL := m.currentEnvURL(req.BaseURLName)
+	path := req.Path
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	fullURL := strings.TrimRight(baseURL, "/") + path
+
+	// Query params
+	if len(req.Params) > 0 {
+		sep := "?"
+		for _, p := range req.Params {
+			fullURL += sep + p.Key + "=" + p.Value
+			sep = "&"
+		}
+	}
+
+	b.WriteString(" \\\n  '" + fullURL + "'")
+
+	// Headers
+	for _, h := range req.Headers {
+		b.WriteString(" \\\n  -H '" + h.Key + ": " + h.Value + "'")
+	}
+
+	// Body
+	if req.Body != "" && (req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH") {
+		// Escape single quotes in body for shell
+		escaped := strings.ReplaceAll(req.Body, "'", "'\\''")
+		b.WriteString(" \\\n  -d '" + escaped + "'")
+	}
+
+	return b.String()
 }
 
 // ── Substitution helpers ──────────────────────────────────────────────────────
