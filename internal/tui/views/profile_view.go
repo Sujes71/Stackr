@@ -1234,6 +1234,20 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.rememberCurrentEnvSelection()
 
+		case opsIsJumpTop(msg):
+			m.cursor = 0
+			m.rememberCurrentEnvSelection()
+
+		case opsIsJumpBottom(msg):
+			total := m.totalServiceItems()
+			if m.isPortForwardEnv() {
+				total = len(m.currentForwards())
+			}
+			if total > 0 {
+				m.cursor = total - 1
+			}
+			m.rememberCurrentEnvSelection()
+
 		case key.Matches(msg, profileKeys.editPort):
 			if m.isPortForwardEnv() && len(m.currentForwards()) > 0 && m.cursor < len(m.currentForwards()) {
 				m.keyPending = ""
@@ -3074,6 +3088,25 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 		case 2:
 			if m.discoveryCursor < len(m.discoverySvcs)-1 {
 				m.discoveryCursor++
+			}
+		}
+
+	case opsIsJumpTop(msg):
+		m.discoveryCursor = 0
+
+	case opsIsJumpBottom(msg):
+		switch m.discoveryStep {
+		case 0:
+			if len(m.discoveryCtxs) > 0 {
+				m.discoveryCursor = len(m.discoveryCtxs) - 1
+			}
+		case 1:
+			if len(m.discoveryNSs) > 0 {
+				m.discoveryCursor = len(m.discoveryNSs) - 1
+			}
+		case 2:
+			if len(m.discoverySvcs) > 0 {
+				m.discoveryCursor = len(m.discoverySvcs) - 1
 			}
 		}
 

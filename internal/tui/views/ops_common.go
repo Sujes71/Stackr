@@ -28,6 +28,11 @@ var (
 	opsKeyAdd    = key.NewBinding(key.WithKeys("a"))
 	opsKeyEdit   = key.NewBinding(key.WithKeys("e"))
 	opsKeyDelete = key.NewBinding(key.WithKeys("d"))
+
+	// Jump to first/last: Ctrl+↑/↓ (all platforms) and Alt+↑/↓ (fallback for macOS Option key)
+	// In terminals, macOS Cmd is typically sent as "super" or "alt" modifier.
+	opsKeyJumpTop    = key.NewBinding(key.WithKeys("super+up", "alt+up", "ctrl+up"))
+	opsKeyJumpBottom = key.NewBinding(key.WithKeys("super+down", "alt+down", "ctrl+down"))
 )
 
 // ── Shared types ─────────────────────────────────────────────────────────────
@@ -234,6 +239,16 @@ func disabledIf(cond bool, reason string) string {
 		return reason
 	}
 	return ""
+}
+
+// opsIsJumpTop returns true if the key message is Cmd/Ctrl+Up (jump to first item).
+func opsIsJumpTop(msg tea.KeyMsg) bool {
+	return key.Matches(msg, opsKeyJumpTop)
+}
+
+// opsIsJumpBottom returns true if the key message is Cmd/Ctrl+Down (jump to last item).
+func opsIsJumpBottom(msg tea.KeyMsg) bool {
+	return key.Matches(msg, opsKeyJumpBottom)
 }
 
 // ── Windowing helper ──────────────────────────────────────────────────────────

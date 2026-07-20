@@ -716,6 +716,24 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case opsIsJumpTop(msg):
+			m.deleteArmed = false
+			for i := 0; i < len(m.listItems); i++ {
+				if m.listItems[i].enabled {
+					m.listCursor = i
+					break
+				}
+			}
+
+		case opsIsJumpBottom(msg):
+			m.deleteArmed = false
+			for i := len(m.listItems) - 1; i >= 0; i-- {
+				if m.listItems[i].enabled {
+					m.listCursor = i
+					break
+				}
+			}
+
 		case key.Matches(msg, opsKeyEnter):
 			m.deleteArmed = false
 			if m.listCursor < len(m.listItems) {

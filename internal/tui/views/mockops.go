@@ -834,6 +834,14 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.itemCursor < len(m.itemList)-1 {
 					m.itemCursor++
 				}
+			case opsIsJumpTop(msg):
+				m.deleteItemArmed = false
+				m.itemCursor = 0
+			case opsIsJumpBottom(msg):
+				m.deleteItemArmed = false
+				if len(m.itemList) > 0 {
+					m.itemCursor = len(m.itemList) - 1
+				}
 			case key.Matches(msg, opsKeyEnter):
 				m.deleteItemArmed = false
 				// Show selected item detail in viewport
@@ -994,6 +1002,22 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, opsKeyDown) && len(m.pendingOps) == 0 && !m.promptStartService:
 			for i := m.actionCursor + 1; i < len(m.actions); i++ {
+				if m.actions[i].enabled {
+					m.actionCursor = i
+					break
+				}
+			}
+
+		case opsIsJumpTop(msg) && len(m.pendingOps) == 0 && !m.promptStartService:
+			for i := 0; i < len(m.actions); i++ {
+				if m.actions[i].enabled {
+					m.actionCursor = i
+					break
+				}
+			}
+
+		case opsIsJumpBottom(msg) && len(m.pendingOps) == 0 && !m.promptStartService:
+			for i := len(m.actions) - 1; i >= 0; i-- {
 				if m.actions[i].enabled {
 					m.actionCursor = i
 					break

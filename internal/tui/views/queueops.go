@@ -299,6 +299,12 @@ func (m *QueueOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, opsKeyDown) && m.listCursor < maxCursor && !m.deleteArmed:
 			m.listCursor++
 
+		case opsIsJumpTop(msg) && !m.deleteArmed:
+			m.listCursor = 0
+
+		case opsIsJumpBottom(msg) && !m.deleteArmed:
+			m.listCursor = maxCursor
+
 		case key.Matches(msg, opsKeyEnter):
 			if m.listCursor == 0 {
 				// Local entry
@@ -808,6 +814,22 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, opsKeyDown) && len(m.pendingOps) == 0 && !m.promptStartService:
 			for i := m.actionCursor + 1; i < len(m.actions); i++ {
+				if m.actions[i].enabled {
+					m.actionCursor = i
+					break
+				}
+			}
+
+		case opsIsJumpTop(msg) && len(m.pendingOps) == 0 && !m.promptStartService:
+			for i := 0; i < len(m.actions); i++ {
+				if m.actions[i].enabled {
+					m.actionCursor = i
+					break
+				}
+			}
+
+		case opsIsJumpBottom(msg) && len(m.pendingOps) == 0 && !m.promptStartService:
+			for i := len(m.actions) - 1; i >= 0; i-- {
 				if m.actions[i].enabled {
 					m.actionCursor = i
 					break

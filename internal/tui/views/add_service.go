@@ -508,6 +508,10 @@ func (m *AddServiceModel) handleSource(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.sourceCursor--
 	case key.Matches(msg, addSvcDown) && m.sourceCursor < maxIdx:
 		m.sourceCursor++
+	case opsIsJumpTop(msg):
+		m.sourceCursor = 0
+	case opsIsJumpBottom(msg):
+		m.sourceCursor = maxIdx
 	case key.Matches(msg, addSvcNext):
 		if m.sourceCursor < hostOffset {
 			// Docker options
@@ -607,6 +611,12 @@ func (m *AddServiceModel) handleCatalog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.catalogCursor--
 	case key.Matches(msg, addSvcDown) && m.catalogCursor < len(cat)-1:
 		m.catalogCursor++
+	case opsIsJumpTop(msg):
+		m.catalogCursor = 0
+	case opsIsJumpBottom(msg):
+		if len(cat) > 0 {
+			m.catalogCursor = len(cat) - 1
+		}
 	case key.Matches(msg, addSvcNext):
 		entry := cat[m.catalogCursor]
 		m.svc.Image = entry.Image
@@ -656,6 +666,12 @@ func (m *AddServiceModel) handleSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.searchCursor < len(m.searchResults)-1 {
 			m.searchCursor++
 		}
+	case opsIsJumpTop(msg):
+		m.searchCursor = 0
+	case opsIsJumpBottom(msg):
+		if len(m.searchResults) > 0 {
+			m.searchCursor = len(m.searchResults) - 1
+		}
 	case key.Matches(msg, addSvcNext):
 		query := strings.TrimSpace(m.searchInput.Value())
 		if query == "" {
@@ -686,6 +702,12 @@ func (m *AddServiceModel) handleTagSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.tagCursor--
 	case key.Matches(msg, addSvcDown) && m.tagCursor < len(m.tags)-1:
 		m.tagCursor++
+	case opsIsJumpTop(msg):
+		m.tagCursor = 0
+	case opsIsJumpBottom(msg):
+		if len(m.tags) > 0 {
+			m.tagCursor = len(m.tags) - 1
+		}
 	case key.Matches(msg, addSvcNext):
 		if len(m.tags) > 0 {
 			m.svc.Tag = m.tags[m.tagCursor].Name

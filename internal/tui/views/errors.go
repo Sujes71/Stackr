@@ -174,6 +174,20 @@ func (m *ErrorListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scrollCursorIntoView()
 			return m, nil
 
+		case opsIsJumpTop(msg):
+			if !m.showDetail {
+				m.cursor = 0
+			}
+			m.scrollCursorIntoView()
+			return m, nil
+
+		case opsIsJumpBottom(msg):
+			if !m.showDetail && len(m.errors) > 0 {
+				m.cursor = len(m.errors) - 1
+			}
+			m.scrollCursorIntoView()
+			return m, nil
+
 		case key.Matches(msg, errorKeys.enter):
 			if len(m.errors) > 0 {
 				m.showDetail = !m.showDetail
