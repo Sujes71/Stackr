@@ -2515,8 +2515,14 @@ func (m *RequestOpsModel) buildCurl(req config.RequestDef) string {
 
 	// Body
 	if req.Body != "" && (req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH") {
+		body := req.Body
+		// Minify JSON if possible
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, []byte(body)); err == nil {
+			body = compact.String()
+		}
 		// Escape single quotes in body for shell
-		escaped := strings.ReplaceAll(req.Body, "'", "'\\''")
+		escaped := strings.ReplaceAll(body, "'", "'\\''")
 		b.WriteString(" \\\n  -d '" + escaped + "'")
 	}
 
