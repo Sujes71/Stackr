@@ -527,9 +527,13 @@ func (m *RequestOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.screen == reqScreenResult && m.viewingResult {
 		if keyMsg, ok := msg.(tea.KeyMsg); ok {
 			if keyMsg.String() == "c" {
-				// Copy raw result to clipboard
+				// Copy response body to clipboard (strip HTTP status line)
 				if m.resultRaw != "" {
-					_ = clipboard.WriteAll(m.resultRaw)
+					body := m.resultRaw
+					if idx := strings.Index(body, "\n\n"); idx != -1 {
+						body = body[idx+2:]
+					}
+					_ = clipboard.WriteAll(body)
 					m.copied = true
 				}
 				return m, nil
