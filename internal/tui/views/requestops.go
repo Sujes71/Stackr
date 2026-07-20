@@ -749,7 +749,7 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if item.reqIdx < len(m.profile.RequestDefs) {
 						curl := m.buildCurl(m.profile.RequestDefs[item.reqIdx])
 						_ = clipboard.WriteAll(curl)
-						m.copyFeedback = "✓ copied cURL"
+						m.copyFeedback = "copied cURL"
 					}
 				}
 			}
@@ -966,7 +966,7 @@ func (m *RequestOpsModel) viewList() string {
 	}
 
 	if m.copyFeedback != "" {
-		b.WriteString("\n" + styles.StyleSuccess.Render("  "+m.copyFeedback))
+		b.WriteString("\n  " + styles.StyleSuccess.Render("✓") + " " + m.copyFeedback)
 		b.WriteString("\n")
 	}
 
