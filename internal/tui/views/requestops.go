@@ -2023,7 +2023,7 @@ func (m *RequestOpsModel) viewKVBuilder() string {
 // ── Variable prompt ───────────────────────────────────────────────────────────
 
 // varRe matches {var_name} patterns (but not {token}).
-var varRe = regexp.MustCompile(`\{(\w+)\}`)
+var varRe = regexp.MustCompile(`\{([\w-]+)\}`)
 
 // startVarPrompt checks variables and decides whether to prompt or execute directly.
 // forcePrompt=true means always show the prompt (used by Option+Enter).
