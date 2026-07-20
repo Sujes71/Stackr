@@ -179,6 +179,7 @@ func NewRequestOps(cfg *config.Config, p *config.Profile, envName string) *Reque
 	m.newEnvInput.CharLimit = 20
 
 	m.ensureDefaultEnv()
+	m.migrateToGlobal()
 
 	// Find active env index
 	m.activeEnv = 0
@@ -256,6 +257,130 @@ func (m *RequestOpsModel) currentEnv() *config.RequestEnv {
 	return nil
 }
 
+// ── Migration: per-env → global folders + requests ────────────────────────────
+
+func (m *RequestOpsModel) migrateToGlobal() {
+	// If global folders already exist, skip migration
+	if len(m.profile.RequestFolders) > 0 {
+		return
+	}
+	// Find "local" env or first env
+	var sourceEnv *config.RequestEnv
+	for i := range m.profile.RequestEnvs {
+		if m.profile.RequestEnvs[i].Name == "local" {
+			sourceEnv = &m.profile.RequestEnvs[i]
+			break
+		}
+	}
+	if sourceEnv == nil && len(m.profile.RequestEnvs) > 0 {
+		sourceEnv = &m.profile.RequestEnvs[0]
+	}
+	if sourceEnv == nil {
+		return
+	}
+	// Seed global folders from source env's BaseURLs
+	for _, bu := range sourceEnv.BaseURLs {
+		m.profile.RequestFolders = append(m.profile.RequestFolders, config.RequestFolder{Name: bu.Name})
+	}
+	// Seed global requests from source env's Requests
+	m.profile.RequestDefs = append(m.profile.RequestDefs, sourceEnv.Requests...)
+	// Clear source env's requests (they're now global)
+	sourceEnv.Requests = nil
+	// Ensure all envs have BaseURL entries for all global folders
+	for i := range m.profile.RequestEnvs {
+		env := &m.profile.RequestEnvs[i]
+		existingNames := make(map[string]bool)
+		for _, bu := range env.BaseURLs {
+			existingNames[bu.Name] = true
+		}
+		for _, f := range m.profile.RequestFolders {
+			if !existingNames[f.Name] {
+				env.BaseURLs = append(env.BaseURLs, config.RequestBaseURL{Name: f.Name, URL: ""})
+			}
+		}
+	}
+	m.cfg.UpdateProfile(*m.profile)
+}
+
+// ── Sync helpers ──────────────────────────────────────────────────────────────
+
+// syncFolderToAllEnvs ensures all envs have a BaseURL entry for the given folder name.
+func (m *RequestOpsModel) syncFolderToAllEnvs(folderName string) {
+	for i := range m.profile.RequestEnvs {
+		env := &m.profile.RequestEnvs[i]
+		found := false
+		for _, bu := range env.BaseURLs {
+			if bu.Name == folderName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			env.BaseURLs = append(env.BaseURLs, config.RequestBaseURL{Name: folderName, URL: ""})
+		}
+	}
+}
+
+// removeFolderFromAllEnvs removes BaseURL entries matching the given folder name from all envs.
+func (m *RequestOpsModel) removeFolderFromAllEnvs(folderName string) {
+	for i := range m.profile.RequestEnvs {
+		env := &m.profile.RequestEnvs[i]
+		var newURLs []config.RequestBaseURL
+		for _, bu := range env.BaseURLs {
+			if bu.Name != folderName {
+				newURLs = append(newURLs, bu)
+			}
+		}
+		env.BaseURLs = newURLs
+	}
+}
+
+// renameFolderInAllEnvs renames a folder in all envs' BaseURL entries.
+func (m *RequestOpsModel) renameFolderInAllEnvs(oldName, newName string) {
+	for i := range m.profile.RequestEnvs {
+		env := &m.profile.RequestEnvs[i]
+		for j, bu := range env.BaseURLs {
+			if bu.Name == oldName {
+				env.BaseURLs[j].Name = newName
+			}
+		}
+	}
+	// Also update RequestDefs.BaseURLName references
+	for i := range m.profile.RequestDefs {
+		if m.profile.RequestDefs[i].BaseURLName == oldName {
+			m.profile.RequestDefs[i].BaseURLName = newName
+		}
+	}
+}
+
+// currentEnvURL returns the URL for a given folder name in the current env.
+func (m *RequestOpsModel) currentEnvURL(folderName string) string {
+	env := m.currentEnv()
+	if env == nil {
+		return ""
+	}
+	for _, bu := range env.BaseURLs {
+		if bu.Name == folderName {
+			return bu.URL
+		}
+	}
+	return ""
+}
+
+// setCurrentEnvURL sets the URL for a given folder name in the current env.
+func (m *RequestOpsModel) setCurrentEnvURL(folderName, url string) {
+	env := m.currentEnv()
+	if env == nil {
+		return
+	}
+	for i, bu := range env.BaseURLs {
+		if bu.Name == folderName {
+			env.BaseURLs[i].URL = url
+			return
+		}
+	}
+}
+
 // ── List items builder ────────────────────────────────────────────────────────
 
 func (m *RequestOpsModel) buildListItems() []requestListItem {
@@ -265,22 +390,23 @@ func (m *RequestOpsModel) buildListItems() []requestListItem {
 	}
 	var items []requestListItem
 
-	// Group requests by BaseURLName
-	reqsByURL := make(map[string][]int) // baseURLName -> []reqIdx
-	for i, req := range env.Requests {
+	// Group global requests by BaseURLName
+	reqsByURL := make(map[string][]int) // folderName -> []reqIdx into Profile.RequestDefs
+	for i, req := range m.profile.RequestDefs {
 		reqsByURL[req.BaseURLName] = append(reqsByURL[req.BaseURLName], i)
 	}
 
-	// Render each Base URL as a folder
-	for i, bu := range env.BaseURLs {
+	// Render each global folder
+	for i, folder := range m.profile.RequestFolders {
+		url := m.currentEnvURL(folder.Name)
 		expanded := m.expandedURLs[i]
 		items = append(items, requestListItem{
-			kind: reqItemURL, label: bu.Name, sublabel: bu.URL,
-			urlIdx: i, enabled: true, depth: 0,
+			kind: reqItemURL, label: folder.Name, sublabel: url,
+			urlIdx: i, enabled: url != "", depth: 0,
 		})
-		if expanded {
-			for _, reqIdx := range reqsByURL[bu.Name] {
-				req := env.Requests[reqIdx]
+		if expanded && url != "" {
+			for _, reqIdx := range reqsByURL[folder.Name] {
+				req := m.profile.RequestDefs[reqIdx]
 				items = append(items, requestListItem{
 					kind: reqItemRequest, label: req.Name,
 					sublabel: req.Method + " " + req.Path,
@@ -291,7 +417,7 @@ func (m *RequestOpsModel) buildListItems() []requestListItem {
 		}
 	}
 
-	// + Add Endpoint Group at the end
+	// + Add Folder
 	items = append(items, requestListItem{
 		kind: reqItemAddURL, label: "+ Add Folder", enabled: true, depth: 0,
 	})
@@ -473,19 +599,18 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Expand all / Collapse all
 		case msg.String() == " ":
 			m.deleteArmed = false
-			env := m.currentEnv()
-			if env == nil || len(env.BaseURLs) == 0 {
+			if len(m.profile.RequestFolders) == 0 {
 				break
 			}
 			// If any collapsed → expand all; if all expanded → collapse all
 			anyCollapsed := false
-			for i := range env.BaseURLs {
+			for i := range m.profile.RequestFolders {
 				if !m.expandedURLs[i] {
 					anyCollapsed = true
 					break
 				}
 			}
-			for i := range env.BaseURLs {
+			for i := range m.profile.RequestFolders {
 				m.expandedURLs[i] = anyCollapsed
 			}
 			m.listItems = m.buildListItems()
@@ -554,9 +679,8 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				case reqItemRequest:
 					// Execute request
-					env := m.currentEnv()
-					if env != nil && item.reqIdx < len(env.Requests) {
-						return m.startVarPrompt(env.Requests[item.reqIdx], false)
+					if item.reqIdx < len(m.profile.RequestDefs) {
+						return m.startVarPrompt(m.profile.RequestDefs[item.reqIdx], false)
 					}
 				case reqItemAddURL:
 					return m.startCreateURL()
@@ -569,9 +693,8 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.listCursor < len(m.listItems) {
 				item := m.listItems[m.listCursor]
 				if item.kind == reqItemRequest && item.enabled {
-					env := m.currentEnv()
-					if env != nil && item.reqIdx < len(env.Requests) {
-						return m.startVarPrompt(env.Requests[item.reqIdx], true)
+					if item.reqIdx < len(m.profile.RequestDefs) {
+						return m.startVarPrompt(m.profile.RequestDefs[item.reqIdx], true)
 					}
 				}
 			}
@@ -581,14 +704,12 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.listCursor < len(m.listItems) {
 				item := m.listItems[m.listCursor]
 				if item.kind == reqItemRequest && item.enabled {
-					env := m.currentEnv()
-					if env != nil && item.reqIdx < len(env.Requests) {
+					if item.reqIdx < len(m.profile.RequestDefs) {
 						return m.startEditRequest(item.reqIdx)
 					}
 				}
 				if item.kind == reqItemURL && item.enabled {
-					env := m.currentEnv()
-					if env != nil && item.urlIdx < len(env.BaseURLs) {
+					if item.urlIdx < len(m.profile.RequestFolders) {
 						return m.startEditURL(item.urlIdx)
 					}
 				}
@@ -609,23 +730,20 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.deleteArmedIsEnv = false
 				} else {
 					m.deleteArmed = false
-					env := m.currentEnv()
-					if env == nil {
-						break
-					}
 					switch item.kind {
 					case reqItemURL:
-						if item.urlIdx < len(env.BaseURLs) {
-							// Delete folder + all child requests
-							buName := env.BaseURLs[item.urlIdx].Name
+						if item.urlIdx < len(m.profile.RequestFolders) {
+							// Delete folder + all child requests (global)
+							folderName := m.profile.RequestFolders[item.urlIdx].Name
 							var newReqs []config.RequestDef
-							for _, r := range env.Requests {
-								if r.BaseURLName != buName {
+							for _, r := range m.profile.RequestDefs {
+								if r.BaseURLName != folderName {
 									newReqs = append(newReqs, r)
 								}
 							}
-							env.Requests = newReqs
-							env.BaseURLs = append(env.BaseURLs[:item.urlIdx], env.BaseURLs[item.urlIdx+1:]...)
+							m.profile.RequestDefs = newReqs
+							m.removeFolderFromAllEnvs(folderName)
+							m.profile.RequestFolders = append(m.profile.RequestFolders[:item.urlIdx], m.profile.RequestFolders[item.urlIdx+1:]...)
 							// Shift expandedURLs keys for indices after the deleted one
 							delete(m.expandedURLs, item.urlIdx)
 							newExpanded := make(map[int]bool)
@@ -648,8 +766,8 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 							}
 						}
 					case reqItemRequest:
-						if item.reqIdx < len(env.Requests) {
-							env.Requests = append(env.Requests[:item.reqIdx], env.Requests[item.reqIdx+1:]...)
+						if item.reqIdx < len(m.profile.RequestDefs) {
+							m.profile.RequestDefs = append(m.profile.RequestDefs[:item.reqIdx], m.profile.RequestDefs[item.reqIdx+1:]...)
 							m.profile.UpdatedAt = time.Now()
 							if err := m.cfg.UpdateProfile(*m.profile); err != nil {
 								m.listItems = m.buildListItems()
@@ -738,10 +856,15 @@ func (m *RequestOpsModel) viewList() string {
 			if m.expandedURLs[item.urlIdx] {
 				icon = "▾"
 			}
+			// Show URL (or placeholder if empty)
+			urlDisplay := item.sublabel
+			if urlDisplay == "" {
+				urlDisplay = "(no URL)"
+			}
 			if isCursor {
-				b.WriteString(selStyle.Render(fmt.Sprintf("  > %s %s", icon, item.label)) + "  " + mutedStyle.Render(item.sublabel) + "\n")
+				b.WriteString(selStyle.Render(fmt.Sprintf("  > %s %s", icon, item.label)) + "  " + mutedStyle.Render(urlDisplay) + "\n")
 			} else {
-				b.WriteString(fmt.Sprintf("    %s %s", icon, item.label) + "  " + mutedStyle.Render(item.sublabel) + "\n")
+				b.WriteString(fmt.Sprintf("    %s %s", icon, item.label) + "  " + mutedStyle.Render(urlDisplay) + "\n")
 			}
 
 		case reqItemRequest:
@@ -815,7 +938,7 @@ func (m *RequestOpsModel) viewList() string {
 	}
 	footerItems = append(footerItems, styles.HelpItem("n", "add env"))
 	env = m.currentEnv()
-	if env != nil && len(env.BaseURLs) > 0 {
+	if len(m.profile.RequestFolders) > 0 {
 		footerItems = append(footerItems, styles.HelpItem("⎵", "expand/collapse all"))
 	}
 	if m.listCursor < len(m.listItems) {
@@ -863,8 +986,12 @@ func (m *RequestOpsModel) updateAddEnv(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		// Append new environment
-		m.profile.RequestEnvs = append(m.profile.RequestEnvs, config.RequestEnv{Name: name})
+		// Append new environment with empty BaseURL entries for all global folders
+		newEnv := config.RequestEnv{Name: name}
+		for _, folder := range m.profile.RequestFolders {
+			newEnv.BaseURLs = append(newEnv.BaseURLs, config.RequestBaseURL{Name: folder.Name, URL: ""})
+		}
+		m.profile.RequestEnvs = append(m.profile.RequestEnvs, newEnv)
 		m.cfg.UpdateProfile(*m.profile)
 		// Switch to the new env
 		m.activeEnv = len(m.profile.RequestEnvs) - 1
@@ -1010,8 +1137,7 @@ func (m *RequestOpsModel) startCreateRequest() (tea.Model, tea.Cmd) {
 	m.nameInput.Placeholder = "Login"
 	m.methodName = "GET"
 	m.methodCursor = 0
-	env := m.currentEnv()
-	if env != nil && len(env.BaseURLs) > 0 {
+	if len(m.profile.RequestFolders) > 0 {
 		m.baseURLIdx = 0
 	} else {
 		m.baseURLIdx = -1
@@ -1036,19 +1162,19 @@ func (m *RequestOpsModel) startCreateRequestForURL(urlIdx int) (tea.Model, tea.C
 }
 
 func (m *RequestOpsModel) startEditURL(idx int) (tea.Model, tea.Cmd) {
-	env := m.currentEnv()
-	if env == nil || idx >= len(env.BaseURLs) {
+	if idx < 0 || idx >= len(m.profile.RequestFolders) {
 		return m, nil
 	}
-	bu := env.BaseURLs[idx]
+	folder := m.profile.RequestFolders[idx]
+	url := m.currentEnvURL(folder.Name)
 	m.screen = reqScreenEditForm
 	m.formFocus = 0
 	m.editingIdx = idx
 	m.isURLForm = true
-	m.nameInput.SetValue(bu.Name)
+	m.nameInput.SetValue(folder.Name)
 	m.nameInput.Placeholder = "Url"
 	m.baseURLIdx = -1
-	m.pathInput.SetValue(bu.URL)
+	m.pathInput.SetValue(url)
 	m.pathInput.Placeholder = "http://localhost:8080"
 	m.isLogin = false
 	m.tokenPathInput.SetValue("")
@@ -1060,11 +1186,10 @@ func (m *RequestOpsModel) startEditURL(idx int) (tea.Model, tea.Cmd) {
 }
 
 func (m *RequestOpsModel) startEditRequest(idx int) (tea.Model, tea.Cmd) {
-	env := m.currentEnv()
-	if env == nil || idx >= len(env.Requests) {
+	if idx < 0 || idx >= len(m.profile.RequestDefs) {
 		return m, nil
 	}
-	req := env.Requests[idx]
+	req := m.profile.RequestDefs[idx]
 	m.screen = reqScreenEditForm
 	m.formFocus = 0
 	m.editingIdx = idx
@@ -1078,10 +1203,10 @@ func (m *RequestOpsModel) startEditRequest(idx int) (tea.Model, tea.Cmd) {
 			break
 		}
 	}
-	// Find base URL index
+	// Find base URL index in global folders
 	m.baseURLIdx = -1
-	for i, bu := range env.BaseURLs {
-		if bu.Name == req.BaseURLName {
+	for i, folder := range m.profile.RequestFolders {
+		if folder.Name == req.BaseURLName {
 			m.baseURLIdx = i
 			break
 		}
@@ -1263,9 +1388,8 @@ func (m *RequestOpsModel) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshFormFocus()
 				return m, nil
 			case 2: // Base URL selector
-				env := m.currentEnv()
-				if env != nil && len(env.BaseURLs) > 0 {
-					m.baseURLIdx = (m.baseURLIdx + 1) % len(env.BaseURLs)
+				if len(m.profile.RequestFolders) > 0 {
+					m.baseURLIdx = (m.baseURLIdx + 1) % len(m.profile.RequestFolders)
 				}
 				return m, nil
 		case 4: // Is Login toggle
@@ -1400,14 +1524,6 @@ func (m *RequestOpsModel) saveForm() (tea.Model, tea.Cmd) {
 	method := m.methodName
 	path := strings.TrimSpace(m.pathInput.Value())
 
-	// Determine if this is a URL save or a request save
-	env := m.currentEnv()
-	if env == nil {
-		m.screen = reqScreenList
-		m.listItems = m.buildListItems()
-		return m, nil
-	}
-
 	// Validate
 	if name == "" {
 		m.formError = "Name is required"
@@ -1415,17 +1531,23 @@ func (m *RequestOpsModel) saveForm() (tea.Model, tea.Cmd) {
 	}
 
 	if m.isURLForm {
-		// Save as Base URL
+		// Save as global Base URL folder
 		url := path // pathInput holds the URL value in URL form
 		if url == "" {
 			m.formError = "URL is required"
 			return m, nil
 		}
-		if m.screen == reqScreenEditForm && m.editingIdx >= 0 && m.editingIdx < len(env.BaseURLs) {
-			env.BaseURLs[m.editingIdx].Name = name
-			env.BaseURLs[m.editingIdx].URL = url
+		if m.screen == reqScreenEditForm && m.editingIdx >= 0 && m.editingIdx < len(m.profile.RequestFolders) {
+			oldName := m.profile.RequestFolders[m.editingIdx].Name
+			if name != oldName {
+				m.renameFolderInAllEnvs(oldName, name)
+			}
+			m.profile.RequestFolders[m.editingIdx].Name = name
+			m.setCurrentEnvURL(name, url)
 		} else {
-			env.BaseURLs = append(env.BaseURLs, config.RequestBaseURL{Name: name, URL: url})
+			m.profile.RequestFolders = append(m.profile.RequestFolders, config.RequestFolder{Name: name})
+			m.syncFolderToAllEnvs(name)
+			m.setCurrentEnvURL(name, url)
 		}
 		m.profile.UpdatedAt = time.Now()
 		if err := m.cfg.UpdateProfile(*m.profile); err != nil {
@@ -1442,7 +1564,7 @@ func (m *RequestOpsModel) saveForm() (tea.Model, tea.Cmd) {
 		m.formError = "Method is required"
 		return m, nil
 	}
-	if m.baseURLIdx < 0 || m.baseURLIdx >= len(env.BaseURLs) {
+	if m.baseURLIdx < 0 || m.baseURLIdx >= len(m.profile.RequestFolders) {
 		m.formError = "Base URL is required"
 		return m, nil
 	}
@@ -1463,7 +1585,7 @@ func (m *RequestOpsModel) saveForm() (tea.Model, tea.Cmd) {
 	reqDef := config.RequestDef{
 		Name:        name,
 		Method:      method,
-		BaseURLName: env.BaseURLs[m.baseURLIdx].Name,
+		BaseURLName: m.profile.RequestFolders[m.baseURLIdx].Name,
 		Path:        path,
 		IsLogin:     m.isLogin,
 		TokenPath:   strings.TrimSpace(m.tokenPathInput.Value()),
@@ -1473,10 +1595,10 @@ func (m *RequestOpsModel) saveForm() (tea.Model, tea.Cmd) {
 	}
 
 	// Check if editing an existing request
-	if m.screen == reqScreenEditForm && m.editingIdx >= 0 && m.editingIdx < len(env.Requests) {
-		env.Requests[m.editingIdx] = reqDef
+	if m.screen == reqScreenEditForm && m.editingIdx >= 0 && m.editingIdx < len(m.profile.RequestDefs) {
+		m.profile.RequestDefs[m.editingIdx] = reqDef
 	} else {
-		env.Requests = append(env.Requests, reqDef)
+		m.profile.RequestDefs = append(m.profile.RequestDefs, reqDef)
 	}
 
 	m.profile.UpdatedAt = time.Now()
@@ -1513,8 +1635,6 @@ func (m *RequestOpsModel) viewForm() string {
 	normalStyle := lipgloss.NewStyle()
 	mutedStyle := styles.StyleSubtitle
 
-	env := m.currentEnv()
-
 	// Field 0: Name
 	if m.formFocus == 0 {
 		m.nameInput.Focus()
@@ -1536,14 +1656,15 @@ func (m *RequestOpsModel) viewForm() string {
 		// Field 2: Base URL selector
 		if m.formFocus == 2 {
 			buLabel := "(none)"
-			if m.baseURLIdx >= 0 && env != nil && m.baseURLIdx < len(env.BaseURLs) {
-				buLabel = env.BaseURLs[m.baseURLIdx].Name
+			if m.baseURLIdx >= 0 && m.baseURLIdx < len(m.profile.RequestFolders) {
+				buLabel = m.profile.RequestFolders[m.baseURLIdx].Name
 			}
 			b.WriteString("  " + focusStyle.Render("Base URL: ") + focusStyle.Render("> "+buLabel) + "  " + mutedStyle.Render("(enter to cycle)") + "\n")
 		} else {
 			buLabel := "(none)"
-			if m.baseURLIdx >= 0 && env != nil && m.baseURLIdx < len(env.BaseURLs) {
-				buLabel = env.BaseURLs[m.baseURLIdx].Name + "  " + mutedStyle.Render(env.BaseURLs[m.baseURLIdx].URL)
+			if m.baseURLIdx >= 0 && m.baseURLIdx < len(m.profile.RequestFolders) {
+				folderName := m.profile.RequestFolders[m.baseURLIdx].Name
+				buLabel = folderName + "  " + mutedStyle.Render(m.currentEnvURL(folderName))
 			}
 			b.WriteString("  " + normalStyle.Render("Base URL: ") + buLabel + "\n")
 		}
@@ -2109,12 +2230,12 @@ func (m *RequestOpsModel) executeRequestFromPrompt() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	item := m.listItems[m.listCursor]
-	if item.kind != reqItemRequest || item.reqIdx >= len(env.Requests) {
+	if item.kind != reqItemRequest || item.reqIdx >= len(m.profile.RequestDefs) {
 		m.screen = reqScreenList
 		return m, nil
 	}
 
-	req := env.Requests[item.reqIdx]
+	req := m.profile.RequestDefs[item.reqIdx]
 	return m.doExecuteRequest(req)
 }
 
@@ -2130,14 +2251,8 @@ func (m *RequestOpsModel) doExecuteRequest(req config.RequestDef) (tea.Model, te
 		return m, nil
 	}
 
-	// Find base URL
-	var baseURL string
-	for _, bu := range env.BaseURLs {
-		if bu.Name == req.BaseURLName {
-			baseURL = bu.URL
-			break
-		}
-	}
+	// Find base URL from current env
+	baseURL := m.currentEnvURL(req.BaseURLName)
 	if baseURL == "" {
 		m.screen = reqScreenList
 		m.listItems = m.buildListItems()

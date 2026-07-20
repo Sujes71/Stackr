@@ -38,15 +38,17 @@ type Config struct {
 }
 
 type Profile struct {
-	Name                string        `yaml:"name"`
-	Description         string        `yaml:"description,omitempty"`
-	CreatedAt           time.Time     `yaml:"created_at"`
-	UpdatedAt           time.Time     `yaml:"updated_at"`
-	Environments        []Environment `yaml:"environments"`
-	ActiveEnv           string        `yaml:"active_env"`
-	RequestEnvs         []RequestEnv  `yaml:"request_envs,omitempty"`
-	LegacyDBOpsMigrated bool          `yaml:"legacy_db_ops_migrated,omitempty"`
-	ConfigVersion       int           `yaml:"config_version,omitempty"` // 0 = legacy/plaintext, 1 = encrypted passwords
+	Name                string          `yaml:"name"`
+	Description         string          `yaml:"description,omitempty"`
+	CreatedAt           time.Time       `yaml:"created_at"`
+	UpdatedAt           time.Time       `yaml:"updated_at"`
+	Environments        []Environment   `yaml:"environments"`
+	ActiveEnv           string          `yaml:"active_env"`
+	RequestEnvs         []RequestEnv    `yaml:"request_envs,omitempty"`
+	RequestFolders      []RequestFolder `yaml:"request_folders,omitempty"`
+	RequestDefs         []RequestDef    `yaml:"request_defs,omitempty"`
+	LegacyDBOpsMigrated bool            `yaml:"legacy_db_ops_migrated,omitempty"`
+	ConfigVersion       int             `yaml:"config_version,omitempty"` // 0 = legacy/plaintext, 1 = encrypted passwords
 }
 
 type Environment struct {
@@ -265,13 +267,20 @@ func (q QueueSyncEnv) DumpDir(profileName, envName, serviceName string) string {
 
 // ── Request Ops types ────────────────────────────────────────────────────────
 
+// RequestFolder defines a global folder (base URL group) for Request Ops.
+// Folder names are shared across all environments.
+type RequestFolder struct {
+	Name string `yaml:"name"` // e.g. "client_url" — shared across all envs
+}
+
 // RequestEnv is an independent environment for Request Ops (separate from Docker environments).
-// Each RequestEnv has its own base URLs, requests, and variables.
+// Each RequestEnv has its own base URL values and variables. Folders and requests are global.
 type RequestEnv struct {
-	Name       string          `yaml:"name"`                  // e.g. "local", "dev"
-	BaseURLs   []RequestBaseURL `yaml:"base_urls,omitempty"`
-	Requests   []RequestDef    `yaml:"requests,omitempty"`
-	Variables  []RequestEnvVar `yaml:"variables,omitempty"`
+	Name      string           `yaml:"name"`                  // e.g. "local", "dev"
+	BaseURLs  []RequestBaseURL `yaml:"base_urls,omitempty"`   // per-env URL values for global folders
+	Variables []RequestEnvVar  `yaml:"variables,omitempty"`
+	// Deprecated: Requests moved to Profile.RequestDefs. Kept only for migration.
+	Requests []RequestDef `yaml:"requests,omitempty"`
 }
 
 // RequestBaseURL defines a base URL within a RequestEnv.
