@@ -1864,6 +1864,14 @@ func (m *RequestOpsModel) updateKVBuilder(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.finishKVBuilder()
 				return m, nil
 			}
+			// Check for duplicate key
+			for _, pair := range m.kvPairs {
+				if pair[0] == val {
+					m.varPromptInput.SetValue("")
+					m.varPromptInput.CursorEnd()
+					return m, nil
+				}
+			}
 			m.kvPairs = append(m.kvPairs, [2]string{val, ""})
 			m.kvPhase = 1
 			m.varPromptInput.Placeholder = "value for " + val
@@ -1879,7 +1887,7 @@ func (m *RequestOpsModel) updateKVBuilder(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.kvDeleteArmed = false
 		return m, nil
 
-	case "ctrl+d":
+	case "d":
 		if len(m.kvPairs) == 0 || m.kvPhase != 0 {
 			m.kvDeleteArmed = false
 			break
@@ -1946,7 +1954,7 @@ func (m *RequestOpsModel) viewKVBuilder() string {
 	b.WriteString("  " + m.varPromptInput.View() + "\n")
 
 	if m.kvDeleteArmed {
-		b.WriteString("\n" + styles.StyleError.Render("  Press ctrl+d again to remove last pair") + "\n")
+		b.WriteString("\n" + styles.StyleError.Render("  Press d again to remove last pair") + "\n")
 	}
 
 	helpItems := []styles.HelpItemResult{
@@ -1954,7 +1962,7 @@ func (m *RequestOpsModel) viewKVBuilder() string {
 		styles.HelpItem("↵", "confirm"),
 	}
 	if len(m.kvPairs) > 0 && m.kvPhase == 0 {
-		helpItems = append(helpItems, styles.HelpItem("ctrl+d ctrl+d", "delete last"))
+		helpItems = append(helpItems, styles.HelpItem("d d", "delete last"))
 	}
 	b.WriteString("\n  " + styles.InlineHelp(helpItems...))
 	return b.String()
