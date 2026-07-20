@@ -952,7 +952,11 @@ func (m *RequestOpsModel) viewList() string {
 			footerItems = append(footerItems, styles.HelpItem("↵", "execute"))
 			footerItems = append(footerItems, styles.HelpItem("⌥↵", "re-prompt"))
 		case reqItemURL:
-			footerItems = append(footerItems, styles.HelpItem("↵", "expand/collapse"))
+			if m.expandedURLs[item.urlIdx] {
+				footerItems = append(footerItems, styles.HelpItem("↵", "collapse"))
+			} else {
+				footerItems = append(footerItems, styles.HelpItem("↵", "expand"))
+			}
 		}
 	}
 	if env != nil && env.Name != "local" {
