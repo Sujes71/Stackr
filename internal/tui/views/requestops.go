@@ -943,7 +943,19 @@ func (m *RequestOpsModel) viewList() string {
 	footerItems = append(footerItems, styles.HelpItem("n", "add env"))
 	env = m.currentEnv()
 	if len(m.profile.RequestFolders) > 0 {
-		footerItems = append(footerItems, styles.HelpItem("⎵", "expand/collapse all"))
+		// Check if any folder is collapsed
+		anyCollapsed := false
+		for i := range m.profile.RequestFolders {
+			if !m.expandedURLs[i] {
+				anyCollapsed = true
+				break
+			}
+		}
+		if anyCollapsed {
+			footerItems = append(footerItems, styles.HelpItem("⎵", "expand all"))
+		} else {
+			footerItems = append(footerItems, styles.HelpItem("⎵", "collapse all"))
+		}
 	}
 	if m.listCursor < len(m.listItems) {
 		item := m.listItems[m.listCursor]
