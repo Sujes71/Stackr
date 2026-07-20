@@ -21,6 +21,19 @@ import (
 	"github.com/stackr/stackr/internal/tui/styles"
 )
 
+// Content-Type options for the circular selector in the KV builder.
+var contentTypeOptions = []string{
+	"application/json",
+	"text/xml",
+	"application/xml",
+	"application/soap+xml",
+	"application/x-www-form-urlencoded",
+	"multipart/form-data",
+	"text/plain",
+	"application/octet-stream",
+	"application/graphql",
+}
+
 // ── Internal screen enum ──────────────────────────────────────────────────────
 
 type requestOpsScreen int
@@ -104,13 +117,15 @@ type RequestOpsModel struct {
 	formError    string
 
 	// KV builder state (headers or params)
-	kvBuilding    bool
-	kvPairs       [][2]string
-	kvPhase       int
-	kvTarget      string // "headers" or "params"
-	kvOrigVal     string
-	kvDeleteArmed  bool
-	kvOverwriteIdx int // -1 = new pair, >=0 = overwrite existing pair at this index
+	kvBuilding       bool
+	kvPairs          [][2]string
+	kvPhase          int
+	kvTarget         string // "headers" or "params"
+	kvOrigVal        string
+	kvDeleteArmed    bool
+	kvOverwriteIdx   int    // -1 = new pair, >=0 = overwrite existing pair at this index
+	kvContentTypeIdx int    // selector position for Content-Type value
+	kvContentTypeKey bool   // true when current key is "Content-Type"
 
 	// Variable prompt state
 	varPromptIdx    int
@@ -590,6 +605,8 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				switch item.kind {
 				case reqItemURL:
 					return m.startCreateRequestForURL(item.urlIdx)
+				case reqItemRequest:
+					return m.startCreateRequestForURL(item.parentIdx)
 				case reqItemAddURL:
 					return m.startCreateURL()
 				default:
@@ -985,7 +1002,8 @@ func (m *RequestOpsModel) viewList() string {
 			contextItems = append(contextItems, styles.HelpItem("e", "edit"))
 			contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
 		} else if item.kind == reqItemRequest {
-			contextItems = append(contextItems, styles.HelpItem("c", "copy cURL"))
+			contextItems = append(contextItems, styles.HelpItem("c", "copy"))
+			contextItems = append(contextItems, styles.HelpItem("a", "add"))
 			contextItems = append(contextItems, styles.HelpItem("e", "edit"))
 			contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
 		}
@@ -1225,7 +1243,7 @@ func (m *RequestOpsModel) startCreateRequest() (tea.Model, tea.Cmd) {
 	m.pathInput.SetValue("")
 	m.pathInput.Placeholder = "/api/v1/users (appended to base)"
 	m.tokenPathInput.SetValue("")
-	m.headerKV = nil
+	m.headerKV = []config.RequestKV{{Key: "Content-Type", Value: "application/json"}}
 	m.paramKV = nil
 	m.bodyInput.SetValue("")
 	m.formError = ""
@@ -1294,6 +1312,17 @@ func (m *RequestOpsModel) startEditRequest(idx int) (tea.Model, tea.Cmd) {
 	m.tokenPathInput.SetValue(req.TokenPath)
 	m.headerKV = make([]config.RequestKV, len(req.Headers))
 	copy(m.headerKV, req.Headers)
+	// Auto-add Content-Type if not present
+	hasContentType := false
+	for _, kv := range m.headerKV {
+		if strings.EqualFold(kv.Key, "Content-Type") {
+			hasContentType = true
+			break
+		}
+	}
+	if !hasContentType {
+		m.headerKV = append([]config.RequestKV{{Key: "Content-Type", Value: "application/json"}}, m.headerKV...)
+	}
 	m.paramKV = make([]config.RequestKV, len(req.Params))
 	copy(m.paramKV, req.Params)
 	m.bodyInput.SetValue(req.Body)
@@ -1908,6 +1937,17 @@ func (m *RequestOpsModel) enterKVBuilder(target string) {
 		for i, kv := range m.headerKV {
 			m.kvPairs[i] = [2]string{kv.Key, kv.Value}
 		}
+		// Auto-add Content-Type if not present
+		hasContentType := false
+		for _, p := range m.kvPairs {
+			if strings.EqualFold(p[0], "Content-Type") {
+				hasContentType = true
+				break
+			}
+		}
+		if !hasContentType {
+			m.kvPairs = append([][2]string{{"Content-Type", "application/json"}}, m.kvPairs...)
+		}
 	} else {
 		m.kvPairs = make([][2]string, len(m.paramKV))
 		for i, kv := range m.paramKV {
@@ -1927,6 +1967,8 @@ func (m *RequestOpsModel) updateKVBuilder(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.kvBuilding = false
 		m.kvPairs = nil
 		m.kvOverwriteIdx = -1
+		m.kvContentTypeKey = false
+		m.kvContentTypeIdx = 0
 		m.varPromptInput.SetValue("")
 		m.varPromptInput.Blur()
 		return m, nil
@@ -1946,21 +1988,47 @@ func (m *RequestOpsModel) updateKVBuilder(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if pair[0] == val {
 					m.kvOverwriteIdx = i
 					m.kvPhase = 1
-					m.varPromptInput.SetValue("")
-					m.varPromptInput.Placeholder = "value for " + val + " (overwrite)"
-					m.varPromptInput.CursorEnd()
+					m.kvContentTypeKey = strings.EqualFold(val, "Content-Type")
+					if m.kvContentTypeKey {
+						// Initialize selector at matching option or 0
+						m.kvContentTypeIdx = 0
+						for j, opt := range contentTypeOptions {
+							if opt == m.kvPairs[i][1] {
+								m.kvContentTypeIdx = j
+								break
+							}
+						}
+						m.varPromptInput.SetValue("")
+						m.varPromptInput.Blur()
+					} else {
+						m.varPromptInput.SetValue("")
+						m.varPromptInput.Focus()
+						m.varPromptInput.Placeholder = "value for " + val + " (overwrite)"
+						m.varPromptInput.CursorEnd()
+					}
 					return m, nil
 				}
 			}
 			m.kvOverwriteIdx = -1
 			m.kvPairs = append(m.kvPairs, [2]string{val, ""})
 			m.kvPhase = 1
-			m.varPromptInput.Placeholder = "value for " + val
-			m.varPromptInput.CursorEnd()
+			m.kvContentTypeKey = strings.EqualFold(val, "Content-Type")
+			if m.kvContentTypeKey {
+				m.kvContentTypeIdx = 0
+				m.varPromptInput.SetValue("")
+				m.varPromptInput.Blur()
+			} else {
+				m.varPromptInput.Focus()
+				m.varPromptInput.Placeholder = "value for " + val
+				m.varPromptInput.CursorEnd()
+			}
 		} else {
+			// Phase 1 — confirm value
+			if m.kvContentTypeKey {
+				val = contentTypeOptions[m.kvContentTypeIdx]
+			}
 			if len(m.kvPairs) > 0 {
 				if m.kvOverwriteIdx >= 0 && m.kvOverwriteIdx < len(m.kvPairs) {
-					// Overwrite existing pair's value
 					m.kvPairs[m.kvOverwriteIdx][1] = val
 				} else {
 					m.kvPairs[len(m.kvPairs)-1][1] = val
@@ -1968,6 +2036,9 @@ func (m *RequestOpsModel) updateKVBuilder(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.kvOverwriteIdx = -1
 			m.kvPhase = 0
+			m.kvContentTypeKey = false
+			m.varPromptInput.SetValue("")
+			m.varPromptInput.Focus()
 			m.varPromptInput.Placeholder = "key name (leave empty to finish)"
 			m.varPromptInput.CursorEnd()
 		}
@@ -1975,17 +2046,51 @@ func (m *RequestOpsModel) updateKVBuilder(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.kvOverwriteIdx = -1
 		return m, nil
 
+	case "left":
+		if m.kvPhase == 1 && m.kvContentTypeKey {
+			m.kvContentTypeIdx--
+			if m.kvContentTypeIdx < 0 {
+				m.kvContentTypeIdx = len(contentTypeOptions) - 1
+			}
+			return m, nil
+		}
+		// Pass through to input if focused
+		if m.varPromptInput.Focused() {
+			var cmd tea.Cmd
+			m.varPromptInput, cmd = m.varPromptInput.Update(msg)
+			return m, cmd
+		}
+
+	case "right":
+		if m.kvPhase == 1 && m.kvContentTypeKey {
+			m.kvContentTypeIdx++
+			if m.kvContentTypeIdx >= len(contentTypeOptions) {
+				m.kvContentTypeIdx = 0
+			}
+			return m, nil
+		}
+		if m.varPromptInput.Focused() {
+			var cmd tea.Cmd
+			m.varPromptInput, cmd = m.varPromptInput.Update(msg)
+			return m, cmd
+		}
+
 	case "d":
-		// Only arm delete when input is empty and we're in key-entry phase
+		// Only arm delete when input is empty, we're in key-entry phase,
+		// and last pair is NOT Content-Type (Content-Type cannot be deleted)
 		if m.kvPhase != 0 || len(m.kvPairs) == 0 || m.varPromptInput.Value() != "" {
 			m.kvDeleteArmed = false
-			// Let the input consume the keystroke
 			if m.varPromptInput.Focused() {
 				var cmd tea.Cmd
 				m.varPromptInput, cmd = m.varPromptInput.Update(msg)
 				return m, cmd
 			}
 			break
+		}
+		lastPair := m.kvPairs[len(m.kvPairs)-1]
+		if strings.EqualFold(lastPair[0], "Content-Type") {
+			// Content-Type cannot be deleted
+			return m, nil
 		}
 		if m.kvDeleteArmed {
 			m.kvPairs = m.kvPairs[:len(m.kvPairs)-1]
@@ -2019,6 +2124,8 @@ func (m *RequestOpsModel) finishKVBuilder() {
 	m.kvBuilding = false
 	m.kvPairs = nil
 	m.kvOverwriteIdx = -1
+	m.kvContentTypeKey = false
+	m.kvContentTypeIdx = 0
 	m.varPromptInput.SetValue("")
 	m.varPromptInput.Blur()
 }
@@ -2043,11 +2150,19 @@ func (m *RequestOpsModel) viewKVBuilder() string {
 	promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 	if m.kvPhase == 0 {
 		b.WriteString("  " + promptStyle.Render("▸ Key") + "  (leave empty to finish)\n\n")
+	} else if m.kvContentTypeKey {
+		b.WriteString("  " + promptStyle.Render("▸ Value for Content-Type") + "  (← → to cycle)\n\n")
+		opt := contentTypeOptions[m.kvContentTypeIdx]
+		arrowStyle := lipgloss.NewStyle().Foreground(styles.ColorMuted)
+		optStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+		b.WriteString("    " + arrowStyle.Render("← ") + optStyle.Render(opt) + arrowStyle.Render(" →") + "\n")
 	} else {
 		k := m.kvPairs[len(m.kvPairs)-1][0]
 		b.WriteString("  " + promptStyle.Render("▸ Value for "+k) + "\n\n")
 	}
-	b.WriteString("  " + m.varPromptInput.View() + "\n")
+	if !m.kvContentTypeKey {
+		b.WriteString("  " + m.varPromptInput.View() + "\n")
+	}
 
 	if m.kvDeleteArmed {
 		b.WriteString("\n" + styles.StyleError.Render("  Press d again to remove last pair") + "\n")
@@ -2057,8 +2172,19 @@ func (m *RequestOpsModel) viewKVBuilder() string {
 		styles.HelpItem("esc", "cancel"),
 		styles.HelpItem("↵", "confirm"),
 	}
-	if len(m.kvPairs) > 0 && m.kvPhase == 0 {
-		helpItems = append(helpItems, styles.HelpItem("d d", "delete last"))
+	// Show d d hint only if there's at least one deletable pair
+	if m.kvPhase == 0 && len(m.kvPairs) > 0 {
+		hasDeletable := false
+		for _, p := range m.kvPairs {
+			if m.kvTarget == "headers" && strings.EqualFold(p[0], "Content-Type") {
+				continue
+			}
+			hasDeletable = true
+			break
+		}
+		if hasDeletable {
+			helpItems = append(helpItems, styles.HelpItem("d d", "delete last"))
+		}
 	}
 	b.WriteString("\n  " + styles.InlineHelp(helpItems...))
 	return b.String()
