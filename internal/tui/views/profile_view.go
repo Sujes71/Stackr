@@ -2864,18 +2864,12 @@ func (m *ProfileViewModel) renderShortcuts() string {
 
 	var sections []string
 
-	// Navigation — always present
-	navItems := []pair{
-		{"← →", "switch env"},
-		{"↑ ↓", "navigate"},
-		{"esc", "back"},
-	}
-	// Only show errors option if there are errors
+	// Navigation — only show errors shortcut if there are errors
 	if m.errorRegistry != nil && m.errorRegistry.Len() > 0 {
-		navItems = append(navItems, pair{"E", "errors"})
+		navItems := []pair{{"E", "errors"}}
+		nav := section("Navigation", navItems)
+		sections = append(sections, nav, "")
 	}
-	nav := section("Navigation", navItems)
-	sections = append(sections, nav, "")
 
 	if m.isPortForwardEnv() {
 		forwards := m.currentForwards()
