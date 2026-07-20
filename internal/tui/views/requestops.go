@@ -108,7 +108,8 @@ type RequestOpsModel struct {
 	kvPhase       int
 	kvTarget      string // "headers" or "params"
 	kvOrigVal     string
-	kvDeleteArmed bool
+	kvDeleteArmed  bool
+	kvOverwriteIdx int // -1 = new pair, >=0 = overwrite existing pair at this index
 
 	// Variable prompt state
 	varPromptIdx    int
@@ -1825,6 +1826,7 @@ func (m *RequestOpsModel) enterKVBuilder(target string) {
 	m.kvTarget = target
 	m.kvPhase = 0
 	m.kvDeleteArmed = false
+	m.kvOverwriteIdx = -1
 	m.kvPairs = nil
 
 	if target == "headers" {
@@ -1850,6 +1852,7 @@ func (m *RequestOpsModel) updateKVBuilder(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.kvBuilding = false
 		m.kvPairs = nil
+		m.kvOverwriteIdx = -1
 		m.varPromptInput.SetValue("")
 		m.varPromptInput.Blur()
 		return m, nil
@@ -1864,27 +1867,38 @@ func (m *RequestOpsModel) updateKVBuilder(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.finishKVBuilder()
 				return m, nil
 			}
-			// Check for duplicate key
-			for _, pair := range m.kvPairs {
+			// Check for duplicate key — overwrite instead of discard
+			for i, pair := range m.kvPairs {
 				if pair[0] == val {
+					m.kvOverwriteIdx = i
+					m.kvPhase = 1
 					m.varPromptInput.SetValue("")
+					m.varPromptInput.Placeholder = "value for " + val + " (overwrite)"
 					m.varPromptInput.CursorEnd()
 					return m, nil
 				}
 			}
+			m.kvOverwriteIdx = -1
 			m.kvPairs = append(m.kvPairs, [2]string{val, ""})
 			m.kvPhase = 1
 			m.varPromptInput.Placeholder = "value for " + val
 			m.varPromptInput.CursorEnd()
 		} else {
 			if len(m.kvPairs) > 0 {
-				m.kvPairs[len(m.kvPairs)-1][1] = val
+				if m.kvOverwriteIdx >= 0 && m.kvOverwriteIdx < len(m.kvPairs) {
+					// Overwrite existing pair's value
+					m.kvPairs[m.kvOverwriteIdx][1] = val
+				} else {
+					m.kvPairs[len(m.kvPairs)-1][1] = val
+				}
 			}
+			m.kvOverwriteIdx = -1
 			m.kvPhase = 0
 			m.varPromptInput.Placeholder = "key name (leave empty to finish)"
 			m.varPromptInput.CursorEnd()
 		}
 		m.kvDeleteArmed = false
+		m.kvOverwriteIdx = -1
 		return m, nil
 
 	case "d":
@@ -1930,6 +1944,7 @@ func (m *RequestOpsModel) finishKVBuilder() {
 	}
 	m.kvBuilding = false
 	m.kvPairs = nil
+	m.kvOverwriteIdx = -1
 	m.varPromptInput.SetValue("")
 	m.varPromptInput.Blur()
 }
