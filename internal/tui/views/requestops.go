@@ -846,11 +846,11 @@ func (m *RequestOpsModel) viewList() string {
 
 	// Windowing
 	totalItems := len(m.listItems)
-	overhead := 14
+	overhead := 13
 	if m.deleteArmed {
 		overhead++
 	}
-	win := opsWindow(totalItems, m.listCursor, 2, m.height, overhead)
+	win := opsWindow(totalItems, m.listCursor, 1, m.height, overhead)
 
 	if win.hasAbove {
 		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
