@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -130,6 +131,8 @@ type RequestOpsModel struct {
 	viewingResult   bool
 	viewportContent string
 	resultTitle     string
+	resultRaw       string // unstyled result for clipboard copy
+	copied          bool   // show "copied" feedback
 
 	// Add environment screen
 	newEnvInput textinput.Model
@@ -482,6 +485,8 @@ func (m *RequestOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if msg.err != nil {
 			m.resultTitle = completedLabel
+			m.resultRaw = msg.err.Error()
+			m.copied = false
 			m.viewportContent = formatErrorMsg(msg.err.Error())
 			m.resultViewport.SetContent(m.viewportContent)
 			m.resultViewport.Width = m.width - 4
@@ -504,6 +509,8 @@ func (m *RequestOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.resultTitle = completedLabel
+		m.resultRaw = msg.result
+		m.copied = false
 		m.viewportContent = styles.StyleCode.Render(msg.result)
 		m.resultViewport.SetContent(m.viewportContent)
 		m.resultViewport.Width = m.width - 4
@@ -516,9 +523,18 @@ func (m *RequestOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd()
 	}
 
-	// Handle result screen key presses (dismiss on any key)
+	// Handle result screen key presses
 	if m.screen == reqScreenResult && m.viewingResult {
-		if _, ok := msg.(tea.KeyMsg); ok {
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			if keyMsg.String() == "c" {
+				// Copy raw result to clipboard
+				if m.resultRaw != "" {
+					_ = clipboard.WriteAll(m.resultRaw)
+					m.copied = true
+				}
+				return m, nil
+			}
+			// Any other key dismisses
 			m.screen = reqScreenList
 			m.viewingResult = false
 			m.resultViewport.SetContent("")
@@ -2518,7 +2534,13 @@ func (m *RequestOpsModel) viewResult() string {
 		scrollHint = "\n  " + styles.StyleHelp.Render("▼ down") + "\n"
 	}
 	titleLine := styles.StyleHeader.Render("  " + m.resultTitle + "  —  result")
-	return titleLine + "\n\n" + m.resultViewport.View() + scrollHint + "\n  " + styles.StyleHelp.Render("press any key to close")
+	footer := "press any key to close"
+	if m.copied {
+		footer = "✓ copied to clipboard  —  press any key to close"
+	} else if m.resultRaw != "" {
+		footer = "c copy  —  press any key to close"
+	}
+	return titleLine + "\n\n" + m.resultViewport.View() + scrollHint + "\n  " + styles.StyleHelp.Render(footer)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
