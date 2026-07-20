@@ -584,7 +584,6 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activeEnv = len(m.profile.RequestEnvs) - 1
 				}
 				m.envName = m.profile.RequestEnvs[m.activeEnv].Name
-				m.expandedURLs = make(map[int]bool)
 				m.listItems = m.buildListItems()
 				if m.listCursor >= len(m.listItems) {
 					m.listCursor = len(m.listItems) - 1
@@ -602,7 +601,6 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activeEnv = 0
 				}
 				m.envName = m.profile.RequestEnvs[m.activeEnv].Name
-				m.expandedURLs = make(map[int]bool)
 				m.listItems = m.buildListItems()
 				if m.listCursor >= len(m.listItems) {
 					m.listCursor = len(m.listItems) - 1
