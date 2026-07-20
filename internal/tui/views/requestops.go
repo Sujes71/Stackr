@@ -2512,6 +2512,19 @@ func (m *RequestOpsModel) buildCurl(req config.RequestDef) string {
 	for _, h := range req.Headers {
 		b.WriteString(" \\\n  -H '" + h.Key + ": " + h.Value + "'")
 	}
+	// Auto-add Content-Type for body requests if not already set
+	if req.Body != "" && (req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH") {
+		hasCT := false
+		for _, h := range req.Headers {
+			if strings.EqualFold(h.Key, "Content-Type") {
+				hasCT = true
+				break
+			}
+		}
+		if !hasCT {
+			b.WriteString(" \\\n  -H 'Content-Type: application/json'")
+		}
+	}
 
 	// Body
 	if req.Body != "" && (req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH") {
