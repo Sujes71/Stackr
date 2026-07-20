@@ -402,7 +402,7 @@ func (m *RequestOpsModel) buildListItems() []requestListItem {
 		expanded := m.expandedURLs[i]
 		items = append(items, requestListItem{
 			kind: reqItemURL, label: folder.Name, sublabel: url,
-			urlIdx: i, enabled: url != "", depth: 0,
+			urlIdx: i, enabled: true, depth: 0,
 		})
 		if expanded && url != "" {
 			for _, reqIdx := range reqsByURL[folder.Name] {
@@ -671,7 +671,10 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				switch item.kind {
 				case reqItemURL:
-					// Toggle expand/collapse
+					// Toggle expand/collapse (only if URL is set)
+					if m.currentEnvURL(item.label) == "" {
+						break // can't expand without URL
+					}
 					m.expandedURLs[item.urlIdx] = !m.expandedURLs[item.urlIdx]
 					m.listItems = m.buildListItems()
 					if m.listCursor >= len(m.listItems) {
