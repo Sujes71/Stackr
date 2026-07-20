@@ -886,6 +886,21 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return NavigateTo{Screen: NavRequestOps, ProfileName: m.profile.Name}
 				}
 			}
+			// Q → Queue Ops — dismiss overlay, reprocess key in normal mode
+			if msg.String() == "q" {
+				m.showingShortcuts = false
+				return m, func() tea.Msg { return msg }
+			}
+			// A → Add Service — dismiss overlay, reprocess key in normal mode
+			if msg.String() == "a" {
+				m.showingShortcuts = false
+				return m, func() tea.Msg { return msg }
+			}
+			// S → stack all — dismiss overlay, reprocess key in normal mode
+			if msg.String() == "s" {
+				m.showingShortcuts = false
+				return m, func() tea.Msg { return msg }
+			}
 			// D → arm env delete (dismissible from normal mode)
 			if msg.String() == "D" {
 				if len(m.profile.Environments) > 0 {
