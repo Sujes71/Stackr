@@ -1888,8 +1888,15 @@ func (m *RequestOpsModel) updateKVBuilder(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "d":
-		if len(m.kvPairs) == 0 || m.kvPhase != 0 {
+		// Only arm delete when input is empty and we're in key-entry phase
+		if m.kvPhase != 0 || len(m.kvPairs) == 0 || m.varPromptInput.Value() != "" {
 			m.kvDeleteArmed = false
+			// Let the input consume the keystroke
+			if m.varPromptInput.Focused() {
+				var cmd tea.Cmd
+				m.varPromptInput, cmd = m.varPromptInput.Update(msg)
+				return m, cmd
+			}
 			break
 		}
 		if m.kvDeleteArmed {
