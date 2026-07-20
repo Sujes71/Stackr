@@ -901,6 +901,15 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showingShortcuts = false
 				return m, func() tea.Msg { return msg }
 			}
+			// O, M, V, P, N, X, H, T, K, D, E, Enter → dismiss overlay, reprocess in normal mode
+			if msg.String() == "o" || msg.String() == "m" || msg.String() == "v" ||
+				msg.String() == "p" || msg.String() == "n" || msg.String() == "x" ||
+				msg.String() == "h" || msg.String() == "t" || msg.String() == "k" ||
+				msg.String() == "d" || msg.String() == "e" || msg.String() == "E" ||
+				msg.String() == "enter" {
+				m.showingShortcuts = false
+				return m, func() tea.Msg { return msg }
+			}
 			// D → arm env delete (dismissible from normal mode)
 			if msg.String() == "D" {
 				if len(m.profile.Environments) > 0 {
