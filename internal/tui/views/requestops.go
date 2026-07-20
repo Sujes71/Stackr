@@ -2484,17 +2484,21 @@ func (m *RequestOpsModel) buildCurl(req config.RequestDef) string {
 	// Resolve variables (same as execution)
 	env := m.currentEnv()
 	token := ""
+	vars := make(map[string]string)
 	if env != nil {
 		for _, ev := range env.Variables {
 			if ev.Name == "_token" {
 				token = ev.Value
-				break
+			} else if ev.Value != "" {
+				vars[ev.Name] = ev.Value
 			}
 		}
 	}
-	vars := m.varPromptValues
-	if vars == nil {
-		vars = make(map[string]string)
+	// Merge cached prompt values (override env defaults)
+	if m.varPromptValues != nil {
+		for k, v := range m.varPromptValues {
+			vars[k] = v
+		}
 	}
 
 	var b strings.Builder
@@ -2533,8 +2537,8 @@ func (m *RequestOpsModel) buildCurl(req config.RequestDef) string {
 		val := m.substituteVars(h.Value, vars, token)
 		b.WriteString(" \\\n  -H '" + key + ": " + val + "'")
 	}
-	// Auto-add Content-Type for body requests if not already set
-	if req.Body != "" && (req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH") {
+	// Auto-add Content-Type for body methods if not already set
+	if req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH" {
 		hasCT := false
 		for _, h := range req.Headers {
 			if strings.EqualFold(h.Key, "Content-Type") {
