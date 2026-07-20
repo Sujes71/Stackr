@@ -2481,6 +2481,22 @@ func (m *RequestOpsModel) doExecuteRequest(req config.RequestDef) (tea.Model, te
 // ── cURL builder ─────────────────────────────────────────────────────────────
 
 func (m *RequestOpsModel) buildCurl(req config.RequestDef) string {
+	// Resolve variables (same as execution)
+	env := m.currentEnv()
+	token := ""
+	if env != nil {
+		for _, ev := range env.Variables {
+			if ev.Name == "_token" {
+				token = ev.Value
+				break
+			}
+		}
+	}
+	vars := m.varPromptValues
+	if vars == nil {
+		vars = make(map[string]string)
+	}
+
 	var b strings.Builder
 	b.WriteString("curl")
 
@@ -2496,12 +2512,15 @@ func (m *RequestOpsModel) buildCurl(req config.RequestDef) string {
 		path = "/" + path
 	}
 	fullURL := strings.TrimRight(baseURL, "/") + path
+	fullURL = m.substituteVars(fullURL, vars, token)
 
 	// Query params
 	if len(req.Params) > 0 {
 		sep := "?"
 		for _, p := range req.Params {
-			fullURL += sep + p.Key + "=" + p.Value
+			key := m.substituteVars(p.Key, vars, token)
+			val := m.substituteVars(p.Value, vars, token)
+			fullURL += sep + key + "=" + val
 			sep = "&"
 		}
 	}
@@ -2510,7 +2529,9 @@ func (m *RequestOpsModel) buildCurl(req config.RequestDef) string {
 
 	// Headers
 	for _, h := range req.Headers {
-		b.WriteString(" \\\n  -H '" + h.Key + ": " + h.Value + "'")
+		key := m.substituteVars(h.Key, vars, token)
+		val := m.substituteVars(h.Value, vars, token)
+		b.WriteString(" \\\n  -H '" + key + ": " + val + "'")
 	}
 	// Auto-add Content-Type for body requests if not already set
 	if req.Body != "" && (req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH") {
@@ -2528,7 +2549,7 @@ func (m *RequestOpsModel) buildCurl(req config.RequestDef) string {
 
 	// Body
 	if req.Body != "" && (req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH") {
-		body := req.Body
+		body := m.substituteVars(req.Body, vars, token)
 		// Minify JSON if possible
 		var compact bytes.Buffer
 		if err := json.Compact(&compact, []byte(body)); err == nil {
