@@ -408,9 +408,25 @@ func (m *RequestOpsModel) buildListItems() []requestListItem {
 		if expanded && url != "" {
 			for _, reqIdx := range reqsByURL[folder.Name] {
 				req := m.profile.RequestDefs[reqIdx]
+				sublabel := req.Method + " " + req.Path
+				// Add {token} badge for login requests
+				if req.IsLogin {
+					tokenAvailable := false
+					for _, ev := range env.Variables {
+						if ev.Name == "_token" && ev.Value != "" {
+							tokenAvailable = true
+							break
+						}
+					}
+					if tokenAvailable {
+						sublabel += "  🔓 {token}"
+					} else {
+						sublabel += "  🔑 {token}"
+					}
+				}
 				items = append(items, requestListItem{
 					kind: reqItemRequest, label: req.Name,
-					sublabel: req.Method + " " + req.Path,
+					sublabel: sublabel,
 					reqIdx: reqIdx, enabled: true,
 					isChild: true, parentIdx: i, depth: 1,
 				})
