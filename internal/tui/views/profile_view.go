@@ -2309,11 +2309,6 @@ func (m *ProfileViewModel) View() string {
 			styles.HelpItem("← →", "envs"),
 			styles.HelpItem("tab", "command"),
 		}
-		// Show D delete env hint when current env is non-local
-		env := m.currentEnv()
-		if env != nil && env.Name != "local" {
-			footerItems = append(footerItems, styles.HelpItem("D D", "delete env"))
-		}
 		b.WriteString(styles.BackHelp(footerItems...))
 	}
 
