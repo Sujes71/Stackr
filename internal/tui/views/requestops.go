@@ -2571,6 +2571,7 @@ func (m *RequestOpsModel) doExecuteRequest(req config.RequestDef) (tea.Model, te
 	}
 	label := req.Name
 	m.pendingOps[label] = "running"
+	m.screen = reqScreenList
 
 	return m, tea.Batch(
 		func() tea.Msg {
