@@ -1,7 +1,6 @@
 package whichkey
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -9,6 +8,8 @@ import (
 )
 
 // View renders the which-key floating panel. Returns empty string when idle.
+// The panel is a flat multi-column grid without group labels — pure commands,
+// Neovim which-key style.
 func (m *WhichKeyModel) View(terminalWidth int) string {
 	if m.state == stateIdle {
 		return ""
@@ -19,96 +20,131 @@ func (m *WhichKeyModel) View(terminalWidth int) string {
 		w = 80
 	}
 
-	var lines []string
+	// Flatten all items from all groups into a single list
+	type flatItem struct {
+		key  string
+		desc string
+	}
+	var items []flatItem
 
-	// Breadcrumb line for sub-menus
+	// Breadcrumb prefix for sub-menus
+	breadcrumb := ""
 	if m.state == statePrefix && len(m.prefixPath) > 0 {
-		breadcrumb := styles.StyleInputLabel.Render(strings.Join(m.prefixPath, " → ") + " →")
-		lines = append(lines, "  "+breadcrumb)
+		breadcrumb = strings.Join(m.prefixPath, " ") + " "
 	}
 
-	// Calculate column layout
-	totalItems := 0
 	for _, group := range m.commands {
-		totalItems += len(group.Items)
-	}
-
-	if totalItems == 0 {
-		return ""
-	}
-
-	// Render groups side by side
-	groupLines := make([][]string, len(m.commands))
-	maxGroupLines := 0
-	for gi, group := range m.commands {
-		// Group label
-		groupLines[gi] = append(groupLines[gi], "  "+styles.StyleInputLabel.Render(group.Label))
-
 		for _, item := range group.Items {
 			keyStr := item.Key
 			if len(item.Children) > 0 {
 				keyStr += " →"
 			}
-			styledKey := lipgloss.NewStyle().
-				Foreground(styles.ColorAccent).
-				Render(fmt.Sprintf("  %-6s", keyStr))
-			desc := styles.StyleHelp.Render(item.Desc)
-			icon := ""
-			if item.Icon != "" {
-				icon = item.Icon + " "
-			}
-			groupLines[gi] = append(groupLines[gi], styledKey+icon+desc)
-		}
-
-		if len(groupLines[gi]) > maxGroupLines {
-			maxGroupLines = len(groupLines[gi])
+			items = append(items, flatItem{
+				key:  breadcrumb + keyStr,
+				desc: item.Desc,
+			})
 		}
 	}
 
-	// Pad all groups to same height
-	for gi := range groupLines {
-		for len(groupLines[gi]) < maxGroupLines {
-			groupLines[gi] = append(groupLines[gi], "")
-		}
+	if len(items) == 0 {
+		return ""
 	}
 
-	// Calculate column widths
-	groupWidths := make([]int, len(m.commands))
-	for gi := range m.commands {
-		// Find widest line in this group
-		maxW := 0
-		for _, line := range groupLines[gi] {
-			lw := lipgloss.Width(line)
-			if lw > maxW {
-				maxW = lw
-			}
+	// Calculate max key width for alignment
+	maxKeyW := 0
+	for _, it := range items {
+		styled := lipgloss.NewStyle().Foreground(styles.ColorAccent).Render(it.key)
+		if sw := lipgloss.Width(styled); sw > maxKeyW {
+			maxKeyW = sw
 		}
-		groupWidths[gi] = maxW + 2 // padding
+	}
+	maxKeyW += 1 // gap between key and desc
+
+	// Build each item as "key  desc" with consistent spacing
+	type renderedItem struct {
+		text string
+		width int
+	}
+	var rendered []renderedItem
+	for _, it := range items {
+		styledKey := lipgloss.NewStyle().Foreground(styles.ColorAccent).Render(it.key)
+		pad := maxKeyW - lipgloss.Width(styledKey)
+		text := styledKey + strings.Repeat(" ", pad) + styles.StyleHelp.Render(it.desc)
+		rendered = append(rendered, renderedItem{text: text, width: lipgloss.Width(text)})
 	}
 
-	// Join groups horizontally
-	for row := 0; row < maxGroupLines; row++ {
-		parts := make([]string, len(groupLines))
-		for gi := range groupLines {
-			line := groupLines[gi][row]
-			// Pad to group width
-			padNeeded := groupWidths[gi] - lipgloss.Width(line)
-			if padNeeded > 0 {
-				line += strings.Repeat(" ", padNeeded)
-			}
-			parts[gi] = line
+	// Calculate column layout to fill terminal width
+	// Each column: item + gap. Find how many columns fit.
+	gapW := 4 // spaces between columns
+	maxColWidth := 0
+	for _, r := range rendered {
+		if r.width > maxColWidth {
+			maxColWidth = r.width
 		}
-		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, parts...))
+	}
+	colWidth := maxColWidth + gapW
+
+	// How many columns fit in the available width (minus panel padding)
+	availW := w - 4 // border + padding
+	numCols := availW / colWidth
+	if numCols < 1 {
+		numCols = 1
+	}
+	if numCols > len(rendered) {
+		numCols = len(rendered)
+	}
+
+	// Calculate number of rows needed
+	numRows := (len(rendered) + numCols - 1) / numCols
+
+	// Build rows
+	var lines []string
+	for row := 0; row < numRows; row++ {
+		var parts []string
+		for col := 0; col < numCols; col++ {
+			idx := col*numRows + row // column-major ordering (like Neovim)
+			if idx >= len(rendered) {
+				parts = append(parts, "")
+				continue
+			}
+			it := rendered[idx]
+			// Pad to column width
+			pad := colWidth - it.width
+			if pad < 0 {
+				pad = 0
+			}
+			parts = append(parts, it.text+strings.Repeat(" ", pad))
+		}
+		lines = append(lines, "  "+strings.Join(parts, ""))
 	}
 
 	content := strings.Join(lines, "\n")
 
-	// Wrap in a bordered panel at the bottom
+	// Breadcrumb line at top when in sub-menu
+	if breadcrumb != "" {
+		bc := styles.StyleInputLabel.Render(strings.TrimRight(breadcrumb, " ") + " →")
+		content = "  " + bc + "\n" + content
+	}
+
+	// Wrap in a bordered panel
 	panelStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(styles.ColorMuted).
 		Padding(0, 1).
-		Width(min(w-2, lipgloss.Width(content)+4))
+		Width(min(w, lipgloss.Width(content)+6))
 
 	return panelStyle.Render(content)
+}
+
+// PanelHeight returns the number of terminal lines the panel will occupy
+// at the given terminal width. Used by the caller to reserve space.
+func (m *WhichKeyModel) PanelHeight(terminalWidth int) int {
+	if m.state == stateIdle {
+		return 0
+	}
+	panel := m.View(terminalWidth)
+	if panel == "" {
+		return 0
+	}
+	return strings.Count(panel, "\n") + 1
 }

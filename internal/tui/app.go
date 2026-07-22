@@ -409,21 +409,36 @@ func (a *App) View() string {
 	out.WriteString(sep)
 	out.WriteString("\n")
 	out.WriteString(body)
-	// Count how many lines we've written so far.
-	lines := strings.Count(out.String(), "\n") + 1
+
 	// Footer will add ~3 more lines (sep + quit + possible error).
 	footerLines := 3
-	// Which-key panel takes ~5-8 lines when open.
-	whichKeyLines := 0
+
+	// Which-key overlay: replace the last N lines of the body with the panel.
+	// The body content above the panel is UNTOUCHED — no shifting, no deformation.
 	if a.whichKey.IsOpen() {
 		whichKeyPanel := a.whichKey.View(a.width)
-		out.WriteString("\n")
+		panelLines := strings.Count(whichKeyPanel, "\n") + 1
+
+		// Split current output into lines and replace the bottom
+		allLines := strings.Split(out.String(), "\n")
+		// Keep lines from the top, replacing the last panelLines lines
+		keepFrom := len(allLines) - panelLines
+		if keepFrom < 0 {
+			keepFrom = 0
+		}
+		topPart := strings.Join(allLines[:keepFrom], "\n")
+		out.Reset()
+		out.WriteString(topPart)
+		if keepFrom > 0 {
+			out.WriteString("\n")
+		}
 		out.WriteString(whichKeyPanel)
-		whichKeyLines = strings.Count(whichKeyPanel, "\n") + 1
 	}
-	needed := a.height - footerLines - whichKeyLines
-	if needed > lines {
-		for i := 0; i < needed-lines; i++ {
+
+	needed := a.height - footerLines
+	currentLines := strings.Count(out.String(), "\n") + 1
+	if needed > currentLines {
+		for i := 0; i < needed-currentLines; i++ {
 			out.WriteString("\n")
 		}
 	}
