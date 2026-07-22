@@ -1773,10 +1773,6 @@ func (m *MockOpsModel) viewActions() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(styles.BackHelp(
-		styles.HelpItem("↑ ↓", "navigate"),
-		styles.HelpItem("↵", "execute"),
-	))
 	return b.String()
 }
 
@@ -1855,7 +1851,6 @@ func (m *MockOpsModel) viewItemList() string {
 	}
 	helpItems = append(helpItems, styles.HelpItem("esc", "back"))
 
-	b.WriteString("  " + styles.InlineHelp(helpItems...))
 	return b.String()
 }
 
@@ -1946,7 +1941,7 @@ func (m *MockOpsModel) viewParamPrompt() string {
 		if len(m.qpPairs) > 0 && m.qpPhase == 0 {
 			helpItems = append(helpItems, styles.HelpItem("ctrl+d ctrl+d", "delete last"))
 		}
-		b.WriteString("\n  " + styles.InlineHelp(helpItems...))
+		b.WriteString("\n")
 		return b.String()
 	}
 

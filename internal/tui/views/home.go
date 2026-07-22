@@ -435,13 +435,6 @@ func (m *HomeModel) View() string {
 		contextItems = append(contextItems, styles.HelpItem("x", "export"))
 		contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
 	}
-	b.WriteString("      " + styles.InlineHelp(contextItems...))
-	b.WriteString("\n\n")
-	// Line 2: global navigation — left-aligned
-	b.WriteString("  " + styles.InlineHelp(
-		styles.HelpItem("↑ ↓", "navigate"),
-		styles.HelpItem("↵", "open"),
-	))
 
 	return b.String()
 }

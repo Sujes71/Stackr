@@ -927,7 +927,6 @@ func (m *RequestOpsModel) viewList() string {
 	if env == nil {
 		b.WriteString(styles.StyleError.Render("  Environment not found."))
 		b.WriteString("\n")
-		b.WriteString(styles.BackHelp())
 		return b.String()
 	}
 
@@ -1044,51 +1043,6 @@ func (m *RequestOpsModel) viewList() string {
 			contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
 		}
 	}
-	b.WriteString("      " + styles.InlineHelp(contextItems...))
-	b.WriteString("\n\n")
-	footerItems := []styles.HelpItemResult{
-		styles.HelpItem("↑ ↓", "navigate"),
-	}
-	if len(m.profile.RequestEnvs) > 1 {
-		footerItems = append(footerItems, styles.HelpItem("← →", "env"))
-	}
-	footerItems = append(footerItems, styles.HelpItem("n", "add env"))
-	env = m.currentEnv()
-	if len(m.profile.RequestFolders) > 0 {
-		// Check if any folder is collapsed
-		anyCollapsed := false
-		for i := range m.profile.RequestFolders {
-			if !m.expandedURLs[i] {
-				anyCollapsed = true
-				break
-			}
-		}
-		if anyCollapsed {
-			footerItems = append(footerItems, styles.HelpItem("⎵", "expand all"))
-		} else {
-			footerItems = append(footerItems, styles.HelpItem("⎵", "collapse all"))
-		}
-	}
-	if m.listCursor < len(m.listItems) {
-		item := m.listItems[m.listCursor]
-		switch item.kind {
-		case reqItemRequest:
-			footerItems = append(footerItems, styles.HelpItem("↵", "execute"))
-			footerItems = append(footerItems, styles.HelpItem("⌥↵", "re-prompt"))
-		case reqItemURL:
-			if m.currentEnvURL(item.label) == "" {
-				// No URL set — no expand/collapse action
-			} else if m.expandedURLs[item.urlIdx] {
-				footerItems = append(footerItems, styles.HelpItem("↵", "collapse"))
-			} else {
-				footerItems = append(footerItems, styles.HelpItem("↵", "expand"))
-			}
-		}
-	}
-	if env != nil && env.Name != "local" {
-		footerItems = append(footerItems, styles.HelpItem("D D", "delete env"))
-	}
-	b.WriteString(styles.BackHelp(footerItems...))
 	return b.String()
 }
 

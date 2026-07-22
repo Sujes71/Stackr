@@ -400,8 +400,7 @@ func (m *QueueOpsModel) viewSyncEnvList() string {
 		b.WriteString(styles.StyleSubtitle.Render("  This Queue Ops entry is stale or the service was removed."))
 		b.WriteString("\n")
 		b.WriteString(styles.StyleSubtitle.Render("  Press esc to go back to the profile and choose another service."))
-		b.WriteString("\n\n")
-		b.WriteString(styles.BackHelp())
+		b.WriteString("\n")
 		return b.String()
 	}
 	queueSyncEnvs := svc.QueueSyncEnvs
@@ -473,21 +472,6 @@ func (m *QueueOpsModel) viewSyncEnvList() string {
 		b.WriteString("\n  " + m.lastResult + "\n")
 	}
 
-	b.WriteString("\n")
-	// Contextual actions
-	var contextItems []styles.HelpItemResult
-	contextItems = append(contextItems, styles.HelpItem("a", "add"))
-	if len(queueSyncEnvs) > 0 && m.listCursor > 0 {
-		contextItems = append(contextItems, styles.HelpItem("e", "edit"))
-		contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
-	}
-	b.WriteString("      " + styles.InlineHelp(contextItems...))
-	b.WriteString("\n\n")
-	// Navigation
-	b.WriteString(styles.BackHelp(
-		styles.HelpItem("↑ ↓", "navigate"),
-		styles.HelpItem("↵", "open"),
-	))
 	return b.String()
 }
 
@@ -1985,23 +1969,9 @@ func (m *QueueOpsModel) viewActions() string {
 	}
 
 	if m.confirmAction {
-		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n\n")
-		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "execute")))
+		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n")
 	} else if m.confirmCustomAction {
-		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n\n")
-		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "execute")))
-	} else {
-		var contextItems []styles.HelpItemResult
-		if m.actionCursor < len(m.actions) && m.actions[m.actionCursor].isCustom {
-			contextItems = append(contextItems, styles.HelpItem("e", "edit"), styles.HelpItem("d d", "delete"))
-		}
-		if len(contextItems) > 0 {
-			b.WriteString("      " + styles.InlineHelp(contextItems...))
-			b.WriteString("\n\n")
-		}
-		b.WriteString(styles.BackHelp(
-			styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "run"),
-		))
+		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n")
 	}
 	return b.String()
 }

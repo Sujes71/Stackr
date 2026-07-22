@@ -389,8 +389,7 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 		b.WriteString(styles.StyleSubtitle.Render("  This DB Ops entry is stale or the service was removed."))
 		b.WriteString("\n")
 		b.WriteString(styles.StyleSubtitle.Render("  Press esc to go back to the profile and choose another service."))
-		b.WriteString("\n\n")
-		b.WriteString(styles.BackHelp())
+		b.WriteString("\n")
 		return b.String()
 	}
 	syncEnvs := svc.SyncEnvs
@@ -450,22 +449,6 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 		b.WriteString("\n  " + m.lastResult + "\n")
 	}
 
-	b.WriteString("\n")
-	// Line 1: contextual actions (affect sync envs)
-	var contextItems []styles.HelpItemResult
-	contextItems = append(contextItems, styles.HelpItem("a", "add"))
-	svc = m.currentService()
-	if svc != nil && len(svc.SyncEnvs) > 0 {
-		contextItems = append(contextItems, styles.HelpItem("e", "edit"))
-		contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
-	}
-	b.WriteString("      " + styles.InlineHelp(contextItems...))
-	b.WriteString("\n\n")
-	// Line 2: global navigation
-	b.WriteString(styles.BackHelp(
-		styles.HelpItem("↑ ↓", "navigate"),
-		styles.HelpItem("↵", "open"),
-	))
 	return b.String()
 }
 
@@ -1317,22 +1300,13 @@ func (m *DBOpsModel) viewActions() string {
 	}
 
 	if m.confirmAction || m.confirmCustomAction {
-		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n\n")
-		b.WriteString(styles.BackHelp(styles.HelpItem("↵", "execute")))
+		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n")
 	} else {
 		// Line 1: contextual actions (affect selected action)
 		var contextItems []styles.HelpItemResult
 		if m.actionCursor < len(m.actions) && m.actions[m.actionCursor].isCustom {
 			contextItems = append(contextItems, styles.HelpItem("e", "edit"), styles.HelpItem("d d", "delete"))
 		}
-		if len(contextItems) > 0 {
-			b.WriteString("      " + styles.InlineHelp(contextItems...))
-			b.WriteString("\n\n")
-		}
-		// Line 2: global navigation
-		b.WriteString(styles.BackHelp(
-			styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "run"),
-		))
 	}
 	return b.String()
 }
