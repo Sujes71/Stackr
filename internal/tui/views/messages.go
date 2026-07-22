@@ -19,6 +19,7 @@ const (
 	NavMockOps
 	NavRequestOps
 	NavErrors
+	NavGitOps
 )
 
 // NavigateTo is a tea.Msg that tells the root App to switch screens.

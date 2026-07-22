@@ -25,11 +25,13 @@ const (
 	ScreenMockOps
 	ScreenRequestOps
 	ScreenErrors
+	ScreenGitOps
 )
 
 // App is the root Bubble Tea model.
 type App struct {
 	cfg             *config.Config
+	cwd             string // launching directory for git ops
 	screen          Screen
 	width           int
 	height          int
@@ -49,13 +51,15 @@ type App struct {
 	errorRegistry *views.ErrorRegistry
 	errFlash      string
 	errorView     *views.ErrorListModel
+	gitOps        *views.GitOpsModel
 }
 
-func New(cfg *config.Config) *App {
+func New(cfg *config.Config, cwd string) *App {
 	errorRegistry := views.NewErrorRegistry()
 	home := views.NewHome(cfg, errorRegistry)
 	return &App{
 		cfg:             cfg,
+		cwd:             cwd,
 		screen:          ScreenHome,
 		home:            home,
 		profileNavState: make(map[string]views.ProfileNavState),
@@ -131,6 +135,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if a.screen != ScreenRequestOps && a.requestOps != nil && a.requestOps.IsBusy() {
 			_, c := a.requestOps.Update(msg)
+			extra = append(extra, c)
+		}
+		if a.screen != ScreenGitOps && a.gitOps != nil && a.gitOps.IsBusy() {
+			_, c := a.gitOps.Update(msg)
 			extra = append(extra, c)
 		}
 		if len(extra) > 0 {
@@ -261,6 +269,14 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 		a.errorView = views.NewErrorList(a.errorRegistry.All(), nav.ProfileName, nav.EnvName)
 		a.errorView.SetSize(a.width, a.height)
 		return a, a.errorView.Init()
+
+	case views.NavGitOps:
+		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
+			a.screen = ScreenGitOps
+			a.gitOps = views.NewGitOps(a.cfg, p, a.cwd)
+			a.gitOps.SetSize(a.width, a.height)
+			return a, a.gitOps.Init()
+		}
 	}
 	return a, nil
 }
@@ -320,6 +336,12 @@ func (a *App) updateActive(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.errorView != nil {
 			m, c := a.errorView.Update(msg)
 			a.errorView = m.(*views.ErrorListModel)
+			cmd = c
+		}
+	case ScreenGitOps:
+		if a.gitOps != nil {
+			m, c := a.gitOps.Update(msg)
+			a.gitOps = m.(*views.GitOpsModel)
 			cmd = c
 		}
 	}
@@ -411,6 +433,10 @@ func (a *App) breadcrumb() string {
 		}
 	case ScreenErrors:
 		return "errors"
+	case ScreenGitOps:
+		if a.gitOps != nil {
+			return "profiles / " + a.gitOps.ProfileName() + " / Git Ops"
+		}
 	}
 	return ""
 }
@@ -438,6 +464,10 @@ func (a *App) renderBody() string {
 	case ScreenErrors:
 		if a.errorView != nil {
 			return a.errorView.View()
+		}
+	case ScreenGitOps:
+		if a.gitOps != nil {
+			return a.gitOps.View()
 		}
 	}
 	return ""
