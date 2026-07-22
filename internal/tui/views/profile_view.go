@@ -2928,6 +2928,7 @@ func (m *ProfileViewModel) renderShortcuts() string {
 			stackItems = append(stackItems, pair{"D D", "delete env"})
 		}
 		stackItems = append(stackItems, pair{"u", "request ops"})
+		stackItems = append(stackItems, pair{"g", "git ops"})
 		sections = append(sections, section("Env / Stack", stackItems))
 	} else {
 		svcs := m.currentEnvServices()
@@ -2993,6 +2994,7 @@ func (m *ProfileViewModel) renderShortcuts() string {
 			stackItems = append(stackItems, pair{"n", "new env"})
 		}
 		stackItems = append(stackItems, pair{"u", "request ops"})
+		stackItems = append(stackItems, pair{"g", "git ops"})
 		if len(m.profile.Environments) > 0 && env != nil && env.Name != "local" {
 			stackItems = append(stackItems, pair{"D D", "delete env"})
 		}
