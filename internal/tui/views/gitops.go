@@ -426,7 +426,11 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.pendingOps, "merge-branch")
 		branches, _ := git.Branches(m.dir)
 		m.branches = branches
-		return m, nil
+		// Full status refresh to update hasUnpushed, file panels, stash, etc.
+		return m, func() tea.Msg {
+			files, _ := git.StatusPorcelain(m.dir)
+			return gitOpsStatusMsg{files: files}
+		}
 	}
 
 	// Route to active sub-screen
