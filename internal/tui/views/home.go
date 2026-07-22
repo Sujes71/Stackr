@@ -88,17 +88,11 @@ func (m *HomeModel) WhichKeyCommands() []whichkey.CommandGroup {
 	if len(m.profiles) > 0 {
 		profileItems = append(profileItems,
 			whichkey.CommandKey{Key: "x", Desc: "export"},
-			whichkey.CommandKey{
-				Key:  "d",
-				Desc: "delete",
-				Children: []whichkey.CommandKey{
-					{Key: "d", Desc: "confirm delete", Action: func() tea.Msg { return nil }}, // handled by view
-				},
-			},
+			whichkey.CommandKey{Key: "d", Desc: "delete"},
 		)
 	}
 	return []whichkey.CommandGroup{
-		{Label: "Profiles", Items: profileItems},
+		{Items: profileItems},
 	}
 }
 

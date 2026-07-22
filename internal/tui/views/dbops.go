@@ -180,7 +180,7 @@ func (m *DBOpsModel) IsBusy() bool {
 // WhichKeyCommands returns the command catalog for DB Ops screen.
 func (m *DBOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 	return []whichkey.CommandGroup{
-		{Label: "DB Ops", Items: []whichkey.CommandKey{
+		{Items: []whichkey.CommandKey{
 			{Key: "o", Desc: "open shell"},
 			{Key: "d", Desc: "dump"},
 		}},

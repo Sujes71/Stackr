@@ -138,13 +138,7 @@ func (m *ProfileViewModel) whichKeyCommandsDocker() []whichkey.CommandGroup {
 			svcItems = append(svcItems, whichkey.CommandKey{Key: "m", Desc: "mock ops"})
 		}
 		if len(svcs) > 1 {
-			svcItems = append(svcItems, whichkey.CommandKey{
-				Key:  "d",
-				Desc: "delete svc",
-				Children: []whichkey.CommandKey{
-					{Key: "d", Desc: "confirm delete"},
-				},
-			})
+			svcItems = append(svcItems, whichkey.CommandKey{Key: "d", Desc: "delete svc"})
 		}
 		svcItems = append(svcItems, whichkey.CommandKey{Key: "v", Desc: "view config"})
 		if len(svcs) > 0 && m.cursor < len(svcs) {
@@ -177,13 +171,7 @@ func (m *ProfileViewModel) whichKeyCommandsDocker() []whichkey.CommandGroup {
 		if hasRunning {
 			stackItems = append(stackItems, whichkey.CommandKey{Key: "x", Desc: "stop all"})
 		}
-		stackItems = append(stackItems, whichkey.CommandKey{
-			Key:  "r",
-			Desc: "reset vol",
-			Children: []whichkey.CommandKey{
-				{Key: "v", Desc: "confirm reset"},
-			},
-		})
+		stackItems = append(stackItems, whichkey.CommandKey{Key: "r", Desc: "reset vol"})
 	}
 	if m.extraEnvCount() < 3 {
 		stackItems = append(stackItems, whichkey.CommandKey{Key: "n", Desc: "new env"})
@@ -191,18 +179,12 @@ func (m *ProfileViewModel) whichKeyCommandsDocker() []whichkey.CommandGroup {
 	stackItems = append(stackItems, whichkey.CommandKey{Key: "u", Desc: "request ops"})
 	stackItems = append(stackItems, whichkey.CommandKey{Key: "g", Desc: "git ops"})
 	if len(m.profile.Environments) > 0 && env != nil && env.Name != "local" {
-		stackItems = append(stackItems, whichkey.CommandKey{
-			Key:  "D",
-			Desc: "delete env",
-			Children: []whichkey.CommandKey{
-				{Key: "D", Desc: "confirm delete env"},
-			},
-		})
+		stackItems = append(stackItems, whichkey.CommandKey{Key: "D", Desc: "delete env"})
 	}
 
 	return []whichkey.CommandGroup{
-		{Label: "Services", Items: svcItems},
-		{Label: "Env / Stack", Items: stackItems},
+		{Items: svcItems},
+		{Items: stackItems},
 	}
 }
 
@@ -218,13 +200,7 @@ func (m *ProfileViewModel) whichKeyCommandsPF() []whichkey.CommandGroup {
 			runLabel = "stop"
 		}
 		pfItems = append(pfItems, whichkey.CommandKey{Key: "enter", Desc: runLabel})
-		pfItems = append(pfItems, whichkey.CommandKey{
-			Key:  "d",
-			Desc: "delete",
-			Children: []whichkey.CommandKey{
-				{Key: "d", Desc: "confirm delete"},
-			},
-		})
+		pfItems = append(pfItems, whichkey.CommandKey{Key: "d", Desc: "delete"})
 		pfItems = append(pfItems, whichkey.CommandKey{Key: "e", Desc: "edit port"})
 	}
 
@@ -247,20 +223,14 @@ func (m *ProfileViewModel) whichKeyCommandsPF() []whichkey.CommandGroup {
 		stackItems = append(stackItems, whichkey.CommandKey{Key: "n", Desc: "new env"})
 	}
 	if len(m.profile.Environments) > 0 && m.currentEnv() != nil && m.currentEnv().Name != "local" {
-		stackItems = append(stackItems, whichkey.CommandKey{
-			Key:  "D",
-			Desc: "delete env",
-			Children: []whichkey.CommandKey{
-				{Key: "D", Desc: "confirm delete env"},
-			},
-		})
+		stackItems = append(stackItems, whichkey.CommandKey{Key: "D", Desc: "delete env"})
 	}
 	stackItems = append(stackItems, whichkey.CommandKey{Key: "u", Desc: "request ops"})
 	stackItems = append(stackItems, whichkey.CommandKey{Key: "g", Desc: "git ops"})
 
 	return []whichkey.CommandGroup{
-		{Label: "Port-Forward", Items: pfItems},
-		{Label: "Env / Stack", Items: stackItems},
+		{Items: pfItems},
+		{Items: stackItems},
 	}
 }
 

@@ -164,7 +164,7 @@ func (m *MockOpsModel) IsBusy() bool {
 // WhichKeyCommands returns the command catalog for Mock Server screen.
 func (m *MockOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 	return []whichkey.CommandGroup{
-		{Label: "Mock Ops", Items: []whichkey.CommandKey{
+		{Items: []whichkey.CommandKey{
 			{Key: "n", Desc: "new mock env"},
 			{Key: "d", Desc: "delete mock env"},
 		}},

@@ -191,7 +191,7 @@ func (m *QueueOpsModel) IsBusy() bool {
 // WhichKeyCommands returns the command catalog for Queue Ops screen.
 func (m *QueueOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 	return []whichkey.CommandGroup{
-		{Label: "Queue Ops", Items: []whichkey.CommandKey{
+		{Items: []whichkey.CommandKey{
 			{Key: "o", Desc: "open shell"},
 			{Key: "d", Desc: "dump"},
 		}},

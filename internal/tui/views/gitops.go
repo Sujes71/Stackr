@@ -210,13 +210,7 @@ func (m *GitOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 
 		changesItems := []whichkey.CommandKey{}
 		if f := m.currentFile(); f != nil && !f.Staged && f.StatusCode != '?' {
-			changesItems = append(changesItems, whichkey.CommandKey{
-				Key:  "d",
-				Desc: "discard",
-				Children: []whichkey.CommandKey{
-					{Key: "d", Desc: "confirm discard"},
-				},
-			})
+			changesItems = append(changesItems, whichkey.CommandKey{Key: "d", Desc: "discard"})
 		}
 		if m.stagedStart > 0 {
 			changesItems = append(changesItems, whichkey.CommandKey{Key: "c", Desc: "commit"})
@@ -226,15 +220,15 @@ func (m *GitOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 		}
 
 		var groups []whichkey.CommandGroup
-		groups = append(groups, whichkey.CommandGroup{Label: "Git", Items: gitItems})
+		groups = append(groups, whichkey.CommandGroup{Items: gitItems})
 		if len(changesItems) > 0 {
-			groups = append(groups, whichkey.CommandGroup{Label: "Changes", Items: changesItems})
+			groups = append(groups, whichkey.CommandGroup{Items: changesItems})
 		}
 		return groups
 
 	case gitScreenBranch:
 		return []whichkey.CommandGroup{
-			{Label: "Branch", Items: []whichkey.CommandKey{
+			{Items: []whichkey.CommandKey{
 				{Key: "n", Desc: "new branch"},
 				{Key: "d", Desc: "delete branch"},
 				{Key: "m", Desc: "merge"},
@@ -243,7 +237,7 @@ func (m *GitOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 
 	case gitScreenLog:
 		return []whichkey.CommandGroup{
-			{Label: "Log", Items: []whichkey.CommandKey{
+			{Items: []whichkey.CommandKey{
 				{Key: "enter", Desc: "view detail"},
 			}},
 		}

@@ -241,7 +241,7 @@ func (m *RequestOpsModel) IsBusy() bool {
 // WhichKeyCommands returns the command catalog for Request Ops screen.
 func (m *RequestOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 	return []whichkey.CommandGroup{
-		{Label: "Request Ops", Items: []whichkey.CommandKey{
+		{Items: []whichkey.CommandKey{
 			{Key: "n", Desc: "new request"},
 			{Key: "r", Desc: "run"},
 			{Key: "d", Desc: "delete"},
