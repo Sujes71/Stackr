@@ -20,9 +20,11 @@ import (
 type gitScreen int
 
 const (
-	gitScreenMain   gitScreen = iota // Two-panel: file list + diff viewer
-	gitScreenCommit                  // Commit input overlay
-	gitScreenBranch                  // Branch list overlay
+	gitScreenMain      gitScreen = iota // Two-panel: file list + diff viewer
+	gitScreenCommit                     // Commit input overlay
+	gitScreenBranch                     // Branch list overlay
+	gitScreenLog                        // Full-screen commit log
+	gitScreenLogDetail                  // Commit detail: files + diff
 )
 
 // ── Message types ─────────────────────────────────────────────────────────────
@@ -52,6 +54,39 @@ type gitOpsRepoCheckMsg struct {
 	gitRoot  string
 	gitFound bool
 }
+
+type gitOpsLogMsg struct {
+	commits []git.CommitInfo
+	err     error
+}
+
+type gitOpsLastCommitMsg struct {
+	msg string
+}
+
+type gitOpsCommitFilesMsg struct {
+	hash  string
+	files []string
+	err   error
+}
+
+type gitOpsCommitDiffMsg struct {
+	output string
+	err    error
+}
+
+type gitOpsCreateBranchMsg struct {
+	branchName string
+	err        error
+}
+
+type gitOpsMergeMsg struct {
+	source string
+	err    error
+}
+
+type gitOpsConfirmExpiredMsg struct{}
+type gitOpsDoneExpiredMsg struct{}
 
 // ── Model ─────────────────────────────────────────────────────────────────────
 
@@ -84,16 +119,41 @@ type GitOpsModel struct {
 
 	// Commit wizard
 	commitInput textinput.Model
+	amendMode   bool // true when editing commit input in amend mode
 
 	// Branch switch
-	branches     []git.BranchInfo
-	branchCursor int
+	branches           []git.BranchInfo
+	branchCursor       int
+	branchCreating     bool           // whether we're in "new branch" prompt mode
+	branchInput        textinput.Model // input for new branch name
+	branchMergeConfirm bool           // merge confirmation state
 
 	// Push state
 	hasUnpushed bool
 
 	// Stash state
 	hasStash bool // true if there's at least one stash entry
+
+	// Confirmation state (double-press pattern)
+	confirmAction string    // "discard", "delete-branch"
+	confirmKey    string    // the key to confirm (e.g. "d")
+	confirmArg    string    // context (file path, branch name)
+	confirmAt     time.Time // when confirm was armed
+
+	// Done message error flag (separate from doneOp text)
+	doneOpIsErr bool
+
+	// Log viewer
+	commits      []git.CommitInfo // recent commits for log view
+	logCursor    int              // cursor in log list
+	lastCommitMsg string          // last commit message for amend
+
+	// Log detail (drill-down into a commit)
+	logDetailHash string          // hash of the commit being viewed
+	logFiles      []string        // files changed in the commit
+	logFileCursor int             // cursor in file list
+	logFileDiff   string          // diff of selected file in commit
+	logFileDiffVP viewport.Model  // viewport for commit file diff
 
 	// Spinner / pending ops
 	pendingOps   map[string]string
@@ -115,14 +175,20 @@ func NewGitOps(cfg *config.Config, p *config.Profile, cwd string) *GitOpsModel {
 	ci.CharLimit = 200
 	ci.Width = 60
 
+	bi := textinput.New()
+	bi.Placeholder = "branch name"
+	bi.CharLimit = 50
+	bi.Width = 40
+
 	return &GitOpsModel{
-		cfg:          cfg,
-		profile:      p,
-		dir:          cwd,
-		pendingOps:   make(map[string]string),
-		pendingStart: time.Now(), // initialize so first spinner delay works
-		commitInput:  ci,
-		diffVP:       viewport.New(0, 0),
+		cfg:            cfg,
+		profile:        p,
+		dir:            cwd,
+		pendingOps:     make(map[string]string),
+		pendingStart:   time.Now(), // initialize so first spinner delay works
+		commitInput:    ci,
+		branchInput:    bi,
+		diffVP:         viewport.New(0, 0),
 	}
 }
 
@@ -140,6 +206,8 @@ func (m *GitOpsModel) SetSize(w, h int) {
 	rightW := w - leftW
 	m.diffVP.Width = max(0, rightW-4)
 	m.diffVP.Height = max(8, m.height-13)
+	m.logFileDiffVP.Width = max(0, rightW-4)
+	m.logFileDiffVP.Height = max(8, m.height-13)
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -161,6 +229,14 @@ func (m *GitOpsModel) Init() tea.Cmd {
 			files, err := git.StatusPorcelain(m.dir)
 			return gitOpsStatusMsg{files: files, err: err}
 		},
+		func() tea.Msg {
+			// Fetch last commit message for amend feature
+			commits, err := git.Log(m.dir, 1)
+			if err == nil && len(commits) > 0 {
+				return gitOpsLastCommitMsg{msg: commits[0].Message}
+			}
+			return gitOpsLastCommitMsg{msg: ""}
+		},
 		spinnerCmd(),
 	)
 }
@@ -177,6 +253,8 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		rightW := msg.Width - leftW
 		m.diffVP.Width = max(0, rightW-4)
 		m.diffVP.Height = max(8, m.height-13)
+		m.logFileDiffVP.Width = max(0, rightW-4)
+		m.logFileDiffVP.Height = max(8, m.height-13)
 		return m, nil
 
 	case SpinnerTickMsg:
@@ -207,6 +285,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			stashes, _ := git.StashList(m.dir)
 			m.hasStash = len(stashes) > 0
 			m.doneOp = ""
+			m.doneOpIsErr = false
 			m.doneOpAt = time.Time{}
 		}
 		// Clean up whichever pending key triggered this status refresh
@@ -217,6 +296,9 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.pendingOps, "pull")
 		delete(m.pendingOps, "stash")
 		delete(m.pendingOps, "status")
+		delete(m.pendingOps, "discard")
+		delete(m.pendingOps, "amend")
+		delete(m.pendingOps, "delete-branch")
 		// Auto-fetch diff for the currently selected file
 		return m, m.cmdFetchDiff()
 
@@ -234,25 +316,117 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case gitOpsDoneMsg:
 		if msg.err != nil {
 			m.doneOp = msg.err.Error()
+			m.doneOpIsErr = true
 			m.doneOpAt = time.Now()
 		} else {
 			m.doneOp = msg.result
+			m.doneOpIsErr = false
 			m.doneOpAt = time.Now()
 		}
 		m.pendingOps = make(map[string]string)
 		m.pendingStart = time.Time{} // reset so next op shows spinner after 200ms
+		// Schedule re-render so doneOp auto-disappears
+		return m, doneExpireCmd()
 
 	case gitOpsBranchMsg:
 		if msg.err != nil {
 			m.doneOp = msg.err.Error()
+			m.doneOpIsErr = true
 			m.doneOpAt = time.Now()
 		} else {
 			m.branches = msg.branches
-			if m.branchCursor >= len(m.branches) {
-				m.branchCursor = max(0, len(m.branches)-1)
-			}
+			m.clampBranchCursor()
 		}
+		// Clear all branch-related pending ops (checkout, delete, create, merge)
 		delete(m.pendingOps, "branches")
+		delete(m.pendingOps, "checkout")
+		delete(m.pendingOps, "delete-branch")
+		delete(m.pendingOps, "create-branch")
+		delete(m.pendingOps, "merge-branch")
+
+	case gitOpsLogMsg:
+		if msg.err != nil {
+			m.doneOp = msg.err.Error()
+			m.doneOpIsErr = true
+			m.doneOpAt = time.Now()
+			m.screen = gitScreenMain
+		} else {
+			m.commits = msg.commits
+			m.logCursor = 0
+		}
+		delete(m.pendingOps, "log")
+
+	case gitOpsLastCommitMsg:
+		m.lastCommitMsg = msg.msg
+
+	case gitOpsConfirmExpiredMsg:
+		// Re-render after confirm timeout — message disappears automatically
+
+	case gitOpsDoneExpiredMsg:
+		// Re-render after doneOp timeout — message disappears automatically
+
+	case gitOpsCommitFilesMsg:
+		if msg.err != nil {
+			m.doneOp = msg.err.Error()
+			m.doneOpIsErr = true
+			m.doneOpAt = time.Now()
+			delete(m.pendingOps, "commit-files")
+			return m, doneExpireCmd()
+		}
+		m.logFiles = msg.files
+		m.logFileCursor = 0
+		delete(m.pendingOps, "commit-files")
+		// Auto-fetch diff for first file
+		if len(m.logFiles) > 0 {
+			m.pendingOps["commit-diff"] = "loading"
+			hash := m.logDetailHash
+			path := m.logFiles[0]
+			return m, tea.Batch(
+				func() tea.Msg {
+					output, err := git.DiffCommitFile(m.dir, hash, path)
+					return gitOpsCommitDiffMsg{output: output, err: err}
+				},
+				spinnerCmd(),
+			)
+		}
+
+	case gitOpsCommitDiffMsg:
+		if msg.err != nil {
+			m.logFileDiff = ""
+			m.logFileDiffVP.SetContent("")
+		} else {
+			m.logFileDiff = colorDiff(msg.output)
+			m.logFileDiffVP.SetContent(m.logFileDiff)
+			m.logFileDiffVP.GotoTop()
+		}
+		delete(m.pendingOps, "commit-diff")
+
+	case gitOpsCreateBranchMsg:
+		if msg.err != nil {
+			m.doneOp = msg.err.Error()
+			m.doneOpIsErr = true
+			m.doneOpAt = time.Now()
+			delete(m.pendingOps, "create-branch")
+			return m, doneExpireCmd()
+		}
+		branches, _ := git.Branches(m.dir)
+		m.branches = branches
+		m.branchCursor = 0
+		delete(m.pendingOps, "create-branch")
+		return m, nil
+
+	case gitOpsMergeMsg:
+		if msg.err != nil {
+			m.doneOp = msg.err.Error()
+			m.doneOpIsErr = true
+			m.doneOpAt = time.Now()
+			delete(m.pendingOps, "merge-branch")
+			return m, doneExpireCmd()
+		}
+		delete(m.pendingOps, "merge-branch")
+		branches, _ := git.Branches(m.dir)
+		m.branches = branches
+		return m, nil
 	}
 
 	// Route to active sub-screen
@@ -263,6 +437,10 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateCommit(msg)
 	case gitScreenBranch:
 		return m.updateBranch(msg)
+	case gitScreenLog:
+		return m.updateLog(msg)
+	case gitScreenLogDetail:
+		return m.updateLogDetail(msg)
 	}
 
 	return m, nil
@@ -278,6 +456,10 @@ func (m *GitOpsModel) View() string {
 		return m.viewCommit()
 	case gitScreenBranch:
 		return m.viewBranch()
+	case gitScreenLog:
+		return m.viewLog()
+	case gitScreenLogDetail:
+		return m.viewLogDetail()
 	}
 	return ""
 }
@@ -390,8 +572,8 @@ func (m *GitOpsModel) renderPendingOrDone() string {
 		}
 		return "" // too fast, skip spinner — doneOp will show result
 	}
-	if m.doneOp != "" && time.Since(m.doneOpAt) < 4*time.Second {
-		if strings.HasPrefix(m.doneOp, "✗") {
+	if m.doneOp != "" && time.Since(m.doneOpAt) < 5*time.Second {
+		if m.doneOpIsErr {
 			return "\n" + formatErrorMsg(m.doneOp)
 		}
 		return "\n" + styles.StyleSuccess.Render("  " + m.doneOp)
@@ -399,11 +581,70 @@ func (m *GitOpsModel) renderPendingOrDone() string {
 	return ""
 }
 
+// ── Confirm Helpers ──────────────────────────────────────────────────────────
+
+// armConfirm sets up a double-press confirmation. Returns true if action was armed.
+func (m *GitOpsModel) armConfirm(action, key, arg string) {
+	m.confirmAction = action
+	m.confirmKey = key
+	m.confirmArg = arg
+	m.confirmAt = time.Now()
+}
+
+// clearConfirm clears the confirmation state.
+func (m *GitOpsModel) clearConfirm() {
+	m.confirmAction = ""
+	m.confirmKey = ""
+	m.confirmArg = ""
+}
+
+// isConfirmReady returns true if the same key is pressed within 3 seconds of arming.
+func (m *GitOpsModel) isConfirmReady(key string) bool {
+	return m.confirmAction != "" && m.confirmKey == key && time.Since(m.confirmAt) < 3*time.Second
+}
+
+// confirmLabel returns the confirmation message styled like profile view.
+func (m *GitOpsModel) confirmLabel() string {
+	if m.confirmAction == "" || time.Since(m.confirmAt) >= 3*time.Second {
+		return ""
+	}
+	switch m.confirmAction {
+	case "discard":
+		return styles.StyleError.Render("  Press d again to discard changes")
+	case "delete-branch":
+		return styles.StyleError.Render("  Press d again to delete branch " + m.confirmArg)
+	default:
+		return ""
+	}
+}
+
+// confirmExpireCmd returns a tea.Cmd that fires after the confirm timeout
+// to trigger a re-render and make the message disappear.
+func confirmExpireCmd() tea.Cmd {
+	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+		return gitOpsConfirmExpiredMsg{}
+	})
+}
+
+// doneExpireCmd returns a tea.Cmd that fires after the doneOp timeout
+// to trigger a re-render and make the message disappear.
+func doneExpireCmd() tea.Cmd {
+	return tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
+		return gitOpsDoneExpiredMsg{}
+	})
+}
+
 // ── Main Screen Update ────────────────────────────────────────────────────────
 
 func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Reset confirm on ANY key press (same pattern as profile view)
+		wasConfirmArmed := m.confirmAction != "" && time.Since(m.confirmAt) < 3*time.Second
+		m.confirmAction = ""
+		m.confirmKey = ""
+		m.confirmArg = ""
+
 		switch {
 
 		// Global keys (always work regardless of focus)
@@ -580,6 +821,80 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 				)
 			}
 
+		// d: Discard changes (double-press confirm)
+		case msg.String() == "d":
+			if m.screen != gitScreenMain {
+				break
+			}
+			f := m.currentFile()
+			if f == nil {
+				break
+			}
+			// Can't discard untracked files with checkout — need clean
+			if f.StatusCode == '?' {
+				m.doneOp = "Cannot discard untracked files (use `git clean`)"
+				m.doneOpIsErr = true
+				m.doneOpAt = time.Now()
+				return m, doneExpireCmd()
+			}
+			if f.Staged {
+				m.doneOp = "Unstage first (space) before discarding"
+				m.doneOpIsErr = true
+				m.doneOpAt = time.Now()
+				return m, doneExpireCmd()
+			}
+			if wasConfirmArmed {
+				// Execute discard
+				path := f.Path
+				m.pendingStart = time.Now()
+				m.pendingOps["discard"] = "discarding"
+				return m, tea.Batch(
+					func() tea.Msg {
+						err := git.DiscardChanges(m.dir, path)
+						if err != nil {
+							return gitOpsDoneMsg{err: err}
+						}
+						files, _ := git.StatusPorcelain(m.dir)
+						return gitOpsStatusMsg{files: files}
+					},
+					spinnerCmd(),
+				)
+			}
+			m.armConfirm("discard", "d", f.Path)
+			return m, confirmExpireCmd()
+
+		// A: Amend last commit — opens input pre-filled with last message
+		case msg.String() == "A":
+			if m.screen != gitScreenMain {
+				break
+			}
+			m.screen = gitScreenCommit
+			m.amendMode = true
+			m.commitInput.SetValue(m.lastCommitMsg)
+			m.commitInput.Placeholder = "amend message"
+			m.commitInput.Focus()
+			return m, textinput.Blink
+
+		// l: Log viewer (toggle)
+		case msg.String() == "l":
+			if m.screen != gitScreenMain {
+				break
+			}
+			// Enter log screen
+			m.screen = gitScreenLog
+			m.logCursor = 0
+			if len(m.commits) == 0 {
+				m.pendingOps["log"] = "loading"
+				return m, tea.Batch(
+					func() tea.Msg {
+						commits, err := git.Log(m.dir, 30)
+						return gitOpsLogMsg{commits: commits, err: err}
+					},
+					spinnerCmd(),
+				)
+			}
+			return m, nil
+
 		// Arrow keys: route to focused panel
 		case msg.String() == "up":
 			if m.focusPanel == 0 {
@@ -638,8 +953,19 @@ func (m *GitOpsModel) viewMain() string {
 	leftW := w * 40 / 100
 	rightW := w - leftW
 
-	// Header
-	title := styles.StyleHeader.Render("  Git Ops — " + m.profile.Name)
+	// Header with current branch
+	currentBranch := ""
+	for _, br := range m.branches {
+		if br.Current {
+			currentBranch = br.Name
+			break
+		}
+	}
+	headerText := "  Git Ops — " + m.profile.Name
+	if currentBranch != "" {
+		headerText += "  " + styles.StyleBadgeEnv.Render(" "+currentBranch+" ")
+	}
+	title := styles.StyleHeader.Render(headerText)
 
 	if !m.isRepo {
 		var b strings.Builder
@@ -688,9 +1014,9 @@ func (m *GitOpsModel) viewMain() string {
 	// Join panels horizontally
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, sep, rightPanel)
 
-	// Footer help
 	// Footer help — adapts to current cursor state
 	hasStaged := m.stagedStart > 0
+	hasUnstaged := len(m.files) > 0 && m.stagedStart < len(m.files)
 	allStaged := hasStaged && m.stagedStart >= len(m.files) // no unstaged files
 	cursorOnStaged := m.fileCursor < m.stagedStart
 
@@ -716,9 +1042,22 @@ func (m *GitOpsModel) viewMain() string {
 	}
 	helpItems = append(helpItems, styles.HelpItem("s", "stash"))
 	helpItems = append(helpItems, styles.HelpItem("b", "branch"))
+	if hasUnstaged {
+		helpItems = append(helpItems, styles.HelpItem("d", "discard"))
+	}
+	if hasStaged {
+		helpItems = append(helpItems, styles.HelpItem("A", "amend"))
+	}
+	helpItems = append(helpItems, styles.HelpItem("l", "log"))
 	help := styles.BackHelp(helpItems...)
 
-	return "\n" + title + "\n" + body + m.renderPendingOrDone() + "\n" + help
+	// Confirmation prompt (before footer, like profile view)
+	confirmMsg := ""
+	if label := m.confirmLabel(); label != "" {
+		confirmMsg = "\n" + label + "\n"
+	}
+
+	return "\n" + title + "\n" + body + m.renderPendingOrDone() + confirmMsg + "\n" + help
 }
 
 // ── Clean Tree Footer ─────────────────────────────────────────────────────────
@@ -743,8 +1082,9 @@ func (m *GitOpsModel) renderFileList(panelW int) string {
 	var b strings.Builder
 
 	// Panel header with focus indicator
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 	if m.focusPanel == 0 {
-		b.WriteString(styles.StylePanelFocused.Render("  Files ▸"))
+		b.WriteString("  " + focusStyle.Render("Files") + " ●")
 	} else {
 		b.WriteString(styles.StyleSubtitle.Render("  Files"))
 	}
@@ -783,7 +1123,7 @@ func (m *GitOpsModel) renderFileList(panelW int) string {
 		indicator := m.renderStatusIndicator(f)
 		path := truncatePath(f.Path, panelW-8)
 
-		if i == m.fileCursor {
+		if i == m.fileCursor && m.focusPanel == 0 {
 			b.WriteString(" " + lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true).Render("▸") + " " + indicator + " " + styles.StyleCode.Render(path))
 		} else {
 			b.WriteString("   " + indicator + " " + styles.StyleCode.Render(path))
@@ -821,8 +1161,9 @@ func (m *GitOpsModel) renderDiffPanel(panelW int) string {
 		if f.Staged {
 			header += " (staged)"
 		}
+		focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 		if m.focusPanel == 1 {
-			b.WriteString(styles.StylePanelFocused.Render("  " + header + " ▸"))
+			b.WriteString("  " + focusStyle.Render(header) + " ●")
 		} else {
 			b.WriteString(styles.StyleSubtitle.Render("  " + header))
 		}
@@ -867,6 +1208,7 @@ func (m *GitOpsModel) updateCommit(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc":
 			m.screen = gitScreenMain
+			m.amendMode = false
 			m.commitInput.Blur()
 			return m, nil
 		case "enter":
@@ -874,14 +1216,21 @@ func (m *GitOpsModel) updateCommit(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if subject == "" {
 				return m, nil
 			}
-			// Execute commit
+			// Execute commit or amend
 			m.screen = gitScreenMain
-			m.pendingOps["commit"] = "committing"
 			m.commitInput.Blur()
+			isAmend := m.amendMode
+			m.amendMode = false
+			m.pendingOps["commit"] = "committing"
 			msg := subject
 			return m, tea.Batch(
 				func() tea.Msg {
-					err := git.Commit(m.dir, msg, "")
+					var err error
+					if isAmend {
+						err = git.AmendCommit(m.dir, msg, "")
+					} else {
+						err = git.Commit(m.dir, msg, "")
+					}
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
@@ -902,54 +1251,151 @@ func (m *GitOpsModel) updateCommit(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *GitOpsModel) viewCommit() string {
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHeader.Render("  Commit"))
+	if m.amendMode {
+		b.WriteString(styles.StyleHeader.Render("  Amend Commit"))
+	} else {
+		b.WriteString(styles.StyleHeader.Render("  Commit"))
+	}
 	b.WriteString("\n\n")
 	b.WriteString("  " + styles.StyleInputLabel.Render("Message:") + "\n")
 	b.WriteString("  " + m.commitInput.View())
 	b.WriteString("\n\n")
-	b.WriteString(styles.InlineHelp(
-		styles.HelpItem("esc", "cancel"),
-		styles.HelpItem("↵", "commit"),
-	))
+	if m.amendMode {
+		b.WriteString(styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↵", "amend"),
+		))
+	} else {
+		b.WriteString(styles.InlineHelp(
+			styles.HelpItem("esc", "cancel"),
+			styles.HelpItem("↵", "commit"),
+		))
+	}
 	return b.String()
 }
 
-// ── Branch Screen ─────────────────────────────────────────────────────────────
+// ── Branch helpers ────────────────────────────────────────────────────────────
+
+// focusedBranchName returns the name of the branch at the current cursor, or "".
+func (m *GitOpsModel) focusedBranchName() string {
+	if m.branchCursor < 0 || m.branchCursor >= len(m.branches) {
+		return ""
+	}
+	return m.branches[m.branchCursor].Name
+}
+
+// clampBranchCursor ensures branchCursor is within valid range.
+func (m *GitOpsModel) clampBranchCursor() {
+	total := len(m.branches)
+	if m.branchCursor >= total {
+		m.branchCursor = max(0, total-1)
+	}
+	if m.branchCursor < 0 {
+		m.branchCursor = 0
+	}
+}
+
+// ── Branch Screen Update ────────────────────────────────────────────────────
 
 func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+
+		// ── Branch creating mode ───────────────────────────────────────
+		if m.branchCreating {
+			switch msg.String() {
+			case "esc":
+				m.branchCreating = false
+				m.branchInput.Blur()
+				return m, nil
+			case "enter":
+				name := strings.TrimSpace(m.branchInput.Value())
+				if name == "" {
+					return m, nil
+				}
+				m.branchCreating = false
+				m.branchInput.Blur()
+				m.pendingOps["create-branch"] = "creating branch"
+				return m, tea.Batch(
+					func() tea.Msg {
+						err := git.CreateBranch(m.dir, name)
+						return gitOpsCreateBranchMsg{branchName: name, err: err}
+					},
+					spinnerCmd(),
+				)
+			default:
+				var cmd tea.Cmd
+				m.branchInput, cmd = m.branchInput.Update(msg)
+				return m, cmd
+			}
+		}
+
+		// ── Merge confirm mode ─────────────────────────────────────────
+		if m.branchMergeConfirm {
+			switch msg.String() {
+			case "y":
+				m.branchMergeConfirm = false
+				name := m.focusedBranchName()
+				if name == "" {
+					return m, nil
+				}
+				m.pendingOps["merge-branch"] = "merging"
+				src := name
+				return m, tea.Batch(
+					func() tea.Msg {
+						err := git.MergeBranch(m.dir, src)
+						return gitOpsMergeMsg{source: src, err: err}
+					},
+					spinnerCmd(),
+				)
+			default:
+				m.branchMergeConfirm = false
+				return m, nil
+			}
+		}
+
+		// ── Normal branch view ─────────────────────────────────────────
+		wasConfirmArmed := m.confirmAction != "" && time.Since(m.confirmAt) < 3*time.Second
+		m.confirmAction = ""
+		m.confirmKey = ""
+		m.confirmArg = ""
+
+		totalBranches := len(m.branches)
+
 		switch msg.String() {
 		case "esc", "q":
 			m.screen = gitScreenMain
+			m.doneOp = ""
+			m.doneOpIsErr = false
+			m.doneOpAt = time.Time{}
 			return m, nil
 
-		case "up", "k":
+		case "up":
 			if m.branchCursor > 0 {
 				m.branchCursor--
 			}
+			return m, nil
 
-		case "down", "j":
-			if m.branchCursor < len(m.branches)-1 {
+		case "down":
+			if m.branchCursor < totalBranches-1 {
 				m.branchCursor++
 			}
+			return m, nil
 
 		case "enter":
-			// Checkout the selected branch
-			if m.branchCursor >= len(m.branches) || len(m.branches) == 0 {
-				break
+			// Checkout the focused branch
+			name := m.focusedBranchName()
+			if name == "" {
+				return m, nil
 			}
-			br := m.branches[m.branchCursor]
-			if br.Current {
-				m.doneOp = "✓ Already on " + br.Name
-				m.doneOpAt = time.Now()
-				break
+			if m.branchCursor < len(m.branches) && m.branches[m.branchCursor].Current {
+				return m, nil
 			}
 			m.pendingOps["checkout"] = "checking out"
-			name := br.Name
+			checkoutName := name
 			return m, tea.Batch(
 				func() tea.Msg {
-					err := git.CheckoutBranch(m.dir, name)
+					err := git.CheckoutBranch(m.dir, checkoutName)
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
@@ -958,10 +1404,71 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				},
 				spinnerCmd(),
 			)
+
+		case "n":
+			m.branchCreating = true
+			m.branchInput.SetValue("")
+			m.branchInput.Focus()
+			return m, textinput.Blink
+
+		case "m":
+			// Merge focused branch into current — silently ignore if not available
+			name := m.focusedBranchName()
+			if name == "" {
+				return m, nil
+			}
+			if m.branchCursor >= 0 && m.branchCursor < len(m.branches) {
+				br := m.branches[m.branchCursor]
+				// Skip if same branch or same HEAD
+				if br.Current {
+					return m, nil
+				}
+				for _, other := range m.branches {
+					if other.Current {
+						focusHead, err1 := git.BranchHead(m.dir, br.Name)
+						currentHead, err2 := git.BranchHead(m.dir, other.Name)
+						if err1 == nil && err2 == nil && focusHead == currentHead {
+							return m, nil
+						}
+						break
+					}
+				}
+			}
+			m.branchMergeConfirm = true
+			return m, nil
+
+		case "d":
+			// Delete branch (double-press confirm) — silently ignore if not available
+			name := m.focusedBranchName()
+			if name == "" || name == "main" {
+				return m, nil
+			}
+			if m.branchCursor >= 0 && m.branchCursor < len(m.branches) && m.branches[m.branchCursor].Current {
+				return m, nil
+			}
+			if wasConfirmArmed {
+				m.pendingOps["delete-branch"] = "deleting"
+				deleteName := name
+				return m, tea.Batch(
+					func() tea.Msg {
+						err := git.DeleteBranch(m.dir, deleteName)
+						if err != nil {
+							return gitOpsDoneMsg{err: err}
+						}
+						branches, _ := git.Branches(m.dir)
+						return gitOpsBranchMsg{branches: branches}
+					},
+					spinnerCmd(),
+				)
+			}
+			m.armConfirm("delete-branch", "d", name)
+			return m, confirmExpireCmd()
 		}
 	}
 	return m, nil
 }
+
+// ── Branch Screen View ──────────────────────────────────────────────────────
 
 func (m *GitOpsModel) viewBranch() string {
 	var b strings.Builder
@@ -977,34 +1484,388 @@ func (m *GitOpsModel) viewBranch() string {
 		return b.String()
 	}
 
+	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
+	mutedStyle := lipgloss.NewStyle().Foreground(styles.ColorMuted)
+	currentMarker := styles.StyleError.Render("*") // red asterisk for current branch
+
 	overhead := 6
 	win := opsWindow(len(m.branches), m.branchCursor, 1, m.height, overhead)
+
 	for i := win.start; i < win.end; i++ {
 		br := m.branches[i]
+		isCursor := i == m.branchCursor
+
+		// Branch name with current indicator
 		name := br.Name
 		if br.Current {
-			name = styles.StyleBadgeEnv.Render(" * " + name + " ")
-		} else {
-			name = "  " + name
+			name += " " + currentMarker
 		}
+
+		// Tracking info
+		track := ""
 		if br.Tracking != "" {
-			name += " " + styles.StyleSubtitle.Render("→ "+br.Tracking)
+			track = mutedStyle.Render("→ " + br.Tracking)
 		}
-		if i == m.branchCursor {
-			b.WriteString(lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true).Render("▸ ") + name)
+
+		// Ahead/behind
+		ahead, behind := git.BranchAheadBehind(m.dir, br.Name, br.Tracking)
+		sync := ""
+		if ahead > 0 || behind > 0 {
+			parts := []string{}
+			if ahead > 0 {
+				parts = append(parts, mutedStyle.Render(fmt.Sprintf("↑%d", ahead)))
+			}
+			if behind > 0 {
+				parts = append(parts, mutedStyle.Render(fmt.Sprintf("↓%d", behind)))
+			}
+			sync = " " + strings.Join(parts, " ")
+		}
+
+		// Last commit message (truncated)
+		lastMsg := git.BranchLastCommit(m.dir, br.Name)
+		if len(lastMsg) > 40 {
+			lastMsg = lastMsg[:37] + "..."
+		}
+		msgPart := ""
+		if lastMsg != "" {
+			msgPart = mutedStyle.Render(" " + lastMsg)
+		}
+
+		// Render line (request ops folder style — no badge)
+		if isCursor {
+			b.WriteString(selStyle.Render(fmt.Sprintf("  > ▸ %s", name)) + "  " + track + sync + msgPart + "\n")
 		} else {
-			b.WriteString("  " + name)
+			b.WriteString(fmt.Sprintf("    ▸ %s", name) + "  " + track + sync + msgPart + "\n")
 		}
+	}
+
+	// Scroll indicators
+	if win.hasAbove {
+		b.WriteString(styles.StyleSubtitle.Render("  ↑"))
+		b.WriteString("\n")
+	}
+	if win.hasBelow {
+		b.WriteString(styles.StyleSubtitle.Render("  ↓"))
 		b.WriteString("\n")
 	}
 
 	b.WriteString(m.renderPendingOrDone())
+
+	if label := m.confirmLabel(); label != "" {
+		b.WriteString("\n")
+		b.WriteString(label)
+	}
+
+	// Branch creating prompt
+	if m.branchCreating {
+		b.WriteString("\n")
+		b.WriteString("  " + styles.StyleInputLabel.Render("New branch name:") + "\n")
+		b.WriteString("  " + m.branchInput.View())
+	}
+
+	// Merge confirm prompt
+	if m.branchMergeConfirm {
+		focusBranch := m.focusedBranchName()
+		b.WriteString("\n")
+		b.WriteString(styles.StyleError.Render("  Press y to merge "+focusBranch+" into current, any key to cancel"))
+	}
+
 	b.WriteString("\n\n")
-	b.WriteString(styles.InlineHelp(
+
+	// Dynamic footer: only show actions that make sense for the focused branch
+	focusBr := m.focusedBranchName()
+	canDelete := focusBr != "" && focusBr != "main"
+	canMerge := focusBr != ""
+	if m.branchCursor >= 0 && m.branchCursor < len(m.branches) {
+		br := m.branches[m.branchCursor]
+		canDelete = canDelete && !br.Current
+		// Can't merge into yourself
+		canMerge = canMerge && !br.Current
+		// Can't merge if same HEAD (already up to date)
+		if canMerge {
+			for _, other := range m.branches {
+				if other.Current {
+					focusHead, err1 := git.BranchHead(m.dir, br.Name)
+					currentHead, err2 := git.BranchHead(m.dir, other.Name)
+					if err1 == nil && err2 == nil && focusHead == currentHead {
+						canMerge = false
+					}
+					break
+				}
+			}
+		}
+	}
+
+	helpItems := []styles.HelpItemResult{
 		styles.HelpItem("↑↓", "nav"),
 		styles.HelpItem("↵", "checkout"),
-		styles.HelpItem("esc", "back"),
+		styles.HelpItem("n", "new"),
+	}
+	if canMerge {
+		helpItems = append(helpItems, styles.HelpItem("m", "merge"))
+	}
+	if canDelete {
+		helpItems = append(helpItems, styles.HelpItem("d", "delete"))
+	}
+	helpItems = append(helpItems, styles.HelpItem("esc", "back"))
+	b.WriteString(styles.InlineHelp(helpItems...))
+	return b.String()
+}
+
+// ── Log Screen (full-screen commit list) ────────────────────────────────────
+
+func (m *GitOpsModel) updateLog(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc", "q", "l":
+			m.screen = gitScreenMain
+			return m, nil
+
+		case "up":
+			if m.logCursor > 0 {
+				m.logCursor--
+			}
+			return m, nil
+
+		case "down":
+			if m.logCursor < len(m.commits)-1 {
+				m.logCursor++
+			}
+			return m, nil
+
+		case "enter":
+			// Drill down into commit
+			if m.logCursor >= len(m.commits) || len(m.commits) == 0 {
+				break
+			}
+			hash := m.commits[m.logCursor].Hash
+			m.screen = gitScreenLogDetail
+			m.logDetailHash = hash
+			m.logFiles = nil
+			m.logFileCursor = 0
+			m.logFileDiff = ""
+			m.logFileDiffVP.SetContent("")
+			m.pendingOps["commit-files"] = "loading"
+			return m, tea.Batch(
+				func() tea.Msg {
+					files, err := git.CommitFiles(m.dir, hash)
+					return gitOpsCommitFilesMsg{hash: hash, files: files, err: err}
+				},
+				spinnerCmd(),
+			)
+		}
+	}
+	return m, nil
+}
+
+func (m *GitOpsModel) viewLog() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(styles.StyleHeader.Render(fmt.Sprintf("  Commit Log — %d commits", len(m.commits))))
+	b.WriteString("\n\n")
+
+	if len(m.commits) == 0 {
+		b.WriteString(styles.StyleSubtitle.Render("  No commits"))
+		b.WriteString("\n\n")
+		b.WriteString(styles.BackHelp())
+		return b.String()
+	}
+
+	// Windowed rendering
+	overhead := 5 // header + blank + footer
+	win := opsWindow(len(m.commits), m.logCursor, 1, m.height, overhead)
+
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+	mutedStyle := lipgloss.NewStyle().Foreground(styles.ColorMuted)
+
+	for i := win.start; i < win.end; i++ {
+		c := m.commits[i]
+		hash := styles.StyleCode.Render(c.Hash)
+		author := mutedStyle.Render(c.Author)
+		date := mutedStyle.Render(c.Date)
+		message := c.Message
+
+		if i == m.logCursor {
+			cursor := focusStyle.Render("▸")
+			b.WriteString(fmt.Sprintf(" %s %s %s %s %s\n", cursor, hash, author, date, message))
+		} else {
+			b.WriteString(fmt.Sprintf("   %s %s %s %s\n", hash, author, date, message))
+		}
+	}
+
+	b.WriteString(m.renderPendingOrDone())
+	b.WriteString("\n\n")
+	b.WriteString(styles.BackHelp(
+		styles.HelpItem("↑↓", "nav"),
+		styles.HelpItem("↵", "view commit"),
 	))
+	return b.String()
+}
+
+// ── Log Detail Screen (commit files + diff) ──────────────────────────────────
+
+func (m *GitOpsModel) updateLogDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		// Handle jump keys (return bool, can't be in string switch)
+		if opsIsJumpTop(msg) {
+			if m.focusPanel == 0 {
+				m.logFileCursor = 0
+				return m, m.cmdFetchCommitDiff()
+			}
+			m.logFileDiffVP.GotoTop()
+			return m, nil
+		}
+		if opsIsJumpBottom(msg) {
+			if m.focusPanel == 0 {
+				if len(m.logFiles) > 0 {
+					m.logFileCursor = len(m.logFiles) - 1
+				}
+				return m, m.cmdFetchCommitDiff()
+			}
+			m.logFileDiffVP.GotoBottom()
+			return m, nil
+		}
+		switch msg.String() {
+		case "esc", "q":
+			m.screen = gitScreenLog
+			return m, nil
+
+		case "left":
+			m.focusPanel = 0
+			return m, nil
+
+		case "right":
+			m.focusPanel = 1
+			return m, nil
+
+		case "up":
+			if m.focusPanel == 0 {
+				if m.logFileCursor > 0 {
+					m.logFileCursor--
+					return m, m.cmdFetchCommitDiff()
+				}
+			} else {
+				m.logFileDiffVP.LineUp(3)
+			}
+			return m, nil
+
+		case "down":
+			if m.focusPanel == 0 {
+				if m.logFileCursor < len(m.logFiles)-1 {
+					m.logFileCursor++
+					return m, m.cmdFetchCommitDiff()
+				}
+			} else {
+				m.logFileDiffVP.LineDown(3)
+			}
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+// cmdFetchCommitDiff fetches the diff for the currently selected file in commit detail.
+func (m *GitOpsModel) cmdFetchCommitDiff() tea.Cmd {
+	if m.logFileCursor >= len(m.logFiles) {
+		return nil
+	}
+	path := m.logFiles[m.logFileCursor]
+	hash := m.logDetailHash
+	m.pendingOps["commit-diff"] = "loading"
+	return tea.Batch(
+		func() tea.Msg {
+			output, err := git.DiffCommitFile(m.dir, hash, path)
+			return gitOpsCommitDiffMsg{output: output, err: err}
+		},
+		spinnerCmd(),
+	)
+}
+
+func (m *GitOpsModel) viewLogDetail() string {
+	w := m.width
+	leftW := w * 40 / 100
+	rightW := w - leftW
+
+	title := styles.StyleHeader.Render(fmt.Sprintf("  Commit %s", styles.StyleCode.Render(m.logDetailHash)))
+
+	// Left panel: files changed
+	leftPanel := m.renderLogFiles(leftW - 2)
+
+	// Right panel: diff
+	rightPanel := m.renderLogDiff(rightW - 2)
+
+	// Separator
+	leftH := lipgloss.Height(leftPanel)
+	rightH := lipgloss.Height(rightPanel)
+	sepH := leftH
+	if rightH > sepH {
+		sepH = rightH
+	}
+	sep := lipgloss.NewStyle().
+		Foreground(styles.ColorMuted).
+		Render(strings.Repeat("│\n", sepH))
+
+	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, sep, rightPanel)
+
+	help := styles.BackHelp(
+		styles.HelpItem("↑↓", "nav"),
+		styles.HelpItem("←→", "switch"),
+	)
+
+	return "\n" + title + "\n" + body + m.renderPendingOrDone() + "\n" + help
+}
+
+func (m *GitOpsModel) renderLogFiles(panelW int) string {
+	var b strings.Builder
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+
+	if m.focusPanel == 0 {
+		b.WriteString("  " + focusStyle.Render("Files") + " ●")
+	} else {
+		b.WriteString(styles.StyleSubtitle.Render("  Files"))
+	}
+	b.WriteString("\n")
+
+	if len(m.logFiles) == 0 {
+		b.WriteString(styles.StyleSubtitle.Render("  No files"))
+		return b.String()
+	}
+
+	overhead := 3
+	win := opsWindow(len(m.logFiles), m.logFileCursor, 1, m.height, overhead)
+	for i := win.start; i < win.end; i++ {
+		path := truncatePath(m.logFiles[i], panelW-6)
+		if i == m.logFileCursor && m.focusPanel == 0 {
+			b.WriteString(" " + focusStyle.Render("▸") + " " + styles.StyleCode.Render(path))
+		} else {
+			b.WriteString("   " + styles.StyleCode.Render(path))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m *GitOpsModel) renderLogDiff(panelW int) string {
+	var b strings.Builder
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+
+	if m.logFileCursor < len(m.logFiles) {
+		header := m.logFiles[m.logFileCursor]
+		if m.focusPanel == 1 {
+			b.WriteString("  " + focusStyle.Render(header) + " ●")
+		} else {
+			b.WriteString(styles.StyleSubtitle.Render("  " + header))
+		}
+		b.WriteString("\n")
+	} else {
+		b.WriteString(styles.StyleSubtitle.Render("  Select a file"))
+		b.WriteString("\n")
+		return b.String()
+	}
+
+	b.WriteString(m.logFileDiffVP.View())
 	return b.String()
 }
 

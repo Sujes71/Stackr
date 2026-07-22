@@ -328,6 +328,41 @@ func Commit(dir string, subject, body string) error {
 	return err
 }
 
+// AmendCommit amends the last commit with the given subject and body.
+// If subject is empty, only the staged changes are added (keeps original message).
+func AmendCommit(dir string, subject, body string) error {
+	args := []string{"commit", "--amend"}
+	if subject != "" {
+		msg := subject
+		if body != "" {
+			msg = subject + "\n\n" + body
+		}
+		args = append(args, "-m", msg)
+	} else {
+		args = append(args, "--no-edit")
+	}
+	_, err := run(dir, args...)
+	return err
+}
+
+// DiscardChanges reverts unstaged changes for a file: `git checkout -- <path>`.
+func DiscardChanges(dir string, path string) error {
+	_, err := run(dir, "checkout", "--", path)
+	return err
+}
+
+// DiscardAll unstages and discards all changes: `git checkout -- .`
+func DiscardAll(dir string) error {
+	_, err := run(dir, "checkout", "--", ".")
+	return err
+}
+
+// DeleteUntracked removes untracked files: `git clean -fd`
+func DeleteUntracked(dir string) error {
+	_, err := run(dir, "clean", "-fd")
+	return err
+}
+
 // ── Log ───────────────────────────────────────────────────────────────────────
 
 // Log returns the last n commits.
@@ -360,6 +395,30 @@ func parseLog(out string) []CommitInfo {
 		})
 	}
 	return commits
+}
+
+// CommitFiles returns the list of files changed in a specific commit.
+func CommitFiles(dir string, hash string) ([]string, error) {
+	out, err := run(dir, "diff-tree", "--no-commit-id", "-r", "--name-only", hash)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(out) == "" {
+		return nil, nil
+	}
+	var files []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
+// DiffCommitFile returns the diff of a specific file within a commit.
+func DiffCommitFile(dir string, hash string, path string) (string, error) {
+	return run(dir, "diff", hash+"^.."+hash, "--", path)
 }
 
 // ── Branches ──────────────────────────────────────────────────────────────────
@@ -422,10 +481,54 @@ func DeleteBranch(dir string, name string) error {
 	return err
 }
 
+// BranchHead returns the HEAD commit hash of a branch.
+func BranchHead(dir string, branch string) (string, error) {
+	out, err := run(dir, "rev-parse", branch)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
 // CheckoutBranch runs `git checkout <name>`.
 func CheckoutBranch(dir string, name string) error {
 	_, err := run(dir, "checkout", name)
 	return err
+}
+
+// MergeBranch merges source into the current branch.
+func MergeBranch(dir string, source string) error {
+	_, err := run(dir, "merge", source)
+	return err
+}
+
+// BranchAheadBehind returns how many commits local is ahead and behind its remote tracking branch.
+// Returns (0, 0) if no tracking branch or on error.
+func BranchAheadBehind(dir string, branch string, tracking string) (ahead int, behind int) {
+	if tracking == "" {
+		return 0, 0
+	}
+	out, err := run(dir, "rev-list", "--left-right", "--count", tracking+"..."+branch)
+	if err != nil {
+		return 0, 0
+	}
+	parts := strings.Fields(strings.TrimSpace(out))
+	if len(parts) != 2 {
+		return 0, 0
+	}
+	// left = behind (commits in remote not in local), right = ahead (commits in local not in remote)
+	fmt.Sscanf(parts[0], "%d", &behind)
+	fmt.Sscanf(parts[1], "%d", &ahead)
+	return ahead, behind
+}
+
+// BranchLastCommit returns the last commit message (first line) for a branch.
+func BranchLastCommit(dir string, branch string) string {
+	out, err := run(dir, "log", "-1", "--format=%s", branch)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
 }
 
 // ── Stash ─────────────────────────────────────────────────────────────────────
