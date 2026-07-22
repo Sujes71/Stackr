@@ -336,6 +336,8 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.branches = msg.branches
 			m.clampBranchCursor()
+			// Refresh hasUnpushed after branch change (checkout changes upstream)
+			m.hasUnpushed = git.HasUnpushedCommits(m.dir)
 		}
 		// Clear all branch-related pending ops (checkout, delete, create, merge)
 		delete(m.pendingOps, "branches")
