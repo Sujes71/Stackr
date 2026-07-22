@@ -18,6 +18,7 @@ import (
 	"github.com/stackr/stackr/internal/crypto"
 	"github.com/stackr/stackr/internal/docker"
 	"github.com/stackr/stackr/internal/tui/styles"
+	"github.com/stackr/stackr/internal/tui/whichkey"
 )
 
 // ── Internal screen enum ──────────────────────────────────────────────────────
@@ -174,6 +175,21 @@ func (m *DBOpsModel) ReShow(cfg *config.Config) {
 // IsBusy returns true when there are pending operations.
 func (m *DBOpsModel) IsBusy() bool {
 	return len(m.pendingOps) > 0
+}
+
+// WhichKeyCommands returns the command catalog for DB Ops screen.
+func (m *DBOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
+	return []whichkey.CommandGroup{
+		{Label: "DB Ops", Items: []whichkey.CommandKey{
+			{Key: "o", Desc: "open shell"},
+			{Key: "d", Desc: "dump"},
+		}},
+	}
+}
+
+// IsTextInputActive returns true when a text input has focus on this screen.
+func (m *DBOpsModel) IsTextInputActive() bool {
+	return false // wizard uses delegated model; no inline text input
 }
 
 // ── Environment / Service helpers ─────────────────────────────────────────────

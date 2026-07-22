@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stackr/stackr/internal/config"
 	"github.com/stackr/stackr/internal/tui/styles"
+	"github.com/stackr/stackr/internal/tui/whichkey"
 	"gopkg.in/yaml.v3"
 )
 
@@ -76,6 +77,34 @@ func (m *HomeModel) SetCursor(c int) { m.cursor = c }
 func (m *HomeModel) SetSize(w, h int) {
 	m.width = w
 	m.height = max(0, h-5)
+}
+
+// WhichKeyCommands returns the command catalog for the Home screen.
+func (m *HomeModel) WhichKeyCommands() []whichkey.CommandGroup {
+	profileItems := []whichkey.CommandKey{
+		{Key: "n", Desc: "new profile"},
+		{Key: "i", Desc: "import"},
+	}
+	if len(m.profiles) > 0 {
+		profileItems = append(profileItems,
+			whichkey.CommandKey{Key: "x", Desc: "export"},
+			whichkey.CommandKey{
+				Key:  "d",
+				Desc: "delete",
+				Children: []whichkey.CommandKey{
+					{Key: "d", Desc: "confirm delete", Action: func() tea.Msg { return nil }}, // handled by view
+				},
+			},
+		)
+	}
+	return []whichkey.CommandGroup{
+		{Label: "Profiles", Items: profileItems},
+	}
+}
+
+// IsTextInputActive returns true when a text input has focus on this screen.
+func (m *HomeModel) IsTextInputActive() bool {
+	return m.deleting != "" || m.showImport
 }
 
 func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

@@ -10,6 +10,7 @@ import (
 	"github.com/stackr/stackr/internal/config"
 	"github.com/stackr/stackr/internal/tui/styles"
 	"github.com/stackr/stackr/internal/tui/views"
+	"github.com/stackr/stackr/internal/tui/whichkey"
 )
 
 // Screen identifies which view is currently rendered.
@@ -52,6 +53,7 @@ type App struct {
 	errFlash      string
 	errorView     *views.ErrorListModel
 	gitOps        *views.GitOpsModel
+	whichKey      *whichkey.WhichKeyModel
 }
 
 func New(cfg *config.Config, cwd string) *App {
@@ -64,6 +66,7 @@ func New(cfg *config.Config, cwd string) *App {
 		home:            home,
 		profileNavState: make(map[string]views.ProfileNavState),
 		errorRegistry:   errorRegistry,
+		whichKey:        whichkey.New(),
 	}
 }
 
@@ -81,6 +84,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
+		a.whichKey.SetSize(msg.Width, msg.Height)
 		// fall through to updateActive so child views also receive dimensions
 
 	case tea.KeyMsg:
@@ -90,6 +94,20 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.profileView.StopAllLocalProcesses()
 			}
 			return a, tea.Quit
+		}
+		// ── Which-key interception ──
+		if a.whichKey.IsOpen() {
+			handled, cmd := a.whichKey.Update(msg)
+			if !handled {
+				a.whichKey.Close()
+			}
+			return a, cmd
+		}
+		if msg.String() == "tab" {
+			if provider := a.activeProvider(); provider != nil && !provider.IsTextInputActive() {
+				a.whichKey.Open(provider.WhichKeyCommands())
+				return a, nil
+			}
 		}
 
 	// Navigation messages from child views
@@ -295,6 +313,29 @@ func (a *App) captureProfileNavState(nav views.NavigateTo) {
 	a.profileNavState[profileName] = a.profileView.SnapshotNavState()
 }
 
+// activeProvider returns the KeyContextProvider for the current screen,
+// or nil for wizard screens that should not open which-key.
+func (a *App) activeProvider() whichkey.KeyContextProvider {
+	switch a.screen {
+	case ScreenHome:
+		return a.home
+	case ScreenProfileView:
+		return a.profileView
+	case ScreenDBOps:
+		return a.dbOps
+	case ScreenQueueOps:
+		return a.queueOps
+	case ScreenMockOps:
+		return a.mockOps
+	case ScreenRequestOps:
+		return a.requestOps
+	case ScreenGitOps:
+		return a.gitOps
+	}
+	// Wizard screens (NewProfile, AddService, Errors) — no which-key
+	return nil
+}
+
 func (a *App) updateActive(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch a.screen {
@@ -372,7 +413,15 @@ func (a *App) View() string {
 	lines := strings.Count(out.String(), "\n") + 1
 	// Footer will add ~3 more lines (sep + quit + possible error).
 	footerLines := 3
-	needed := a.height - footerLines
+	// Which-key panel takes ~5-8 lines when open.
+	whichKeyLines := 0
+	if a.whichKey.IsOpen() {
+		whichKeyPanel := a.whichKey.View(a.width)
+		out.WriteString("\n")
+		out.WriteString(whichKeyPanel)
+		whichKeyLines = strings.Count(whichKeyPanel, "\n") + 1
+	}
+	needed := a.height - footerLines - whichKeyLines
 	if needed > lines {
 		for i := 0; i < needed-lines; i++ {
 			out.WriteString("\n")

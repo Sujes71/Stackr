@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stackr/stackr/internal/config"
 	"github.com/stackr/stackr/internal/tui/styles"
+	"github.com/stackr/stackr/internal/tui/whichkey"
 )
 
 // Content-Type options for the circular selector in the KV builder.
@@ -235,6 +236,23 @@ func (m *RequestOpsModel) ReShow(cfg *config.Config) {
 
 func (m *RequestOpsModel) IsBusy() bool {
 	return len(m.pendingOps) > 0
+}
+
+// WhichKeyCommands returns the command catalog for Request Ops screen.
+func (m *RequestOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
+	return []whichkey.CommandGroup{
+		{Label: "Request Ops", Items: []whichkey.CommandKey{
+			{Key: "n", Desc: "new request"},
+			{Key: "r", Desc: "run"},
+			{Key: "d", Desc: "delete"},
+		}},
+	}
+}
+
+// IsTextInputActive returns true when a text input has focus on this screen.
+func (m *RequestOpsModel) IsTextInputActive() bool {
+	return m.nameInput.Focused() || m.pathInput.Focused() || m.tokenPathInput.Focused() ||
+		m.varPromptInput.Focused() || m.newEnvInput.Focused() || m.confirmInput.Focused()
 }
 
 func (m *RequestOpsModel) SetSize(w, h int) {

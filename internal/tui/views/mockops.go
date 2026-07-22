@@ -19,6 +19,7 @@ import (
 	"github.com/stackr/stackr/internal/config"
 	"github.com/stackr/stackr/internal/docker"
 	"github.com/stackr/stackr/internal/tui/styles"
+	"github.com/stackr/stackr/internal/tui/whichkey"
 )
 
 // ── Internal screen ────────────────────────────────────────────────────────────
@@ -158,6 +159,21 @@ func (m *MockOpsModel) ReShow(cfg *config.Config) {
 
 func (m *MockOpsModel) IsBusy() bool {
 	return len(m.pendingOps) > 0
+}
+
+// WhichKeyCommands returns the command catalog for Mock Server screen.
+func (m *MockOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
+	return []whichkey.CommandGroup{
+		{Label: "Mock Ops", Items: []whichkey.CommandKey{
+			{Key: "n", Desc: "new mock env"},
+			{Key: "d", Desc: "delete mock env"},
+		}},
+	}
+}
+
+// IsTextInputActive returns true when a text input has focus on this screen.
+func (m *MockOpsModel) IsTextInputActive() bool {
+	return m.paramInput.Focused()
 }
 
 func (m *MockOpsModel) SetSize(w, h int) {

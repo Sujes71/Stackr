@@ -19,6 +19,7 @@ import (
 	"github.com/stackr/stackr/internal/crypto"
 	"github.com/stackr/stackr/internal/docker"
 	"github.com/stackr/stackr/internal/tui/styles"
+	"github.com/stackr/stackr/internal/tui/whichkey"
 )
 
 // ── Internal screen enum ──────────────────────────────────────────────────────
@@ -185,6 +186,21 @@ func (m *QueueOpsModel) ReShow(cfg *config.Config) {
 
 func (m *QueueOpsModel) IsBusy() bool {
 	return len(m.pendingOps) > 0
+}
+
+// WhichKeyCommands returns the command catalog for Queue Ops screen.
+func (m *QueueOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
+	return []whichkey.CommandGroup{
+		{Label: "Queue Ops", Items: []whichkey.CommandKey{
+			{Key: "o", Desc: "open shell"},
+			{Key: "d", Desc: "dump"},
+		}},
+	}
+}
+
+// IsTextInputActive returns true when a text input has focus on this screen.
+func (m *QueueOpsModel) IsTextInputActive() bool {
+	return false // wizard uses delegated model; no inline text input
 }
 
 // ── Environment / Service helpers ─────────────────────────────────────────────

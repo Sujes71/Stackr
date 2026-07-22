@@ -17,6 +17,7 @@ import (
 	"github.com/stackr/stackr/internal/docker"
 	"github.com/stackr/stackr/internal/portforward"
 	"github.com/stackr/stackr/internal/tui/styles"
+	"github.com/stackr/stackr/internal/tui/whichkey"
 )
 
 type ProfileViewModel struct {
@@ -104,6 +105,17 @@ type ProfileEnvState struct {
 type ProfileNavState struct {
 	ActiveEnvName string
 	Environments  map[string]ProfileEnvState
+}
+
+// WhichKeyCommands returns the command catalog for Profile Docker/PF screens.
+func (m *ProfileViewModel) WhichKeyCommands() []whichkey.CommandGroup {
+	// TODO: Phase 3 — full implementation
+	return nil
+}
+
+// IsTextInputActive returns true when a text input has focus on this screen.
+func (m *ProfileViewModel) IsTextInputActive() bool {
+	return m.inputtingEnv
 }
 
 func NewProfileView(cfg *config.Config, p *config.Profile, errorRegistry *ErrorRegistry) *ProfileViewModel {

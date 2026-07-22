@@ -13,6 +13,7 @@ import (
 	"github.com/stackr/stackr/internal/config"
 	"github.com/stackr/stackr/internal/git"
 	"github.com/stackr/stackr/internal/tui/styles"
+	"github.com/stackr/stackr/internal/tui/whichkey"
 )
 
 // ── Internal screen enum ──────────────────────────────────────────────────────
@@ -198,6 +199,70 @@ func NewGitOps(cfg *config.Config, p *config.Profile, cwd string) *GitOpsModel {
 func (m *GitOpsModel) ProfileName() string { return m.profile.Name }
 
 func (m *GitOpsModel) IsBusy() bool { return len(m.pendingOps) > 0 }
+
+// WhichKeyCommands returns context-aware commands based on the current sub-screen.
+func (m *GitOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
+	switch m.screen {
+	case gitScreenMain:
+		gitItems := []whichkey.CommandKey{
+			{Key: "s", Desc: "stash"},
+		}
+		if m.hasUnpushed {
+			gitItems[0] = whichkey.CommandKey{Key: "p", Desc: "push"}
+		} else if len(m.files) == 0 {
+			gitItems = append(gitItems, whichkey.CommandKey{Key: "p", Desc: "pull"})
+		}
+		gitItems = append(gitItems, whichkey.CommandKey{Key: "b", Desc: "branch"})
+		gitItems = append(gitItems, whichkey.CommandKey{Key: "l", Desc: "log"})
+
+		changesItems := []whichkey.CommandKey{}
+		if f := m.currentFile(); f != nil && !f.Staged && f.StatusCode != '?' {
+			changesItems = append(changesItems, whichkey.CommandKey{
+				Key:  "d",
+				Desc: "discard",
+				Children: []whichkey.CommandKey{
+					{Key: "d", Desc: "confirm discard"},
+				},
+			})
+		}
+		if m.stagedStart > 0 {
+			changesItems = append(changesItems, whichkey.CommandKey{Key: "c", Desc: "commit"})
+		}
+		if m.lastCommitMsg != "" {
+			changesItems = append(changesItems, whichkey.CommandKey{Key: "A", Desc: "amend"})
+		}
+
+		var groups []whichkey.CommandGroup
+		groups = append(groups, whichkey.CommandGroup{Label: "Git", Items: gitItems})
+		if len(changesItems) > 0 {
+			groups = append(groups, whichkey.CommandGroup{Label: "Changes", Items: changesItems})
+		}
+		return groups
+
+	case gitScreenBranch:
+		return []whichkey.CommandGroup{
+			{Label: "Branch", Items: []whichkey.CommandKey{
+				{Key: "n", Desc: "new branch"},
+				{Key: "d", Desc: "delete branch"},
+				{Key: "m", Desc: "merge"},
+			}},
+		}
+
+	case gitScreenLog:
+		return []whichkey.CommandGroup{
+			{Label: "Log", Items: []whichkey.CommandKey{
+				{Key: "enter", Desc: "view detail"},
+			}},
+		}
+	}
+
+	return nil
+}
+
+// IsTextInputActive returns true when a text input has focus on this screen.
+func (m *GitOpsModel) IsTextInputActive() bool {
+	return m.commitInput.Focused() || m.branchInput.Focused()
+}
 
 func (m *GitOpsModel) SetSize(w, h int) {
 	m.width = w
