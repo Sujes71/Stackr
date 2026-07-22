@@ -61,14 +61,8 @@ func NewNewProfile(cfg *config.Config) *NewProfileModel {
 var npKeys = struct {
 	next, back, removeEnv key.Binding
 }{
-	// XC-008: in this wizard, tab doubles as "next step" (same as enter). This is
-	// intentional for a linear wizard flow, unlike AddService where tab switches
-	// fields within a step. Keeping tab=next lets users advance without reaching
-	// for enter on every step.
-	next: key.NewBinding(key.WithKeys("enter", "tab")),
-	back: key.NewBinding(key.WithKeys("esc")),
-	// XC-004: ctrl+d (not bare 'd') is used because this view has active
-	// textinput fields where a bare 'd' must be passed through as typed input.
+	next:   key.NewBinding(key.WithKeys("enter")),
+	back:   key.NewBinding(key.WithKeys("esc")),
 	removeEnv: key.NewBinding(key.WithKeys("ctrl+d")),
 }
 
