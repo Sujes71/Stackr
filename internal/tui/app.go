@@ -100,6 +100,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			handled, cmd := a.whichKey.Update(msg)
 			if !handled {
 				a.whichKey.Close()
+				// Forward the key to the child view so it can execute
+				_, childCmd := a.updateActive(msg)
+				return a, tea.Batch(cmd, childCmd)
 			}
 			return a, cmd
 		}

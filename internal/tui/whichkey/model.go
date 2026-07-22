@@ -92,16 +92,16 @@ func (m *WhichKeyModel) handleRoot(k string) (bool, tea.Cmd) {
 					m.prefixKey = item.Key
 					return true, nil
 				}
-				// Leaf key → execute action and close
+				// Leaf key → close panel, return false so caller forwards the key
 				m.Close()
-				return true, item.Action
+				return false, nil
 			}
 		}
 	}
 
-	// Unrecognized key → close and swallow
+	// Unrecognized key → close panel, return false so caller forwards the key
 	m.Close()
-	return true, nil
+	return false, nil
 }
 
 // handlePrefix processes a key press in a prefix sub-menu.
@@ -134,14 +134,14 @@ func (m *WhichKeyModel) handlePrefix(k string) (bool, tea.Cmd) {
 					}
 					return true, nil
 				}
-				// Leaf key → execute action and close
+				// Leaf key → close panel, return false so caller forwards the key
 				m.Close()
-				return true, item.Action
+				return false, nil
 			}
 		}
 	}
 
-	// Unrecognized key → go back to root and swallow
+	// Unrecognized key → go back to root and swallow (user gets a fresh start)
 	m.state = stateRoot
 	m.commands = m.rootCmds
 	m.prefixPath = nil
