@@ -427,14 +427,6 @@ func (m *HomeModel) View() string {
 		b.WriteString("\n" + m.lastResult + "\n")
 	}
 	b.WriteString("\n")
-	// Line 1: contextual actions (affect cards) — indented
-	var contextItems []styles.HelpItemResult
-	contextItems = append(contextItems, styles.HelpItem("n", "new profile"))
-	contextItems = append(contextItems, styles.HelpItem("i", "import"))
-	if len(m.profiles) > 0 {
-		contextItems = append(contextItems, styles.HelpItem("x", "export"))
-		contextItems = append(contextItems, styles.HelpItem("d d", "delete"))
-	}
 
 	return b.String()
 }

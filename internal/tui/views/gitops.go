@@ -1020,8 +1020,6 @@ func (m *GitOpsModel) viewMain() string {
 	// Join panels horizontally
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, sep, rightPanel)
 
-	// Footer help — adapts to current cursor state
-
 	return "\n" + title + "\n" + body + m.renderPendingOrDone()
 }
 
