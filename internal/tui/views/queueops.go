@@ -190,12 +190,30 @@ func (m *QueueOpsModel) IsBusy() bool {
 
 // WhichKeyCommands returns the command catalog for Queue Ops screen.
 func (m *QueueOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
-	return []whichkey.CommandGroup{
-		{Items: []whichkey.CommandKey{
-			{Key: "o", Desc: "open shell"},
-			{Key: "d", Desc: "dump"},
-		}},
+	switch m.screen {
+	case queueScreenSyncEnvList:
+		return []whichkey.CommandGroup{
+			{Items: []whichkey.CommandKey{
+				{Key: "enter", Desc: "open"},
+				{Key: "a", Desc: "add"},
+				{Key: "e", Desc: "edit"},
+				{Key: "d", Desc: "delete"},
+			}},
+		}
+	case queueScreenActions:
+		items := []whichkey.CommandKey{
+			{Key: "enter", Desc: "execute"},
+		}
+		if m.actionCursor >= 0 && m.actionCursor < len(m.actions) {
+			act := m.actions[m.actionCursor]
+			if act.isCustom {
+				items = append(items, whichkey.CommandKey{Key: "e", Desc: "edit"})
+				items = append(items, whichkey.CommandKey{Key: "d", Desc: "delete"})
+			}
+		}
+		return []whichkey.CommandGroup{{Items: items}}
 	}
+	return nil
 }
 
 // IsTextInputActive returns true when a text input has focus on this screen.
@@ -2011,7 +2029,6 @@ func (m *QueueOpsModel) viewCustomForm() string {
 
 	b.WriteString("  " + styles.InlineHelp(
 		styles.HelpItem("esc", "cancel"),
-		styles.HelpItem("↑ ↓", "field"),
 		styles.HelpItem("↵", "save"),
 		styles.HelpItem("ctrl+s", "save"),
 	))
@@ -2067,7 +2084,6 @@ func (m *QueueOpsModel) viewParamPrompt() string {
 	if onMessage {
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
-			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("↵", "newline"),
 			styles.HelpItem("ctrl+f", "format"),
 			styles.HelpItem("ctrl+s", "save"),
@@ -2094,7 +2110,6 @@ func (m *QueueOpsModel) viewParamPrompt() string {
 		}
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
-			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("↵", enterLabel),
 		))
 	}

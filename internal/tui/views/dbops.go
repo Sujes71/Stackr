@@ -179,12 +179,30 @@ func (m *DBOpsModel) IsBusy() bool {
 
 // WhichKeyCommands returns the command catalog for DB Ops screen.
 func (m *DBOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
-	return []whichkey.CommandGroup{
-		{Items: []whichkey.CommandKey{
-			{Key: "o", Desc: "open shell"},
-			{Key: "d", Desc: "dump"},
-		}},
+	switch m.screen {
+	case dbScreenSyncEnvList:
+		return []whichkey.CommandGroup{
+			{Items: []whichkey.CommandKey{
+				{Key: "enter", Desc: "open"},
+				{Key: "a", Desc: "add"},
+				{Key: "e", Desc: "edit"},
+				{Key: "d", Desc: "delete"},
+			}},
+		}
+	case dbScreenSyncEnvActions:
+		items := []whichkey.CommandKey{
+			{Key: "enter", Desc: "execute"},
+		}
+		if m.actionCursor >= 0 && m.actionCursor < len(m.actions) {
+			act := m.actions[m.actionCursor]
+			if act.isCustom {
+				items = append(items, whichkey.CommandKey{Key: "e", Desc: "edit"})
+				items = append(items, whichkey.CommandKey{Key: "d", Desc: "delete"})
+			}
+		}
+		return []whichkey.CommandGroup{{Items: items}}
 	}
+	return nil
 }
 
 // IsTextInputActive returns true when a text input has focus on this screen.
@@ -1370,7 +1388,6 @@ func (m *DBOpsModel) viewCustomForm() string {
 	if m.customFormFocus == 1 {
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
-			styles.HelpItem("↑ ↓", "field"),
 			styles.HelpItem("↵", "newline"),
 			styles.HelpItem("ctrl+s", "save"),
 		))
@@ -1378,7 +1395,6 @@ func (m *DBOpsModel) viewCustomForm() string {
 		// Name field: Enter always submits the form
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
-			styles.HelpItem("↑ ↓", "field"),
 			styles.HelpItem("↵", "submit"),
 		))
 	}

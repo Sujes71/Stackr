@@ -197,18 +197,26 @@ func (m *GitOpsModel) IsBusy() bool { return len(m.pendingOps) > 0 }
 func (m *GitOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 	switch m.screen {
 	case gitScreenMain:
-		gitItems := []whichkey.CommandKey{
-			{Key: "s", Desc: "stash"},
-		}
+		var gitItems []whichkey.CommandKey
+
+		// Push / pull
 		if m.hasUnpushed {
-			gitItems[0] = whichkey.CommandKey{Key: "p", Desc: "push"}
+			gitItems = append(gitItems, whichkey.CommandKey{Key: "p", Desc: "push"})
 		} else if len(m.files) == 0 {
 			gitItems = append(gitItems, whichkey.CommandKey{Key: "p", Desc: "pull"})
 		}
+
+		// Stash / pop
+		if len(m.files) > 0 {
+			gitItems = append(gitItems, whichkey.CommandKey{Key: "s", Desc: "stash"})
+		} else if m.hasStash {
+			gitItems = append(gitItems, whichkey.CommandKey{Key: "s", Desc: "pop"})
+		}
+
 		gitItems = append(gitItems, whichkey.CommandKey{Key: "b", Desc: "branch"})
 		gitItems = append(gitItems, whichkey.CommandKey{Key: "l", Desc: "log"})
 
-		changesItems := []whichkey.CommandKey{}
+		var changesItems []whichkey.CommandKey
 		if f := m.currentFile(); f != nil && !f.Staged && f.StatusCode != '?' {
 			changesItems = append(changesItems, whichkey.CommandKey{Key: "d", Desc: "discard"})
 		}
@@ -229,6 +237,7 @@ func (m *GitOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 	case gitScreenBranch:
 		return []whichkey.CommandGroup{
 			{Items: []whichkey.CommandKey{
+				{Key: "enter", Desc: "checkout"},
 				{Key: "n", Desc: "new branch"},
 				{Key: "d", Desc: "delete branch"},
 				{Key: "m", Desc: "merge"},

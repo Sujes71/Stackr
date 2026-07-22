@@ -73,9 +73,8 @@ func (m *WhichKeyModel) View(terminalWidth int) string {
 		rendered = append(rendered, renderedItem{text: text, width: lipgloss.Width(text)})
 	}
 
-	// Calculate column layout to fill terminal width
-	// Each column: item + gap. Find how many columns fit.
-	gapW := 4 // spaces between columns
+	// Calculate column layout — tight fixed gap, panel fills terminal width.
+	gapW := 4 // spaces between columns (fixed, never stretched)
 	maxColWidth := 0
 	for _, r := range rendered {
 		if r.width > maxColWidth {
@@ -84,8 +83,10 @@ func (m *WhichKeyModel) View(terminalWidth int) string {
 	}
 	colWidth := maxColWidth + gapW
 
-	// How many columns fit in the available width (minus panel padding)
-	availW := w - 4 // border + padding
+	// Available width for content (panel padding + border)
+	availW := w - 6
+
+	// Max columns that fit — never stretch spacing to fill.
 	numCols := availW / colWidth
 	if numCols < 1 {
 		numCols = 1
@@ -126,12 +127,12 @@ func (m *WhichKeyModel) View(terminalWidth int) string {
 		content = "  " + bc + "\n" + content
 	}
 
-	// Wrap in a bordered panel
+	// Wrap in a bordered panel — always fill terminal width
 	panelStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(styles.ColorMuted).
 		Padding(0, 1).
-		Width(min(w, lipgloss.Width(content)+6))
+		Width(w)
 
 	return panelStyle.Render(content)
 }

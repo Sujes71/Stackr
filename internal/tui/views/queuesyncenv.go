@@ -661,7 +661,7 @@ func (m *AddQueueSyncEnvModel) viewConnectionStep() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(styles.BackHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "next")))
+	b.WriteString(styles.BackHelp(styles.HelpItem("↵", "next")))
 
 	return b.String()
 }

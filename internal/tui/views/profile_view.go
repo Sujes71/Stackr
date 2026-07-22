@@ -2756,7 +2756,7 @@ func (m *ProfileViewModel) renderDiscovery() string {
 			rows = append(rows, renderDiscoveryItem(ctx, i == m.discoveryCursor))
 		}
 		b.WriteString(m.decorateScroll(strings.Join(rows, "\n"), win, dTotal))
-		b.WriteString("\n\n" + styles.InlineHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "select")))
+		b.WriteString("\n\n" + styles.InlineHelp(styles.HelpItem("↵", "select")))
 
 	case 1:
 		dTotal := len(m.discoveryNSs)
@@ -2774,7 +2774,7 @@ func (m *ProfileViewModel) renderDiscovery() string {
 			rows = append(rows, renderDiscoveryItem(ns, i == m.discoveryCursor))
 		}
 		b.WriteString(m.decorateScroll(strings.Join(rows, "\n"), win, dTotal))
-		b.WriteString("\n\n" + styles.InlineHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "select")))
+		b.WriteString("\n\n" + styles.InlineHelp(styles.HelpItem("↵", "select")))
 
 	case 2:
 		dTotal := len(m.discoverySvcs)
@@ -2793,7 +2793,7 @@ func (m *ProfileViewModel) renderDiscovery() string {
 			rows = append(rows, renderDiscoveryItem(label, i == m.discoveryCursor))
 		}
 		b.WriteString(m.decorateScroll(strings.Join(rows, "\n"), win, dTotal))
-		b.WriteString("\n\n" + styles.InlineHelp(styles.HelpItem("↑ ↓", "navigate"), styles.HelpItem("↵", "select")))
+		b.WriteString("\n\n" + styles.InlineHelp(styles.HelpItem("↵", "select")))
 
 	case 3:
 		b.WriteString(styles.StyleHeader.Render("  Confirm port-forward:"))

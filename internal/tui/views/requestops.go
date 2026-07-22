@@ -240,13 +240,37 @@ func (m *RequestOpsModel) IsBusy() bool {
 
 // WhichKeyCommands returns the command catalog for Request Ops screen.
 func (m *RequestOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
-	return []whichkey.CommandGroup{
-		{Items: []whichkey.CommandKey{
-			{Key: "n", Desc: "new request"},
-			{Key: "r", Desc: "run"},
-			{Key: "d", Desc: "delete"},
-		}},
+	switch m.screen {
+	case reqScreenList:
+		var items []whichkey.CommandKey
+
+		if m.listCursor >= 0 && m.listCursor < len(m.listItems) {
+			item := m.listItems[m.listCursor]
+			switch item.kind {
+			case reqItemRequest:
+				items = append(items, whichkey.CommandKey{Key: "enter", Desc: "run"})
+				items = append(items, whichkey.CommandKey{Key: "a", Desc: "add request"})
+				items = append(items, whichkey.CommandKey{Key: "c", Desc: "copy cURL"})
+				items = append(items, whichkey.CommandKey{Key: "e", Desc: "edit"})
+				items = append(items, whichkey.CommandKey{Key: "d", Desc: "delete"})
+			case reqItemURL:
+				expandDesc := "expand"
+				if m.expandedURLs[item.urlIdx] {
+					expandDesc = "collapse"
+				}
+				items = append(items, whichkey.CommandKey{Key: "enter", Desc: expandDesc})
+				items = append(items, whichkey.CommandKey{Key: "a", Desc: "add request"})
+				items = append(items, whichkey.CommandKey{Key: "e", Desc: "edit"})
+				items = append(items, whichkey.CommandKey{Key: "d", Desc: "delete"})
+			case reqItemAddURL:
+				items = append(items, whichkey.CommandKey{Key: "enter", Desc: "create folder"})
+			}
+		}
+
+		items = append(items, whichkey.CommandKey{Key: "n", Desc: "new env"})
+		return []whichkey.CommandGroup{{Items: items}}
 	}
+	return nil
 }
 
 // IsTextInputActive returns true when a text input has focus on this screen.
@@ -1888,14 +1912,12 @@ func (m *RequestOpsModel) viewForm() string {
 	if m.bodyEditMode {
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "exit edit"),
-			styles.HelpItem("↑ ↓", "field"),
 			styles.HelpItem("ctrl+f", "format"),
 			styles.HelpItem("ctrl+s", "save"),
 		))
 	} else {
 		helpItems := []styles.HelpItemResult{
 			styles.HelpItem("esc", "cancel"),
-			styles.HelpItem("↑ ↓", "field"),
 		}
 		// Only show ↵ hint when Enter actually does something
 		if m.formHasEnterAction() {
@@ -2410,9 +2432,6 @@ func (m *RequestOpsModel) viewVarPrompt() string {
 	helpItems := []styles.HelpItemResult{
 		styles.HelpItem("esc", "cancel"),
 		styles.HelpItem("↵", "next"),
-	}
-	if len(names) > 1 {
-		helpItems = append(helpItems, styles.HelpItem("↑ ↓", "navigate"))
 	}
 	b.WriteString("  " + styles.InlineHelp(helpItems...))
 	return b.String()

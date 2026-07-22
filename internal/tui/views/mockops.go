@@ -163,10 +163,18 @@ func (m *MockOpsModel) IsBusy() bool {
 
 // WhichKeyCommands returns the command catalog for Mock Server screen.
 func (m *MockOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
+	if m.viewingItemList {
+		return []whichkey.CommandGroup{
+			{Items: []whichkey.CommandKey{
+				{Key: "enter", Desc: "view detail"},
+				{Key: "e", Desc: "edit"},
+				{Key: "d", Desc: "delete"},
+			}},
+		}
+	}
 	return []whichkey.CommandGroup{
 		{Items: []whichkey.CommandKey{
-			{Key: "n", Desc: "new mock env"},
-			{Key: "d", Desc: "delete mock env"},
+			{Key: "enter", Desc: "execute"},
 		}},
 	}
 }
@@ -1840,7 +1848,6 @@ func (m *MockOpsModel) viewItemList() string {
 	}
 
 	helpItems := []styles.HelpItemResult{
-		styles.HelpItem("↑ ↓", "navigate"),
 		styles.HelpItem("↵", "view"),
 	}
 	// 'd' delete works on all items (expectations + recorded requests)
@@ -2007,7 +2014,6 @@ func (m *MockOpsModel) viewParamPrompt() string {
 	if onBody {
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
-			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("↵", "newline"),
 			styles.HelpItem("ctrl+f", "format"),
 			styles.HelpItem("ctrl+s", "save"),
@@ -2015,7 +2021,6 @@ func (m *MockOpsModel) viewParamPrompt() string {
 	} else if isQP {
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
-			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("↵", "add pairs"),
 		))
 	} else {
@@ -2040,7 +2045,6 @@ func (m *MockOpsModel) viewParamPrompt() string {
 		}
 		b.WriteString("  " + styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
-			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("↵", enterLabel),
 		))
 	}

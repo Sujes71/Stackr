@@ -359,7 +359,6 @@ func (m *HomeModel) View() string {
 		}
 		b.WriteString(styles.InlineHelp(
 			styles.HelpItem("esc", "cancel"),
-			styles.HelpItem("↑ ↓", "navigate"),
 			styles.HelpItem("d d", "delete"),
 			styles.HelpItem("↵", "import"),
 		))
