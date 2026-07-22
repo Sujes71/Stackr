@@ -887,6 +887,17 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return NavigateTo{Screen: NavRequestOps, ProfileName: m.profile.Name}
 				}
 			}
+			// G → navigate to Git Ops
+			if msg.String() == "g" {
+				m.showingShortcuts = false
+				m.deleteArmed = false
+				m.deleteEnvArmed = false
+				m.resetArmed = false
+				m.keyPending = ""
+				return m, func() tea.Msg {
+					return NavigateTo{Screen: NavGitOps, ProfileName: m.profile.Name}
+				}
+			}
 			// Q → Queue Ops — dismiss overlay, reprocess key in normal mode
 			if msg.String() == "q" {
 				m.showingShortcuts = false
