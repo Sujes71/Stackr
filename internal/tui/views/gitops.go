@@ -156,11 +156,12 @@ type GitOpsModel struct {
 	logFileDiffVP viewport.Model  // viewport for commit file diff
 
 	// Spinner / pending ops
-	pendingOps   map[string]string
-	pendingStart time.Time // when the current pending op started
-	spinnerFrame int
-	doneOp       string
-	doneOpAt     time.Time
+	pendingOps    map[string]string
+	pendingStart  time.Time // when the current pending op started
+	spinnerFrame  int
+	spinnerScreen gitScreen // which screen started the current spinner
+	doneOp        string
+	doneOpAt      time.Time
 
 	// Dimensions
 	width  int
@@ -380,7 +381,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.pendingOps, "commit-files")
 		// Auto-fetch diff for first file
 		if len(m.logFiles) > 0 {
-			m.pendingOps["commit-diff"] = "loading"
+			m.startPendingOpImmediate("commit-diff", "loading")
 			hash := m.logDetailHash
 			path := m.logFiles[0]
 			return m, tea.Batch(
@@ -545,7 +546,7 @@ func (m *GitOpsModel) cmdFetchDiff() tea.Cmd {
 	path := f.Path
 	staged := f.Staged
 	statusCode := f.StatusCode
-	m.pendingOps["diff"] = "loading diff"
+	m.startPendingOpImmediate("diff", "loading diff")
 	return tea.Batch(
 		func() tea.Msg {
 			var output string
@@ -572,6 +573,10 @@ func (m *GitOpsModel) renderPendingOrDone() string {
 		if op == "diff" {
 			continue // don't show spinner for diff (it's the right panel)
 		}
+		// Only show spinner on the screen that started the operation
+		if m.spinnerScreen != m.screen {
+			return ""
+		}
 		// Only show spinner after 200ms — fast ops (stage/unstage) won't flash
 		if time.Since(m.pendingStart) > 200*time.Millisecond {
 			return "\n" + opsRenderSpinnerDot(m.spinnerFrame, op+"...")
@@ -585,6 +590,21 @@ func (m *GitOpsModel) renderPendingOrDone() string {
 		return "\n" + styles.StyleSuccess.Render("  " + m.doneOp)
 	}
 	return ""
+}
+
+// ── Pending Op Helpers ─────────────────────────────────────────────────────────
+
+// startPendingOp sets a pending op with 200ms spinner delay.
+func (m *GitOpsModel) startPendingOp(key, label string) {
+	m.pendingStart = time.Now()
+	m.spinnerScreen = m.screen
+	m.pendingOps[key] = label
+}
+
+// startPendingOpImmediate sets a pending op that shows spinner immediately.
+func (m *GitOpsModel) startPendingOpImmediate(key, label string) {
+	m.spinnerScreen = m.screen
+	m.pendingOps[key] = label
 }
 
 // ── Confirm Helpers ──────────────────────────────────────────────────────────
@@ -673,9 +693,8 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 			path := f.Path
-			m.pendingStart = time.Now()
 			if f.Staged {
-				m.pendingOps["unstage"] = "unstaging"
+				m.startPendingOp("unstage", "unstaging")
 				return m, tea.Batch(
 					func() tea.Msg {
 						err := git.Unstage(m.dir, path)
@@ -688,7 +707,7 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 					spinnerCmd(),
 				)
 			}
-			m.pendingOps["stage"] = "staging"
+			m.startPendingOp("stage", "staging")
 			return m, tea.Batch(
 				func() tea.Msg {
 					err := git.Stage(m.dir, path)
@@ -703,10 +722,9 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Option+Space: stage all or unstage all
 		case msg.String() == "alt+ ":
-			m.pendingStart = time.Now()
 			allStaged := m.stagedStart > 0 && m.stagedStart >= len(m.files)
 			if allStaged {
-				m.pendingOps["unstage"] = "unstaging all"
+				m.startPendingOp("unstage", "unstaging all")
 				return m, tea.Batch(
 					func() tea.Msg {
 						err := git.UnstageAll(m.dir)
@@ -719,7 +737,7 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 					spinnerCmd(),
 				)
 			}
-			m.pendingOps["stage"] = "staging all"
+			m.startPendingOp("stage", "staging all")
 			return m, tea.Batch(
 				func() tea.Msg {
 					err := git.StageAll(m.dir)
@@ -746,7 +764,7 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = gitScreenBranch
 			m.branchCursor = 0
 			if len(m.branches) == 0 {
-				m.pendingOps["branches"] = "loading"
+				m.startPendingOpImmediate("branches", "loading")
 				return m, tea.Batch(
 					func() tea.Msg {
 						branches, err := git.Branches(m.dir)
@@ -760,8 +778,7 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.String() == "p":
 			if m.hasUnpushed {
 				// Push
-				m.pendingStart = time.Now()
-				m.pendingOps["push"] = "pushing"
+				m.startPendingOp("push", "pushing")
 				return m, tea.Batch(
 					func() tea.Msg {
 						err := git.Push(m.dir)
@@ -776,8 +793,7 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if len(m.files) == 0 {
 				// Pull (only when working tree is clean)
-				m.pendingStart = time.Now()
-				m.pendingOps["pull"] = "pulling"
+				m.startPendingOp("pull", "pulling")
 				return m, tea.Batch(
 					func() tea.Msg {
 						err := git.Pull(m.dir)
@@ -794,8 +810,7 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.String() == "s":
 			if len(m.files) > 0 {
 				// Stash changes
-				m.pendingStart = time.Now()
-				m.pendingOps["stash"] = "stashing"
+				m.startPendingOp("stash", "stashing")
 				return m, tea.Batch(
 					func() tea.Msg {
 						err := git.StashCreate(m.dir, "")
@@ -810,8 +825,7 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.hasStash {
 				// Pop stash — all changes come back unstaged
-				m.pendingStart = time.Now()
-				m.pendingOps["stash"] = "popping stash"
+				m.startPendingOp("stash", "popping stash")
 				return m, tea.Batch(
 					func() tea.Msg {
 						err := git.StashPop(m.dir)
@@ -839,8 +853,7 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if wasConfirmArmed {
 				// Execute discard
 				path := f.Path
-				m.pendingStart = time.Now()
-				m.pendingOps["discard"] = "discarding"
+				m.startPendingOp("discard", "discarding")
 				return m, tea.Batch(
 					func() tea.Msg {
 						err := git.DiscardChanges(m.dir, path)
@@ -877,7 +890,7 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = gitScreenLog
 			m.logCursor = 0
 			if len(m.commits) == 0 {
-				m.pendingOps["log"] = "loading"
+				m.startPendingOpImmediate("log", "loading")
 				return m, tea.Batch(
 					func() tea.Msg {
 						commits, err := git.Log(m.dir, 30)
@@ -982,6 +995,7 @@ func (m *GitOpsModel) viewMain() string {
 		b.WriteString(title)
 		b.WriteString("\n\n")
 		b.WriteString("  " + styles.StyleSubtitle.Render("Working tree clean"))
+		b.WriteString(m.renderPendingOrDone())
 		b.WriteString("\n\n")
 		b.WriteString(m.renderCleanFooter())
 		return b.String()
@@ -1217,7 +1231,7 @@ func (m *GitOpsModel) updateCommit(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.commitInput.Blur()
 			isAmend := m.amendMode
 			m.amendMode = false
-			m.pendingOps["commit"] = "committing"
+			m.startPendingOpImmediate("commit", "committing")
 			msg := subject
 			return m, tea.Batch(
 				func() tea.Msg {
@@ -1311,7 +1325,7 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.branchCreating = false
 				m.branchInput.Blur()
-				m.pendingOps["create-branch"] = "creating branch"
+				m.startPendingOpImmediate("create-branch", "creating branch")
 				return m, tea.Batch(
 					func() tea.Msg {
 						err := git.CreateBranch(m.dir, name)
@@ -1335,7 +1349,7 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if name == "" {
 					return m, nil
 				}
-				m.pendingOps["merge-branch"] = "merging"
+				m.startPendingOpImmediate("merge-branch", "merging")
 				src := name
 				return m, tea.Batch(
 					func() tea.Msg {
@@ -1387,7 +1401,7 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.branchCursor < len(m.branches) && m.branches[m.branchCursor].Current {
 				return m, nil
 			}
-			m.pendingOps["checkout"] = "checking out"
+			m.startPendingOpImmediate("checkout", "checking out")
 			checkoutName := name
 			return m, tea.Batch(
 				func() tea.Msg {
@@ -1645,7 +1659,7 @@ func (m *GitOpsModel) updateLog(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logFileCursor = 0
 			m.logFileDiff = ""
 			m.logFileDiffVP.SetContent("")
-			m.pendingOps["commit-files"] = "loading"
+			m.startPendingOpImmediate("commit-files", "loading")
 			return m, tea.Batch(
 				func() tea.Msg {
 					files, err := git.CommitFiles(m.dir, hash)
@@ -1772,7 +1786,7 @@ func (m *GitOpsModel) cmdFetchCommitDiff() tea.Cmd {
 	}
 	path := m.logFiles[m.logFileCursor]
 	hash := m.logDetailHash
-	m.pendingOps["commit-diff"] = "loading"
+	m.startPendingOpImmediate("commit-diff", "loading")
 	return tea.Batch(
 		func() tea.Msg {
 			output, err := git.DiffCommitFile(m.dir, hash, path)
