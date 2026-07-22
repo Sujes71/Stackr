@@ -827,21 +827,8 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 			f := m.currentFile()
-			if f == nil {
-				break
-			}
-			// Can't discard untracked files with checkout — need clean
-			if f.StatusCode == '?' {
-				m.doneOp = "Cannot discard untracked files (use `git clean`)"
-				m.doneOpIsErr = true
-				m.doneOpAt = time.Now()
-				return m, doneExpireCmd()
-			}
-			if f.Staged {
-				m.doneOp = "Unstage first (space) before discarding"
-				m.doneOpIsErr = true
-				m.doneOpAt = time.Now()
-				return m, doneExpireCmd()
+			if f == nil || f.Staged || f.StatusCode == '?' {
+				break // silently ignore — not a discardable file
 			}
 			if wasConfirmArmed {
 				// Execute discard
@@ -1016,7 +1003,6 @@ func (m *GitOpsModel) viewMain() string {
 
 	// Footer help — adapts to current cursor state
 	hasStaged := m.stagedStart > 0
-	hasUnstaged := len(m.files) > 0 && m.stagedStart < len(m.files)
 	allStaged := hasStaged && m.stagedStart >= len(m.files) // no unstaged files
 	cursorOnStaged := m.fileCursor < m.stagedStart
 
@@ -1042,10 +1028,11 @@ func (m *GitOpsModel) viewMain() string {
 	}
 	helpItems = append(helpItems, styles.HelpItem("s", "stash"))
 	helpItems = append(helpItems, styles.HelpItem("b", "branch"))
-	if hasUnstaged {
+	// d discard: only for unstaged tracked files (not staged, not untracked)
+	if f := m.currentFile(); f != nil && !f.Staged && f.StatusCode != '?' {
 		helpItems = append(helpItems, styles.HelpItem("d", "discard"))
 	}
-	if hasStaged {
+	if m.lastCommitMsg != "" {
 		helpItems = append(helpItems, styles.HelpItem("A", "amend"))
 	}
 	helpItems = append(helpItems, styles.HelpItem("l", "log"))
@@ -1071,8 +1058,11 @@ func (m *GitOpsModel) renderCleanFooter() string {
 	}
 	if m.hasStash {
 		helpItems = append(helpItems, styles.HelpItem("s", "stash pop"))
+	} else {
+		helpItems = append(helpItems, styles.HelpItem("s", "stash"))
 	}
 	helpItems = append(helpItems, styles.HelpItem("b", "branch"))
+	helpItems = append(helpItems, styles.HelpItem("l", "log"))
 	return styles.BackHelp(helpItems...)
 }
 
@@ -1598,8 +1588,6 @@ func (m *GitOpsModel) viewBranch() string {
 
 	helpItems := []styles.HelpItemResult{
 		styles.HelpItem("↑↓", "nav"),
-		styles.HelpItem("↵", "checkout"),
-		styles.HelpItem("n", "new"),
 	}
 	if canMerge {
 		helpItems = append(helpItems, styles.HelpItem("m", "merge"))
@@ -1607,6 +1595,11 @@ func (m *GitOpsModel) viewBranch() string {
 	if canDelete {
 		helpItems = append(helpItems, styles.HelpItem("d", "delete"))
 	}
+	// Only show checkout if focused branch is not the current one
+	if focusBr != "" && !(m.branchCursor >= 0 && m.branchCursor < len(m.branches) && m.branches[m.branchCursor].Current) {
+		helpItems = append(helpItems, styles.HelpItem("↵", "checkout"))
+	}
+	helpItems = append(helpItems, styles.HelpItem("n", "new"))
 	helpItems = append(helpItems, styles.HelpItem("esc", "back"))
 	b.WriteString(styles.InlineHelp(helpItems...))
 	return b.String()

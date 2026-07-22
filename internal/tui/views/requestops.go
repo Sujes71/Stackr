@@ -1058,7 +1058,9 @@ func (m *RequestOpsModel) viewList() string {
 			footerItems = append(footerItems, styles.HelpItem("↵", "execute"))
 			footerItems = append(footerItems, styles.HelpItem("⌥↵", "re-prompt"))
 		case reqItemURL:
-			if m.expandedURLs[item.urlIdx] {
+			if m.currentEnvURL(item.label) == "" {
+				// No URL set — no expand/collapse action
+			} else if m.expandedURLs[item.urlIdx] {
 				footerItems = append(footerItems, styles.HelpItem("↵", "collapse"))
 			} else {
 				footerItems = append(footerItems, styles.HelpItem("↵", "expand"))
