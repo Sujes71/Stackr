@@ -66,7 +66,6 @@ type ProfileViewModel struct {
 	editFwdIdx       int
 	viewingService   int    // -1 = not viewing
 	viewingProcess   string // "" = not viewing
-	showingShortcuts bool
 
 	// ── Docker Stats ──
 	showStats      bool
@@ -109,8 +108,160 @@ type ProfileNavState struct {
 
 // WhichKeyCommands returns the command catalog for Profile Docker/PF screens.
 func (m *ProfileViewModel) WhichKeyCommands() []whichkey.CommandGroup {
-	// TODO: Phase 3 — full implementation
-	return nil
+	if m.isPortForwardEnv() {
+		return m.whichKeyCommandsPF()
+	}
+	return m.whichKeyCommandsDocker()
+}
+
+func (m *ProfileViewModel) whichKeyCommandsDocker() []whichkey.CommandGroup {
+	svcs := m.currentEnvServices()
+	env := m.currentEnv()
+	hasServices := len(svcs) > 0 || (env != nil && len(env.LocalProcesses) > 0)
+
+	// Services group
+	var svcItems []whichkey.CommandKey
+	svcItems = append(svcItems, whichkey.CommandKey{Key: "a", Desc: "add service"})
+	if hasServices {
+		runLabel := "run"
+		if m.isSelectedServiceRunning() {
+			runLabel = "stop"
+		}
+		svcItems = append(svcItems, whichkey.CommandKey{Key: "enter", Desc: runLabel})
+		if m.selectedDBType() != "" {
+			svcItems = append(svcItems, whichkey.CommandKey{Key: "o", Desc: "db ops"})
+		}
+		if m.selectedQueueType() != "" {
+			svcItems = append(svcItems, whichkey.CommandKey{Key: "q", Desc: "queue ops"})
+		}
+		if m.selectedMockType() != "" {
+			svcItems = append(svcItems, whichkey.CommandKey{Key: "m", Desc: "mock ops"})
+		}
+		if len(svcs) > 1 {
+			svcItems = append(svcItems, whichkey.CommandKey{
+				Key:  "d",
+				Desc: "delete svc",
+				Children: []whichkey.CommandKey{
+					{Key: "d", Desc: "confirm delete"},
+				},
+			})
+		}
+		svcItems = append(svcItems, whichkey.CommandKey{Key: "v", Desc: "view config"})
+		if len(svcs) > 0 && m.cursor < len(svcs) {
+			svcItems = append(svcItems, whichkey.CommandKey{Key: "p", Desc: "pull"})
+		}
+		hasRunning := false
+		for _, st := range m.statuses {
+			if st.State == "running" {
+				hasRunning = true
+				break
+			}
+		}
+		if hasRunning && m.isSelectedServiceRunning() {
+			svcItems = append(svcItems, whichkey.CommandKey{Key: "h", Desc: "shell"})
+			svcItems = append(svcItems, whichkey.CommandKey{Key: "t", Desc: "stats"})
+		}
+	}
+
+	// Env / Stack group
+	var stackItems []whichkey.CommandKey
+	if hasServices {
+		hasRunning := false
+		for _, st := range m.statuses {
+			if st.State == "running" {
+				hasRunning = true
+				break
+			}
+		}
+		stackItems = append(stackItems, whichkey.CommandKey{Key: "s", Desc: "stack all"})
+		if hasRunning {
+			stackItems = append(stackItems, whichkey.CommandKey{Key: "x", Desc: "stop all"})
+		}
+		stackItems = append(stackItems, whichkey.CommandKey{
+			Key:  "r",
+			Desc: "reset vol",
+			Children: []whichkey.CommandKey{
+				{Key: "v", Desc: "confirm reset"},
+			},
+		})
+	}
+	if m.extraEnvCount() < 3 {
+		stackItems = append(stackItems, whichkey.CommandKey{Key: "n", Desc: "new env"})
+	}
+	stackItems = append(stackItems, whichkey.CommandKey{Key: "u", Desc: "request ops"})
+	stackItems = append(stackItems, whichkey.CommandKey{Key: "g", Desc: "git ops"})
+	if len(m.profile.Environments) > 0 && env != nil && env.Name != "local" {
+		stackItems = append(stackItems, whichkey.CommandKey{
+			Key:  "D",
+			Desc: "delete env",
+			Children: []whichkey.CommandKey{
+				{Key: "D", Desc: "confirm delete env"},
+			},
+		})
+	}
+
+	return []whichkey.CommandGroup{
+		{Label: "Services", Items: svcItems},
+		{Label: "Env / Stack", Items: stackItems},
+	}
+}
+
+func (m *ProfileViewModel) whichKeyCommandsPF() []whichkey.CommandGroup {
+	forwards := m.currentForwards()
+
+	// Port-Forward group
+	var pfItems []whichkey.CommandKey
+	pfItems = append(pfItems, whichkey.CommandKey{Key: "k", Desc: "discover"})
+	if len(forwards) > 0 {
+		runLabel := "run"
+		if m.cursor < len(forwards) && (forwards[m.cursor].State == portforward.ForwardRunning || forwards[m.cursor].State == portforward.ForwardStarting) {
+			runLabel = "stop"
+		}
+		pfItems = append(pfItems, whichkey.CommandKey{Key: "enter", Desc: runLabel})
+		pfItems = append(pfItems, whichkey.CommandKey{
+			Key:  "d",
+			Desc: "delete",
+			Children: []whichkey.CommandKey{
+				{Key: "d", Desc: "confirm delete"},
+			},
+		})
+		pfItems = append(pfItems, whichkey.CommandKey{Key: "e", Desc: "edit port"})
+	}
+
+	// Stack group
+	var stackItems []whichkey.CommandKey
+	if len(forwards) > 0 {
+		hasRunning := false
+		for _, h := range forwards {
+			if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
+				hasRunning = true
+				break
+			}
+		}
+		stackItems = append(stackItems, whichkey.CommandKey{Key: "s", Desc: "stack all"})
+		if hasRunning {
+			stackItems = append(stackItems, whichkey.CommandKey{Key: "x", Desc: "stop all"})
+		}
+	}
+	if m.extraEnvCount() < 3 {
+		stackItems = append(stackItems, whichkey.CommandKey{Key: "n", Desc: "new env"})
+	}
+	if len(m.profile.Environments) > 0 && m.currentEnv() != nil && m.currentEnv().Name != "local" {
+		stackItems = append(stackItems, whichkey.CommandKey{
+			Key:  "D",
+			Desc: "delete env",
+			Children: []whichkey.CommandKey{
+				{Key: "D", Desc: "confirm delete env"},
+			},
+		})
+	}
+	stackItems = append(stackItems, whichkey.CommandKey{Key: "u", Desc: "request ops"})
+	stackItems = append(stackItems, whichkey.CommandKey{Key: "g", Desc: "git ops"})
+
+	return []whichkey.CommandGroup{
+		{Label: "Port-Forward", Items: pfItems},
+		{Label: "Env / Stack", Items: stackItems},
+	}
 }
 
 // IsTextInputActive returns true when a text input has focus on this screen.
@@ -867,89 +1018,6 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.viewingProcess != "" {
 			m.viewingProcess = ""
-			return m, nil
-		}
-		if m.showingShortcuts {
-			if key.Matches(msg, profileKeys.tab) {
-				// Tab while showing → keep showing (no toggle, no timer)
-				return m, nil
-			}
-			// E → navigate to errors view (only if there are errors)
-			if (msg.String() == "E" || msg.String() == "e") && m.errorRegistry != nil && m.errorRegistry.Len() > 0 {
-				m.showingShortcuts = false
-				m.persistActiveEnv()
-				m.deleteArmed = false
-				m.deleteEnvArmed = false
-				m.resetArmed = false
-				m.keyPending = ""
-				envName := ""
-				if m.activeEnv < len(m.profile.Environments) {
-					envName = m.profile.Environments[m.activeEnv].Name
-				}
-				return m, func() tea.Msg { return NavigateTo{Screen: NavErrors, ProfileName: m.profile.Name, EnvName: envName} }
-			}
-			// U → navigate to Request Ops
-			if msg.String() == "u" {
-				m.showingShortcuts = false
-				m.deleteArmed = false
-				m.deleteEnvArmed = false
-				m.resetArmed = false
-				m.keyPending = ""
-				return m, func() tea.Msg {
-					return NavigateTo{Screen: NavRequestOps, ProfileName: m.profile.Name}
-				}
-			}
-			// G → navigate to Git Ops
-			if msg.String() == "g" {
-				m.showingShortcuts = false
-				m.deleteArmed = false
-				m.deleteEnvArmed = false
-				m.resetArmed = false
-				m.keyPending = ""
-				return m, func() tea.Msg {
-					return NavigateTo{Screen: NavGitOps, ProfileName: m.profile.Name}
-				}
-			}
-			// Q → Queue Ops — dismiss overlay, reprocess key in normal mode
-			if msg.String() == "q" {
-				m.showingShortcuts = false
-				return m, func() tea.Msg { return msg }
-			}
-			// A → Add Service — dismiss overlay, reprocess key in normal mode
-			if msg.String() == "a" {
-				m.showingShortcuts = false
-				return m, func() tea.Msg { return msg }
-			}
-			// S → stack all — dismiss overlay, reprocess key in normal mode
-			if msg.String() == "s" {
-				m.showingShortcuts = false
-				return m, func() tea.Msg { return msg }
-			}
-			// O, M, V, P, N, X, H, T, K, D, E, Enter → dismiss overlay, reprocess in normal mode
-			if msg.String() == "o" || msg.String() == "m" || msg.String() == "v" ||
-				msg.String() == "p" || msg.String() == "n" || msg.String() == "x" ||
-				msg.String() == "h" || msg.String() == "t" || msg.String() == "k" ||
-				msg.String() == "d" || msg.String() == "e" || msg.String() == "E" ||
-				msg.String() == "enter" {
-				m.showingShortcuts = false
-				return m, func() tea.Msg { return msg }
-			}
-			// D → arm env delete (dismissible from normal mode)
-			if msg.String() == "D" {
-				if len(m.profile.Environments) > 0 {
-					envName := m.profile.Environments[m.activeEnv].Name
-					if envName != "local" {
-						m.showingShortcuts = false
-						m.deleteEnvArmed = true
-						return m, nil
-					}
-				}
-				m.showingShortcuts = false
-				return m, nil
-			}
-			// Any other key → dismiss overlay (swallow the dismissing key,
-			// consistent with viewingService/viewingProcess/showStats overlays).
-			m.showingShortcuts = false
 			return m, nil
 		}
 		if m.showStats {
@@ -1878,14 +1946,6 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg {
 				return NavigateTo{Screen: NavGitOps, ProfileName: m.profile.Name}
 			}
-
-		case key.Matches(msg, profileKeys.tab):
-			m.keyPending = ""
-			m.deleteArmed = false
-			m.deleteEnvArmed = false
-			m.resetArmed = false
-			m.showingShortcuts = true
-			return m, nil
 		}
 	}
 	m.ensureValidSelection()
@@ -2223,10 +2283,6 @@ func (m *ProfileViewModel) startAllLocalProcesses(env *config.Environment) {
 }
 
 func (m *ProfileViewModel) View() string {
-	if m.showingShortcuts {
-		return m.renderShortcuts()
-	}
-
 	var b strings.Builder
 	b.WriteString("\n")
 
@@ -2305,24 +2361,6 @@ func (m *ProfileViewModel) View() string {
 		}
 	}
 
-	if m.deleteArmed {
-		b.WriteString("\n")
-		b.WriteString(styles.StyleError.Render("  Press d again to confirm removal"))
-		b.WriteString("\n")
-	}
-
-	if m.deleteEnvArmed {
-		b.WriteString("\n")
-		b.WriteString(styles.StyleError.Render("  Press D again to confirm environment removal"))
-		b.WriteString("\n")
-	}
-
-	if m.resetArmed {
-		b.WriteString("\n")
-		b.WriteString(styles.StyleError.Render("  Press v to reset this service's volume"))
-		b.WriteString("\n")
-	}
-
 	if m.promptStartDocker {
 		promptStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 		b.WriteString("\n")
@@ -2340,23 +2378,6 @@ func (m *ProfileViewModel) View() string {
 
 	if !m.inDiscovery && m.viewingService < 0 && m.viewingProcess == "" && !m.showStats {
 		b.WriteString("\n\n")
-	}
-
-	// ── Bottom hints ──
-	if m.inDiscovery {
-		b.WriteString("\n\n")
-		b.WriteString(styles.InlineHelp(styles.HelpItem("esc", "cancel")))
-	} else if m.viewingService >= 0 || m.viewingProcess != "" || m.showStats {
-		// Config/stats overlay has its own "press any key to return" hint
-	} else if m.inputtingEnv {
-		b.WriteString(styles.BackHelp())
-	} else {
-		footerItems := []styles.HelpItemResult{
-			styles.HelpItem("↑ ↓", "navigate"),
-			styles.HelpItem("← →", "envs"),
-			styles.HelpItem("tab", "command"),
-		}
-		b.WriteString(styles.BackHelp(footerItems...))
 	}
 
 	return b.String()
@@ -2887,145 +2908,6 @@ func (m *ProfileViewModel) renderLocalProcPanel(proc config.LocalProcess) string
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return styles.StylePanelFocused.Width(cardW).Render(content) + "\n\n  press any key to return"
-}
-
-// ── Shortcuts Reference ───────────────────────────────────────────────────
-
-func (m *ProfileViewModel) renderShortcuts() string {
-	cardW := m.cardWidth()
-
-	type pair struct{ k, v string }
-	section := func(title string, items []pair) string {
-		var lines []string
-		lines = append(lines, styles.StyleInputLabel.Render(title))
-		for _, it := range items {
-			lines = append(lines, styles.StyleSubtitle.Render(fmt.Sprintf("  %-5s %s", it.k, it.v)))
-		}
-		return lipgloss.JoinVertical(lipgloss.Left, lines...)
-	}
-
-	var sections []string
-
-	// Navigation — only show errors shortcut if there are errors
-	if m.errorRegistry != nil && m.errorRegistry.Len() > 0 {
-		navItems := []pair{{"E", "errors"}}
-		nav := section("Navigation", navItems)
-		sections = append(sections, nav, "")
-	}
-
-	if m.isPortForwardEnv() {
-		forwards := m.currentForwards()
-		var pfItems []pair
-		pfItems = append(pfItems, pair{"k", "discover"})
-		if len(forwards) > 0 {
-			runLabel := "run"
-			if m.cursor < len(forwards) && (forwards[m.cursor].State == portforward.ForwardRunning || forwards[m.cursor].State == portforward.ForwardStarting) {
-				runLabel = "stop"
-			}
-			pfItems = append(pfItems, pair{"↵", runLabel})
-			pfItems = append(pfItems, pair{"d d", "delete"})
-			pfItems = append(pfItems, pair{"e", "edit port"})
-		}
-		sections = append(sections, section("Port-Forward", pfItems), "")
-
-		// Stack
-		var stackItems []pair
-		if len(forwards) > 0 {
-			hasRunning := false
-			for _, h := range forwards {
-				if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
-					hasRunning = true
-					break
-				}
-			}
-			stackItems = append(stackItems, pair{"s", "stack all"})
-			if hasRunning {
-				stackItems = append(stackItems, pair{"x", "stop all"})
-			}
-			// "r v reset vol" is Docker-only — omitted for port-forward envs.
-		}
-		if m.extraEnvCount() < 3 {
-			stackItems = append(stackItems, pair{"n", "new env"})
-		}
-		if len(m.profile.Environments) > 0 && m.currentEnv() != nil && m.currentEnv().Name != "local" {
-			stackItems = append(stackItems, pair{"D D", "delete env"})
-		}
-		stackItems = append(stackItems, pair{"u", "request ops"})
-		stackItems = append(stackItems, pair{"g", "git ops"})
-		sections = append(sections, section("Env / Stack", stackItems))
-	} else {
-		svcs := m.currentEnvServices()
-		env := m.currentEnv()
-		hasServices := len(svcs) > 0 || (env != nil && len(env.LocalProcesses) > 0)
-
-		// Services
-		var svcItems []pair
-		svcItems = append(svcItems, pair{"a", "add service"})
-		if hasServices {
-			runLabel := "run"
-			if m.isSelectedServiceRunning() {
-				runLabel = "stop"
-			}
-			svcItems = append(svcItems, pair{"↵", runLabel})
-			if m.selectedDBType() != "" {
-				svcItems = append(svcItems, pair{"o", "db ops"})
-			}
-			if m.selectedQueueType() != "" {
-				svcItems = append(svcItems, pair{"q", "queue ops"})
-			}
-			if m.selectedMockType() != "" {
-				svcItems = append(svcItems, pair{"m", "mock ops"})
-			}
-			if len(svcs) > 1 {
-				svcItems = append(svcItems, pair{"d d", "delete svc"})
-			}
-			svcItems = append(svcItems, pair{"v", "view config"})
-			if len(svcs) > 0 && m.cursor < len(svcs) {
-				svcItems = append(svcItems, pair{"p", "pull"})
-			}
-			hasRunning := false
-			for _, st := range m.statuses {
-				if st.State == "running" {
-					hasRunning = true
-					break
-				}
-			}
-			if hasRunning && m.isSelectedServiceRunning() {
-				svcItems = append(svcItems, pair{"h", "shell"})
-				svcItems = append(svcItems, pair{"t", "stats"})
-			}
-		}
-		sections = append(sections, section("Services", svcItems), "")
-
-		// Env / Stack
-		var stackItems []pair
-		if hasServices {
-			hasRunning := false
-			for _, st := range m.statuses {
-				if st.State == "running" {
-					hasRunning = true
-					break
-				}
-			}
-			stackItems = append(stackItems, pair{"s", "stack all"})
-			if hasRunning {
-				stackItems = append(stackItems, pair{"x", "stop all"})
-			}
-			stackItems = append(stackItems, pair{"r v", "reset vol"})
-		}
-		if m.extraEnvCount() < 3 {
-			stackItems = append(stackItems, pair{"n", "new env"})
-		}
-		stackItems = append(stackItems, pair{"u", "request ops"})
-		stackItems = append(stackItems, pair{"g", "git ops"})
-		if len(m.profile.Environments) > 0 && env != nil && env.Name != "local" {
-			stackItems = append(stackItems, pair{"D D", "delete env"})
-		}
-		sections = append(sections, section("Env / Stack", stackItems))
-	}
-
-	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
-	return styles.StylePanelFocused.Width(cardW).Render(content)
 }
 
 // ── Discovery Key Handler ──────────────────────────────────────────────────
