@@ -655,6 +655,12 @@ func FetchAll(dir string) error {
 
 // Push pushes the current branch to its upstream.
 func Push(dir string) error {
+	// Check if upstream is set
+	if _, err := run(dir, "rev-parse", "--verify", "--quiet", "@{upstream}"); err != nil {
+		// No upstream — push with --set-upstream so future pulls work
+		_, err = run(dir, "push", "--set-upstream", "origin", "HEAD")
+		return err
+	}
 	_, err := run(dir, "push")
 	return err
 }
@@ -675,8 +681,20 @@ func Pull(dir string) error {
 // ahead of its upstream.
 func HasUnpushedCommits(dir string) bool {
 	out, err := run(dir, "log", "--oneline", "@{upstream}..HEAD")
-	if err != nil {
+	if err == nil {
+		return strings.TrimSpace(out) != ""
+	}
+	// No upstream configured — try origin/<branch>
+	branch, err2 := run(dir, "rev-parse", "--abbrev-ref", "HEAD")
+	if err2 != nil {
 		return false
+	}
+	branch = strings.TrimSpace(branch)
+	out, err = run(dir, "log", "--oneline", "origin/"+branch+"..HEAD")
+	if err != nil {
+		// No remote branch either — branch was never pushed
+		count, err3 := run(dir, "rev-list", "--count", "HEAD")
+		return err3 == nil && strings.TrimSpace(count) != "0"
 	}
 	return strings.TrimSpace(out) != ""
 }
