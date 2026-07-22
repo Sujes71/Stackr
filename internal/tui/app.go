@@ -399,10 +399,29 @@ func (a *App) View() string {
 	// Safety net: truncate any line that exceeds terminal width.
 	body = styles.TruncateLines(body, a.width)
 
-	// Build the full output and pad with blank lines to fill the terminal.
-	// Bubbletea uses a diff renderer — lines not overwritten by the new
-	// render stay visible, causing ghost artifacts when switching views.
-	// Padding ensures every terminal line is written on each frame.
+	// Which-key panel: render it to know its height, but don't insert yet.
+	whichKeyPanel := ""
+	whichKeyLines := 0
+	if a.whichKey.IsOpen() {
+		whichKeyPanel = a.whichKey.View(a.width)
+		whichKeyLines = strings.Count(whichKeyPanel, "\n") + 1
+	}
+
+	// Truncate body from the bottom to make room for: panel + footer.
+	// Content at the top stays untouched — only excess lines at the bottom
+	// are cut off, like resizing the terminal smaller.
+	footerLines := 3 // sep + quit + possible error
+	availableForBody := a.height - footerLines - whichKeyLines
+	if availableForBody < 4 {
+		availableForBody = 4
+	}
+	bodyLines := strings.Split(body, "\n")
+	if len(bodyLines) > availableForBody {
+		bodyLines = bodyLines[:availableForBody]
+		body = strings.Join(bodyLines, "\n")
+	}
+
+	// Assemble: header + sep + body + (panel) + footer
 	var out strings.Builder
 	out.WriteString(header)
 	out.WriteString("\n")
@@ -410,38 +429,20 @@ func (a *App) View() string {
 	out.WriteString("\n")
 	out.WriteString(body)
 
-	// Footer will add ~3 more lines (sep + quit + possible error).
-	footerLines := 3
-
-	// Which-key overlay: replace the last N lines of the body with the panel.
-	// The body content above the panel is UNTOUCHED — no shifting, no deformation.
-	if a.whichKey.IsOpen() {
-		whichKeyPanel := a.whichKey.View(a.width)
-		panelLines := strings.Count(whichKeyPanel, "\n") + 1
-
-		// Split current output into lines and replace the bottom
-		allLines := strings.Split(out.String(), "\n")
-		// Keep lines from the top, replacing the last panelLines lines
-		keepFrom := len(allLines) - panelLines
-		if keepFrom < 0 {
-			keepFrom = 0
-		}
-		topPart := strings.Join(allLines[:keepFrom], "\n")
-		out.Reset()
-		out.WriteString(topPart)
-		if keepFrom > 0 {
-			out.WriteString("\n")
-		}
+	if whichKeyPanel != "" {
+		out.WriteString("\n")
 		out.WriteString(whichKeyPanel)
 	}
 
+	// Pad remaining vertical space
+	lines := strings.Count(out.String(), "\n") + 1
 	needed := a.height - footerLines
-	currentLines := strings.Count(out.String(), "\n") + 1
-	if needed > currentLines {
-		for i := 0; i < needed-currentLines; i++ {
+	if needed > lines {
+		for i := 0; i < needed-lines; i++ {
 			out.WriteString("\n")
 		}
 	}
+
 	out.WriteString("\n")
 	out.WriteString(footer)
 	return out.String()
