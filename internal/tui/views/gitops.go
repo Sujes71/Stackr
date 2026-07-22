@@ -86,7 +86,6 @@ type gitOpsMergeMsg struct {
 	err    error
 }
 
-type gitOpsConfirmExpiredMsg struct{}
 type gitOpsDoneExpiredMsg struct{}
 
 // ── Model ─────────────────────────────────────────────────────────────────────
@@ -134,12 +133,6 @@ type GitOpsModel struct {
 
 	// Stash state
 	hasStash bool // true if there's at least one stash entry
-
-	// Confirmation state (double-press pattern)
-	confirmAction string    // "discard", "delete-branch"
-	confirmKey    string    // the key to confirm (e.g. "d")
-	confirmArg    string    // context (file path, branch name)
-	confirmAt     time.Time // when confirm was armed
 
 	// Done message error flag (separate from doneOp text)
 	doneOpIsErr bool
@@ -427,9 +420,6 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case gitOpsLastCommitMsg:
 		m.lastCommitMsg = msg.msg
 
-	case gitOpsConfirmExpiredMsg:
-		// Re-render after confirm timeout — message disappears automatically
-
 	case gitOpsDoneExpiredMsg:
 		// Re-render after doneOp timeout — message disappears automatically
 
@@ -672,50 +662,7 @@ func (m *GitOpsModel) startPendingOpImmediate(key, label string) {
 	m.pendingOps[key] = label
 }
 
-// ── Confirm Helpers ──────────────────────────────────────────────────────────
-
-// armConfirm sets up a double-press confirmation. Returns true if action was armed.
-func (m *GitOpsModel) armConfirm(action, key, arg string) {
-	m.confirmAction = action
-	m.confirmKey = key
-	m.confirmArg = arg
-	m.confirmAt = time.Now()
-}
-
-// clearConfirm clears the confirmation state.
-func (m *GitOpsModel) clearConfirm() {
-	m.confirmAction = ""
-	m.confirmKey = ""
-	m.confirmArg = ""
-}
-
-// isConfirmReady returns true if the same key is pressed within 3 seconds of arming.
-func (m *GitOpsModel) isConfirmReady(key string) bool {
-	return m.confirmAction != "" && m.confirmKey == key && time.Since(m.confirmAt) < 3*time.Second
-}
-
-// confirmLabel returns the confirmation message styled like profile view.
-func (m *GitOpsModel) confirmLabel() string {
-	if m.confirmAction == "" || time.Since(m.confirmAt) >= 3*time.Second {
-		return ""
-	}
-	switch m.confirmAction {
-	case "discard":
-		return styles.StyleError.Render("  Press d again to discard changes")
-	case "delete-branch":
-		return styles.StyleError.Render("  Press d again to delete branch " + m.confirmArg)
-	default:
-		return ""
-	}
-}
-
-// confirmExpireCmd returns a tea.Cmd that fires after the confirm timeout
-// to trigger a re-render and make the message disappear.
-func confirmExpireCmd() tea.Cmd {
-	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
-		return gitOpsConfirmExpiredMsg{}
-	})
-}
+// ── Done Op Expiry ────────────────────────────────────────────────────────────
 
 // doneExpireCmd returns a tea.Cmd that fires after the doneOp timeout
 // to trigger a re-render and make the message disappear.
@@ -730,12 +677,6 @@ func doneExpireCmd() tea.Cmd {
 func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Reset confirm on ANY key press (same pattern as profile view)
-		wasConfirmArmed := m.confirmAction != "" && time.Since(m.confirmAt) < 3*time.Second
-		m.confirmAction = ""
-		m.confirmKey = ""
-		m.confirmArg = ""
-
 		switch {
 
 		// Global keys (always work regardless of focus)
@@ -906,7 +847,7 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 				)
 			}
 
-		// d: Discard changes (double-press confirm)
+		// d: Discard changes (direct — which-key handles multi-key via prefix children)
 		case msg.String() == "d":
 			if m.screen != gitScreenMain {
 				break
@@ -915,24 +856,19 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if f == nil || f.Staged || f.StatusCode == '?' {
 				break // silently ignore — not a discardable file
 			}
-			if wasConfirmArmed {
-				// Execute discard
-				path := f.Path
-				m.startPendingOp("discard", "discarding")
-				return m, tea.Batch(
-					func() tea.Msg {
-						err := git.DiscardChanges(m.dir, path)
-						if err != nil {
-							return gitOpsDoneMsg{err: err}
-						}
-						files, _ := git.StatusPorcelain(m.dir)
-						return gitOpsStatusMsg{files: files}
-					},
-					spinnerCmd(),
-				)
-			}
-			m.armConfirm("discard", "d", f.Path)
-			return m, confirmExpireCmd()
+			path := f.Path
+			m.startPendingOp("discard", "discarding")
+			return m, tea.Batch(
+				func() tea.Msg {
+					err := git.DiscardChanges(m.dir, path)
+					if err != nil {
+						return gitOpsDoneMsg{err: err}
+					}
+					files, _ := git.StatusPorcelain(m.dir)
+					return gitOpsStatusMsg{files: files}
+				},
+				spinnerCmd(),
+			)
 
 		// A: Amend last commit — opens input pre-filled with last message
 		case msg.String() == "A":
@@ -1048,8 +984,7 @@ func (m *GitOpsModel) viewMain() string {
 		} else {
 			b.WriteString("  " + styles.StyleError.Render("This directory is not a git repository"))
 		}
-		b.WriteString("\n\n")
-		b.WriteString(styles.BackHelp())
+		b.WriteString("\n")
 		return b.String()
 	}
 
@@ -1061,8 +996,7 @@ func (m *GitOpsModel) viewMain() string {
 		b.WriteString("\n\n")
 		b.WriteString("  " + styles.StyleSubtitle.Render("Working tree clean"))
 		b.WriteString(m.renderPendingOrDone())
-		b.WriteString("\n\n")
-		b.WriteString(m.renderCleanFooter())
+		b.WriteString("\n")
 		return b.String()
 	}
 
@@ -1087,69 +1021,11 @@ func (m *GitOpsModel) viewMain() string {
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, sep, rightPanel)
 
 	// Footer help — adapts to current cursor state
-	hasStaged := m.stagedStart > 0
-	allStaged := hasStaged && m.stagedStart >= len(m.files) // no unstaged files
-	cursorOnStaged := m.fileCursor < m.stagedStart
 
-	helpItems := []styles.HelpItemResult{
-		styles.HelpItem("↑↓", "nav"),
-	}
-	if cursorOnStaged {
-		helpItems = append(helpItems, styles.HelpItem("space", "unstage"))
-	} else {
-		helpItems = append(helpItems, styles.HelpItem("space", "stage"))
-	}
-	if allStaged {
-		helpItems = append(helpItems, styles.HelpItem("⌥space", "unstage all"))
-	} else {
-		helpItems = append(helpItems, styles.HelpItem("⌥space", "stage all"))
-	}
-	helpItems = append(helpItems, styles.HelpItem("←→", "switch"))
-	if hasStaged {
-		helpItems = append(helpItems, styles.HelpItem("c", "commit"))
-	}
-	if m.hasUnpushed {
-		helpItems = append(helpItems, styles.HelpItem("p", "push"))
-	}
-	helpItems = append(helpItems, styles.HelpItem("s", "stash"))
-	helpItems = append(helpItems, styles.HelpItem("b", "branch"))
-	// d discard: only for unstaged tracked files (not staged, not untracked)
-	if f := m.currentFile(); f != nil && !f.Staged && f.StatusCode != '?' {
-		helpItems = append(helpItems, styles.HelpItem("d", "discard"))
-	}
-	if m.lastCommitMsg != "" {
-		helpItems = append(helpItems, styles.HelpItem("A", "amend"))
-	}
-	helpItems = append(helpItems, styles.HelpItem("l", "log"))
-	help := styles.BackHelp(helpItems...)
-
-	// Confirmation prompt (before footer, like profile view)
-	confirmMsg := ""
-	if label := m.confirmLabel(); label != "" {
-		confirmMsg = "\n" + label + "\n"
-	}
-
-	return "\n" + title + "\n" + body + m.renderPendingOrDone() + confirmMsg + "\n" + help
+	return "\n" + title + "\n" + body + m.renderPendingOrDone()
 }
 
 // ── Clean Tree Footer ─────────────────────────────────────────────────────────
-
-func (m *GitOpsModel) renderCleanFooter() string {
-	helpItems := []styles.HelpItemResult{}
-	if m.hasUnpushed {
-		helpItems = append(helpItems, styles.HelpItem("p", "push"))
-	} else {
-		helpItems = append(helpItems, styles.HelpItem("p", "pull"))
-	}
-	if m.hasStash {
-		helpItems = append(helpItems, styles.HelpItem("s", "stash pop"))
-	} else {
-		helpItems = append(helpItems, styles.HelpItem("s", "stash"))
-	}
-	helpItems = append(helpItems, styles.HelpItem("b", "branch"))
-	helpItems = append(helpItems, styles.HelpItem("l", "log"))
-	return styles.BackHelp(helpItems...)
-}
 
 // ── File List Panel ───────────────────────────────────────────────────────────
 
@@ -1430,11 +1306,6 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// ── Normal branch view ─────────────────────────────────────────
-		wasConfirmArmed := m.confirmAction != "" && time.Since(m.confirmAt) < 3*time.Second
-		m.confirmAction = ""
-		m.confirmKey = ""
-		m.confirmArg = ""
-
 		totalBranches := len(m.branches)
 
 		switch msg.String() {
@@ -1513,7 +1384,7 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "d":
-			// Delete branch (double-press confirm) — silently ignore if not available
+			// Delete branch (direct — which-key handles multi-key via prefix children)
 			name := m.focusedBranchName()
 			if name == "" || name == "main" {
 				return m, nil
@@ -1521,23 +1392,19 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.branchCursor >= 0 && m.branchCursor < len(m.branches) && m.branches[m.branchCursor].Current {
 				return m, nil
 			}
-			if wasConfirmArmed {
-				m.pendingOps["delete-branch"] = "deleting"
-				deleteName := name
-				return m, tea.Batch(
-					func() tea.Msg {
-						err := git.DeleteBranch(m.dir, deleteName)
-						if err != nil {
-							return gitOpsDoneMsg{err: err}
-						}
-						branches, _ := git.Branches(m.dir)
-						return gitOpsBranchMsg{branches: branches}
-					},
-					spinnerCmd(),
-				)
-			}
-			m.armConfirm("delete-branch", "d", name)
-			return m, confirmExpireCmd()
+			m.pendingOps["delete-branch"] = "deleting"
+			deleteName := name
+			return m, tea.Batch(
+				func() tea.Msg {
+					err := git.DeleteBranch(m.dir, deleteName)
+					if err != nil {
+						return gitOpsDoneMsg{err: err}
+					}
+					branches, _ := git.Branches(m.dir)
+					return gitOpsBranchMsg{branches: branches}
+				},
+				spinnerCmd(),
+			)
 		}
 	}
 	return m, nil
@@ -1554,8 +1421,7 @@ func (m *GitOpsModel) viewBranch() string {
 	if len(m.branches) == 0 {
 		b.WriteString(styles.StyleSubtitle.Render("  No branches found"))
 		b.WriteString(m.renderPendingOrDone())
-		b.WriteString("\n\n")
-		b.WriteString(styles.BackHelp())
+		b.WriteString("\n")
 		return b.String()
 	}
 
@@ -1626,11 +1492,6 @@ func (m *GitOpsModel) viewBranch() string {
 
 	b.WriteString(m.renderPendingOrDone())
 
-	if label := m.confirmLabel(); label != "" {
-		b.WriteString("\n")
-		b.WriteString(label)
-	}
-
 	// Branch creating prompt
 	if m.branchCreating {
 		b.WriteString("\n")
@@ -1671,22 +1532,6 @@ func (m *GitOpsModel) viewBranch() string {
 		}
 	}
 
-	helpItems := []styles.HelpItemResult{
-		styles.HelpItem("↑↓", "nav"),
-	}
-	if canMerge {
-		helpItems = append(helpItems, styles.HelpItem("m", "merge"))
-	}
-	if canDelete {
-		helpItems = append(helpItems, styles.HelpItem("d", "delete"))
-	}
-	// Only show checkout if focused branch is not the current one
-	if focusBr != "" && !(m.branchCursor >= 0 && m.branchCursor < len(m.branches) && m.branches[m.branchCursor].Current) {
-		helpItems = append(helpItems, styles.HelpItem("↵", "checkout"))
-	}
-	helpItems = append(helpItems, styles.HelpItem("n", "new"))
-	helpItems = append(helpItems, styles.HelpItem("esc", "back"))
-	b.WriteString(styles.InlineHelp(helpItems...))
 	return b.String()
 }
 
@@ -1746,7 +1591,6 @@ func (m *GitOpsModel) viewLog() string {
 	if len(m.commits) == 0 {
 		b.WriteString(styles.StyleSubtitle.Render("  No commits"))
 		b.WriteString("\n\n")
-		b.WriteString(styles.BackHelp())
 		return b.String()
 	}
 
@@ -1773,11 +1617,6 @@ func (m *GitOpsModel) viewLog() string {
 	}
 
 	b.WriteString(m.renderPendingOrDone())
-	b.WriteString("\n\n")
-	b.WriteString(styles.BackHelp(
-		styles.HelpItem("↑↓", "nav"),
-		styles.HelpItem("↵", "view commit"),
-	))
 	return b.String()
 }
 
@@ -1887,12 +1726,7 @@ func (m *GitOpsModel) viewLogDetail() string {
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, sep, rightPanel)
 
-	help := styles.BackHelp(
-		styles.HelpItem("↑↓", "nav"),
-		styles.HelpItem("←→", "switch"),
-	)
-
-	return "\n" + title + "\n" + body + m.renderPendingOrDone() + "\n" + help
+	return "\n" + title + "\n" + body + m.renderPendingOrDone()
 }
 
 func (m *GitOpsModel) renderLogFiles(panelW int) string {
