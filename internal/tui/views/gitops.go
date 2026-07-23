@@ -31,8 +31,12 @@ const (
 // ── Message types ─────────────────────────────────────────────────────────────
 
 type gitOpsStatusMsg struct {
-	files []git.FileStatus
-	err   error
+	files       []git.FileStatus
+	err         error
+	branches    []git.BranchInfo // non-nil when refresh carries branch data
+	hasStash    *bool         // non-nil when refresh carries stash state
+	lastMsg     *string       // non-nil when refresh carries last commit msg
+	hasUnpushed *bool         // non-nil when refresh carries push state
 }
 
 type gitOpsDiffMsg struct {
@@ -227,6 +231,7 @@ func (m *GitOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 
 		gitItems = append(gitItems, whichkey.CommandKey{Key: "b", Desc: "branch"})
 		gitItems = append(gitItems, whichkey.CommandKey{Key: "l", Desc: "log"})
+		gitItems = append(gitItems, whichkey.CommandKey{Key: "r", Desc: "refresh"})
 
 		var changesItems []whichkey.CommandKey
 		if f := m.currentFile(); f != nil && !f.Staged && f.StatusCode != '?' {
@@ -363,9 +368,24 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.files = msg.files
 			m.buildFilePanels()
-			m.hasUnpushed = git.HasUnpushedCommits(m.dir)
-			stashes, _ := git.StashList(m.dir)
-			m.hasStash = len(stashes) > 0
+			// Refresh-carried data takes priority; otherwise re-fetch
+			if msg.branches != nil {
+				m.branches = msg.branches
+			}
+			if msg.hasStash != nil {
+				m.hasStash = *msg.hasStash
+			} else {
+				stashes, _ := git.StashList(m.dir)
+				m.hasStash = len(stashes) > 0
+			}
+			if msg.lastMsg != nil {
+				m.lastCommitMsg = *msg.lastMsg
+			}
+			if msg.hasUnpushed != nil {
+				m.hasUnpushed = *msg.hasUnpushed
+			} else {
+				m.hasUnpushed = git.HasUnpushedCommits(m.dir)
+			}
 			m.doneOp = ""
 			m.doneOpIsErr = false
 			m.doneOpAt = time.Time{}
@@ -381,6 +401,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.pendingOps, "discard")
 		delete(m.pendingOps, "amend")
 		delete(m.pendingOps, "delete-branch")
+		delete(m.pendingOps, "refresh")
 		// Auto-fetch diff for the currently selected file
 		return m, m.cmdFetchDiff()
 
@@ -954,6 +975,35 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 				)
 			}
 			return m, nil
+
+		// r: Refresh — re-check status, branches, stash, and last commit
+		case msg.String() == "r":
+			if m.screen != gitScreenMain {
+				break
+			}
+			m.startPendingOpImmediate("refresh", "refreshing")
+			return m, tea.Batch(
+				func() tea.Msg {
+					files, _ := git.StatusPorcelain(m.dir)
+					branches, _ := git.Branches(m.dir)
+					stashes, _ := git.StashList(m.dir)
+					hasStash := len(stashes) > 0
+					commits, _ := git.Log(m.dir, 1)
+					lastMsg := ""
+					if len(commits) > 0 {
+						lastMsg = commits[0].Message
+					}
+					unpushed := git.HasUnpushedCommits(m.dir)
+					return gitOpsStatusMsg{
+						files:       files,
+						branches:    branches,
+						hasStash:    &hasStash,
+						lastMsg:     &lastMsg,
+						hasUnpushed: &unpushed,
+					}
+				},
+				spinnerCmd(),
+			)
 
 		// Arrow keys: route to focused panel
 		case msg.String() == "up":

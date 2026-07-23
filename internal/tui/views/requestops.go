@@ -263,6 +263,20 @@ func (m *RequestOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 					expandDesc = "collapse"
 				}
 				items = append(items, whichkey.CommandKey{Key: "enter", Desc: expandDesc})
+				if len(m.profile.RequestFolders) > 0 {
+					anyCollapsed := false
+					for i := range m.profile.RequestFolders {
+						if !m.expandedURLs[i] {
+							anyCollapsed = true
+							break
+						}
+					}
+					if anyCollapsed {
+						items = append(items, whichkey.CommandKey{Key: " ", Desc: "expand all"})
+					} else {
+						items = append(items, whichkey.CommandKey{Key: " ", Desc: "collapse all"})
+					}
+				}
 				items = append(items, whichkey.CommandKey{Key: "a", Desc: "add request"})
 				items = append(items, whichkey.CommandKey{Key: "e", Desc: "edit"})
 				items = append(items, whichkey.CommandKey{Key: "d", Desc: "delete"})
@@ -271,20 +285,6 @@ func (m *RequestOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 			}
 		}
 
-		if len(m.profile.RequestFolders) > 0 {
-			anyCollapsed := false
-			for i := range m.profile.RequestFolders {
-				if !m.expandedURLs[i] {
-					anyCollapsed = true
-					break
-				}
-			}
-			if anyCollapsed {
-				items = append(items, whichkey.CommandKey{Key: "s", Desc: "expand all"})
-			} else {
-				items = append(items, whichkey.CommandKey{Key: "s", Desc: "collapse all"})
-			}
-		}
 		items = append(items, whichkey.CommandKey{Key: "n", Desc: "new env"})
 		return []whichkey.CommandGroup{{Items: items}}
 	}
@@ -732,7 +732,7 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		// Expand all / Collapse all
-		case msg.String() == "s":
+		case msg.String() == " ":
 			m.deleteArmed = false
 			if len(m.profile.RequestFolders) == 0 {
 				break
