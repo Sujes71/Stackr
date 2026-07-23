@@ -263,25 +263,27 @@ func (m *RequestOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 					expandDesc = "collapse"
 				}
 				items = append(items, whichkey.CommandKey{Key: "enter", Desc: expandDesc})
-				if len(m.profile.RequestFolders) > 0 {
-					anyCollapsed := false
-					for i := range m.profile.RequestFolders {
-						if !m.expandedURLs[i] {
-							anyCollapsed = true
-							break
-						}
-					}
-					if anyCollapsed {
-						items = append(items, whichkey.CommandKey{Key: " ", Desc: "expand all"})
-					} else {
-						items = append(items, whichkey.CommandKey{Key: " ", Desc: "collapse all"})
-					}
-				}
 				items = append(items, whichkey.CommandKey{Key: "a", Desc: "add request"})
 				items = append(items, whichkey.CommandKey{Key: "e", Desc: "edit"})
 				items = append(items, whichkey.CommandKey{Key: "d", Desc: "delete"})
 			case reqItemAddURL:
 				items = append(items, whichkey.CommandKey{Key: "enter", Desc: "create folder"})
+			}
+		}
+
+		// Expand/collapse all — always available when folders exist
+		if len(m.profile.RequestFolders) > 0 {
+			anyCollapsed := false
+			for i := range m.profile.RequestFolders {
+				if !m.expandedURLs[i] {
+					anyCollapsed = true
+					break
+				}
+			}
+			if anyCollapsed {
+				items = append(items, whichkey.CommandKey{Key: " ", Desc: "expand all"})
+			} else {
+				items = append(items, whichkey.CommandKey{Key: " ", Desc: "collapse all"})
 			}
 		}
 
