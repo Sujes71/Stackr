@@ -240,7 +240,7 @@ func (m *ProfileViewModel) whichKeyCommandsPF() []whichkey.CommandGroup {
 		stackItems = append(stackItems, whichkey.CommandKey{Key: "n", Desc: "new env"})
 	}
 	if len(m.profile.Environments) > 0 && m.currentEnv() != nil && m.currentEnv().Name != "local" {
-		stackItems = append(stackItems, whichkey.CommandKey{Key: "D", Desc: "delete env"})
+		stackItems = append(stackItems, whichkey.CommandKey{Key: "r", Desc: "remove env"})
 	}
 	stackItems = append(stackItems, whichkey.CommandKey{Key: "u", Desc: "request ops"})
 	stackItems = append(stackItems, whichkey.CommandKey{Key: "g", Desc: "git ops"})
@@ -1647,13 +1647,17 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, profileKeys.resetVol):
+			if m.isPortForwardEnv() {
+				// r in PF mode = delete env
+				return m.handleDeleteEnv(msg)
+			}
 			m.deleteArmed = false
 			m.deleteEnvArmed = false
 			env := m.currentEnv()
 			if env == nil {
 				break
 			}
-			if m.isPortForwardEnv() || len(m.currentEnvServices()) == 0 {
+			if len(m.currentEnvServices()) == 0 {
 				break
 			}
 			// First r: arm, wait for v to reset the focused service's volume
@@ -1750,61 +1754,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, profileKeys.envDelete):
-			if len(m.profile.Environments) == 0 {
-				break
-			}
-			envName := m.profile.Environments[m.activeEnv].Name
-			// "local" is the default env and cannot be deleted
-			if envName == "local" {
-				break
-			}
-			if !m.deleteEnvArmed {
-				m.armGeneration++
-				m.deleteEnvArmed = true
-				m.deleteArmed = false
-				m.resetArmed = false
-				return m, armDisarmAfter(m.armGeneration)
-			}
-			// Second D: delete current environment
-			m.deleteEnvArmed = false
-			envName = m.profile.Environments[m.activeEnv].Name
-
-			// Stop running forwards for this env
-			m.stopEnvForwardsNow(envName)
-			delete(m.forwardHandles, envName)
-			delete(m.envState, envName)
-
-			envIdx := m.activeEnv
-			// Stop containers for this env (fire and forget)
-			_ = docker.Down(m.profile.Name, envName)
-			// Remove env directory
-			_ = os.RemoveAll(filepath.Join(config.ProfileDir(m.profile.Name), envName))
-			// Remove env from profile
-			m.profile.Environments = append(
-				m.profile.Environments[:envIdx],
-				m.profile.Environments[envIdx+1:]...,
-			)
-			if err := m.cfg.UpdateProfile(*m.profile); err != nil {
-				return m, nil
-			}
-			// Adjust activeEnv if needed
-			m.ensureValidSelection()
-			m.restoreCurrentEnvSelection()
-			m.persistActiveEnv()
-			// Rebuild forward handles for the new active env so port-forward
-			// envs show their forwards immediately without requiring a
-			// left/right navigation to trigger buildForwardHandles.
-			if m.isPortForwardEnv() {
-				m.buildForwardHandles()
-				m.restoreCurrentEnvSelection()
-				m.rememberCurrentEnvSelection()
-				return m, tea.Batch(
-					m.loadStatus(),
-					portforward.ForwardMonitorCmd(),
-				)
-			}
-			m.rememberCurrentEnvSelection()
-			return m, m.loadStatus()
+			return m.handleDeleteEnv(msg)
 
 		case key.Matches(msg, profileKeys.dbOps):
 			svcs := m.currentEnvServices()
@@ -3203,6 +3153,66 @@ func (m *ProfileViewModel) handleForwardToggle() (tea.Model, tea.Cmd) {
 		func() tea.Msg { return m.refreshStatusForEnv(envName) },
 		func() tea.Msg { return SpinnerTickMsg{} },
 	)
+}
+
+// ── Env Delete ────────────────────────────────────────────────────────────
+
+func (m *ProfileViewModel) handleDeleteEnv(_ tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if len(m.profile.Environments) == 0 {
+		return m, nil
+	}
+	envName := m.profile.Environments[m.activeEnv].Name
+	// "local" is the default env and cannot be deleted
+	if envName == "local" {
+		return m, nil
+	}
+	if !m.deleteEnvArmed {
+		m.armGeneration++
+		m.deleteEnvArmed = true
+		m.deleteArmed = false
+		m.resetArmed = false
+		return m, armDisarmAfter(m.armGeneration)
+	}
+	// Second press: delete current environment
+	m.deleteEnvArmed = false
+	envName = m.profile.Environments[m.activeEnv].Name
+
+	// Stop running forwards for this env
+	m.stopEnvForwardsNow(envName)
+	delete(m.forwardHandles, envName)
+	delete(m.envState, envName)
+
+	envIdx := m.activeEnv
+	// Stop containers for this env (fire and forget)
+	_ = docker.Down(m.profile.Name, envName)
+	// Remove env directory
+	_ = os.RemoveAll(filepath.Join(config.ProfileDir(m.profile.Name), envName))
+	// Remove env from profile
+	m.profile.Environments = append(
+		m.profile.Environments[:envIdx],
+		m.profile.Environments[envIdx+1:]...,
+	)
+	if err := m.cfg.UpdateProfile(*m.profile); err != nil {
+		return m, nil
+	}
+	// Adjust activeEnv if needed
+	m.ensureValidSelection()
+	m.restoreCurrentEnvSelection()
+	m.persistActiveEnv()
+	// Rebuild forward handles for the new active env so port-forward
+	// envs show their forwards immediately without requiring a
+	// left/right navigation to trigger buildForwardHandles.
+	if m.isPortForwardEnv() {
+		m.buildForwardHandles()
+		m.restoreCurrentEnvSelection()
+		m.rememberCurrentEnvSelection()
+		return m, tea.Batch(
+			m.loadStatus(),
+			portforward.ForwardMonitorCmd(),
+		)
+	}
+	m.rememberCurrentEnvSelection()
+	return m, m.loadStatus()
 }
 
 // ── Forward Delete ─────────────────────────────────────────────────────────
