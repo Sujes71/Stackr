@@ -84,6 +84,9 @@ func opsIsContainerRunning(profileName, envName, container string) bool {
 }
 
 // opsLaunchDockerCmd tries to start the Docker daemon via Colima or Docker Desktop.
+// It polls DaemonAvailable every second for up to 30s instead of sleeping a fixed
+// amount, because Docker/Colima can take variable time between the socket
+// becoming reachable and the container runtime being ready.
 func opsLaunchDockerCmd() tea.Cmd {
 	return func() tea.Msg {
 		if _, err := exec.LookPath("colima"); err == nil {
@@ -91,8 +94,14 @@ func opsLaunchDockerCmd() tea.Cmd {
 		} else {
 			_ = exec.Command("open", "-a", "Docker").Run()
 		}
-		time.Sleep(2 * time.Second)
-		return daemonStartedMsg{available: docker.DaemonAvailable()}
+		// Poll until daemon is reachable (up to 30s) instead of a fixed sleep.
+		for i := 0; i < 30; i++ {
+			time.Sleep(1 * time.Second)
+			if docker.DaemonAvailable() {
+				return daemonStartedMsg{available: true}
+			}
+		}
+		return daemonStartedMsg{available: false}
 	}
 }
 

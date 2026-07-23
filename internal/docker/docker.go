@@ -275,6 +275,21 @@ func RmService(profileName, envName, serviceName string) error {
 	return runDocker(composeArgs(profileName, envName, "rm", "-fs", serviceName)...)
 }
 
+// RemoveServiceVolumes removes the named Docker volumes associated with a
+// service. Volume names follow the compose naming convention:
+//
+//	{profile}_{env}_{serviceName}_data
+//
+// where all characters not in [a-zA-Z0-9_.-] are replaced with `_`.
+func RemoveServiceVolumes(profileName, envName, serviceName string) {
+	re := regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
+	pSan := re.ReplaceAllString(profileName, "_")
+	eSan := re.ReplaceAllString(envName, "_")
+	sSan := re.ReplaceAllString(serviceName, "_")
+	volName := fmt.Sprintf("%s_%s_%s_data", pSan, eSan, sSan)
+	_ = runDocker("volume", "rm", "-f", volName)
+}
+
 // ResetServiceVolumes stops the service, removes its container + anonymous volumes,
 // then starts it again. Named volumes are not affected.
 func ResetServiceVolumes(profileName, envName, serviceName string) error {

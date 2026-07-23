@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -80,15 +81,16 @@ func GenerateCompose(profile Profile, envName string) (string, error) {
 		if len(svc.Volumes) > 0 {
 			b.WriteString("    volumes:\n")
 			for _, v := range svc.Volumes {
+				target := EffectiveVolumeTarget(svc.Image, svc.Tag, v.Target)
 				if v.Named {
 					volName := v.Source
 					if volName == "" {
 						volName = fmt.Sprintf("%s_%s_%s_data", profSan, envSan, strings.ReplaceAll(compName, "-", "_"))
 					}
-					b.WriteString(fmt.Sprintf("      - %s:%s\n", volName, v.Target))
+					b.WriteString(fmt.Sprintf("      - %s:%s\n", volName, target))
 					namedVolumes[volName] = true
 				} else {
-					b.WriteString(fmt.Sprintf("      - %s:%s\n", v.Source, v.Target))
+					b.WriteString(fmt.Sprintf("      - %s:%s\n", v.Source, target))
 				}
 			}
 		}
@@ -162,6 +164,37 @@ func GenerateCompose(profile Profile, envName string) (string, error) {
 		return "", fmt.Errorf("rename compose: %w", err)
 	}
 	return outPath, nil
+}
+
+// EffectiveVolumeTarget returns the mount target to use inside the container.
+// PostgreSQL 18+ changed its data directory layout:
+//   - 18+: expects a single mount at /var/lib/postgresql (creates its own
+//     versioned subdirectories like /var/lib/postgresql/18/main/)
+//   - <18: expects data directly in /var/lib/postgresql/data
+func EffectiveVolumeTarget(image, tag, configuredTarget string) string {
+	image = strings.ToLower(image)
+	if image != "postgres" && !strings.HasPrefix(image, "postgres:") {
+		return configuredTarget
+	}
+	major := parseMajorVersion(tag)
+	if major >= 18 {
+		return "/var/lib/postgresql"
+	}
+	return configuredTarget
+}
+
+// parseMajorVersion extracts the major version number from a Docker tag.
+// "16" → 16, "latest" → math.MaxInt (assumed newest), "16-alpine" → 16.
+func parseMajorVersion(tag string) int {
+	if tag == "" || tag == "latest" {
+		return 9999
+	}
+	s := tag
+	if i := strings.IndexAny(s, ".-"); i != -1 {
+		s = s[:i]
+	}
+	n, _ := strconv.Atoi(s)
+	return n
 }
 
 func findEnv(profile Profile, envName string) *Environment {

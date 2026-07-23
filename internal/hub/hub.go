@@ -112,7 +112,7 @@ type CatalogEntry struct {
 	DefaultTag          string
 	DefaultPorts        []string
 	DefaultEnv          map[string]string
-	DefaultVolumeTarget string // e.g. /var/lib/postgresql/data
+	DefaultVolumeTarget string // mount target inside the container
 }
 
 // Catalog returns the built-in curated list of common dev services.
@@ -122,7 +122,7 @@ var Catalog = []CatalogEntry{
 		Name:         "PostgreSQL",
 		Image:        "postgres",
 		Description:  "The world's most advanced open source relational database",
-		DefaultTag:   "15",
+		DefaultTag:   "16",
 		DefaultPorts: []string{"5432:5432"},
 		DefaultEnv: map[string]string{
 			"POSTGRES_DB":       "mydb",
