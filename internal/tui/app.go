@@ -435,12 +435,17 @@ func (a *App) View() string {
 	out.WriteString("\n")
 
 	if whichKeyPanel != "" {
-		// Normalize body to end with exactly one newline, then add which-key.
-		// This ensures a consistent visual gap between content and which-key
-		// across all views, regardless of whether the body ends with \n or not.
+		// Normalize body to end with no trailing newlines, then add a gap.
+		// Git Ops dirty tree already has internal viewport padding at the bottom
+		// (empty lines from the diff panel), so it only needs \n. All other
+		// views and Git Ops clean/error states need \n\n for a consistent gap.
 		body = strings.TrimRight(body, "\n")
 		out.WriteString(body)
-		out.WriteString("\n\n")
+		if a.screen == ScreenGitOps && a.gitOps != nil && a.gitOps.HasViewportPadding() {
+			out.WriteString("\n")
+		} else {
+			out.WriteString("\n\n")
+		}
 		out.WriteString(whichKeyPanel)
 	} else {
 		out.WriteString(body)
