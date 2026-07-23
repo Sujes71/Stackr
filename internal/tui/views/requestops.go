@@ -248,11 +248,33 @@ func (m *RequestOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 	case reqScreenList:
 		var items []whichkey.CommandKey
 
+		// Expand/collapse all — second slot always, when folders exist
+		var expandAllItem *whichkey.CommandKey
+		if len(m.profile.RequestFolders) > 0 {
+			anyCollapsed := false
+			for i := range m.profile.RequestFolders {
+				if !m.expandedURLs[i] {
+					anyCollapsed = true
+					break
+				}
+			}
+			if anyCollapsed {
+				ea := whichkey.CommandKey{Key: " ", Desc: "expand all"}
+				expandAllItem = &ea
+			} else {
+				ea := whichkey.CommandKey{Key: " ", Desc: "collapse all"}
+				expandAllItem = &ea
+			}
+		}
+
 		if m.listCursor >= 0 && m.listCursor < len(m.listItems) {
 			item := m.listItems[m.listCursor]
 			switch item.kind {
 			case reqItemRequest:
 				items = append(items, whichkey.CommandKey{Key: "enter", Desc: "run"})
+				if expandAllItem != nil {
+					items = append(items, *expandAllItem)
+				}
 				items = append(items, whichkey.CommandKey{Key: "a", Desc: "add request"})
 				items = append(items, whichkey.CommandKey{Key: "c", Desc: "copy cURL"})
 				items = append(items, whichkey.CommandKey{Key: "e", Desc: "edit"})
@@ -263,28 +285,20 @@ func (m *RequestOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 					expandDesc = "collapse"
 				}
 				items = append(items, whichkey.CommandKey{Key: "enter", Desc: expandDesc})
+				if expandAllItem != nil {
+					items = append(items, *expandAllItem)
+				}
 				items = append(items, whichkey.CommandKey{Key: "a", Desc: "add request"})
 				items = append(items, whichkey.CommandKey{Key: "e", Desc: "edit"})
 				items = append(items, whichkey.CommandKey{Key: "d", Desc: "delete"})
 			case reqItemAddURL:
 				items = append(items, whichkey.CommandKey{Key: "enter", Desc: "create folder"})
-			}
-		}
-
-		// Expand/collapse all — always available when folders exist
-		if len(m.profile.RequestFolders) > 0 {
-			anyCollapsed := false
-			for i := range m.profile.RequestFolders {
-				if !m.expandedURLs[i] {
-					anyCollapsed = true
-					break
+				if expandAllItem != nil {
+					items = append(items, *expandAllItem)
 				}
 			}
-			if anyCollapsed {
-				items = append(items, whichkey.CommandKey{Key: " ", Desc: "expand all"})
-			} else {
-				items = append(items, whichkey.CommandKey{Key: " ", Desc: "collapse all"})
-			}
+		} else if expandAllItem != nil {
+			items = append(items, *expandAllItem)
 		}
 
 		items = append(items, whichkey.CommandKey{Key: "n", Desc: "new env"})
