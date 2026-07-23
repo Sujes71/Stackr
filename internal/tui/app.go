@@ -225,7 +225,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
 			a.screen = ScreenDBOps
 			if a.dbOps == nil || a.dbOps.ServiceKey() != nav.ServiceKey() {
-				a.dbOps = views.NewDBOps(a.cfg, p, nav.EnvName, nav.ServiceName)
+				a.dbOps = views.NewDBOps(a.cfg, p, nav.EnvName, nav.ServiceName, a.errorRegistry)
 				a.dbOps.SetSize(a.width, a.height)
 				return a, a.dbOps.Init()
 			}
@@ -239,7 +239,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
 			a.screen = ScreenQueueOps
 			if a.queueOps == nil || a.queueOps.ServiceKey() != nav.ServiceKey() {
-				a.queueOps = views.NewQueueOps(a.cfg, p, nav.EnvName, nav.ServiceName)
+				a.queueOps = views.NewQueueOps(a.cfg, p, nav.EnvName, nav.ServiceName, a.errorRegistry)
 				a.queueOps.SetSize(a.width, a.height)
 				return a, a.queueOps.Init()
 			}
@@ -253,7 +253,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
 			a.screen = ScreenMockOps
 			if a.mockOps == nil || a.mockOps.ServiceKey() != nav.ServiceKey() {
-				a.mockOps = views.NewMockOps(a.cfg, p, nav.EnvName, nav.ServiceName)
+				a.mockOps = views.NewMockOps(a.cfg, p, nav.EnvName, nav.ServiceName, a.errorRegistry)
 				a.mockOps.SetSize(a.width, a.height)
 				return a, a.mockOps.Init()
 			}
@@ -276,7 +276,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 				}
 			}
 			if a.requestOps == nil || a.requestOps.EnvName() != envName {
-				a.requestOps = views.NewRequestOps(a.cfg, p, envName)
+				a.requestOps = views.NewRequestOps(a.cfg, p, envName, a.errorRegistry)
 				a.requestOps.SetSize(a.width, a.height)
 				return a, a.requestOps.Init()
 			}
@@ -294,7 +294,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 	case views.NavGitOps:
 		if p, ok := a.cfg.GetProfile(nav.ProfileName); ok {
 			a.screen = ScreenGitOps
-			a.gitOps = views.NewGitOps(a.cfg, p, a.cwd)
+			a.gitOps = views.NewGitOps(a.cfg, p, a.cwd, a.errorRegistry)
 			a.gitOps.SetSize(a.width, a.height)
 			return a, a.gitOps.Init()
 		}

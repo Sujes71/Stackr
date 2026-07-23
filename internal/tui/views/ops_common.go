@@ -48,6 +48,7 @@ type actionItem struct {
 	isAddAction       bool
 	customIdx         int  // index into CustomActions (valid when isCustom)
 	requiresContainer bool // true when the action needs the local container running
+	requiresDaemon    bool // true when the action only needs the Docker daemon (e.g. export)
 }
 
 // serviceStartedMsg is sent when docker.UpService completes for the prompt flow.

@@ -95,6 +95,8 @@ type GitOpsModel struct {
 	cfg      *config.Config
 	profile  *config.Profile
 	dir      string // launching directory for git ops
+
+	errorRegistry *ErrorRegistry
 	isRepo   bool
 	gitRoot  string
 	gitFound bool
@@ -164,7 +166,7 @@ type GitOpsModel struct {
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
-func NewGitOps(cfg *config.Config, p *config.Profile, cwd string) *GitOpsModel {
+func NewGitOps(cfg *config.Config, p *config.Profile, cwd string, errorRegistry *ErrorRegistry) *GitOpsModel {
 	ci := textinput.New()
 	ci.Placeholder = "commit message"
 	ci.CharLimit = 200
@@ -179,6 +181,7 @@ func NewGitOps(cfg *config.Config, p *config.Profile, cwd string) *GitOpsModel {
 		cfg:            cfg,
 		profile:        p,
 		dir:            cwd,
+		errorRegistry:  errorRegistry,
 		pendingOps:     make(map[string]string),
 		pendingStart:   time.Now(), // initialize so first spinner delay works
 		commitInput:    ci,
@@ -338,6 +341,9 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case gitOpsStatusMsg:
 		if msg.err != nil {
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
+			}
 			m.doneOp = msg.err.Error()
 			m.doneOpAt = time.Now()
 		} else {
@@ -377,6 +383,10 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case gitOpsDoneMsg:
 		if msg.err != nil {
+			// Capture error in registry
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
+			}
 			m.doneOp = msg.err.Error()
 			m.doneOpIsErr = true
 			m.doneOpAt = time.Now()
@@ -392,6 +402,10 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case gitOpsBranchMsg:
 		if msg.err != nil {
+			// Capture error in registry
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
+			}
 			m.doneOp = msg.err.Error()
 			m.doneOpIsErr = true
 			m.doneOpAt = time.Now()
@@ -410,6 +424,10 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case gitOpsLogMsg:
 		if msg.err != nil {
+			// Capture error in registry
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
+			}
 			m.doneOp = msg.err.Error()
 			m.doneOpIsErr = true
 			m.doneOpAt = time.Now()
@@ -428,6 +446,9 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case gitOpsCommitFilesMsg:
 		if msg.err != nil {
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
+			}
 			m.doneOp = msg.err.Error()
 			m.doneOpIsErr = true
 			m.doneOpAt = time.Now()
@@ -464,6 +485,9 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case gitOpsCreateBranchMsg:
 		if msg.err != nil {
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
+			}
 			m.doneOp = msg.err.Error()
 			m.doneOpIsErr = true
 			m.doneOpAt = time.Now()
@@ -478,6 +502,9 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case gitOpsMergeMsg:
 		if msg.err != nil {
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
+			}
 			m.doneOp = msg.err.Error()
 			m.doneOpIsErr = true
 			m.doneOpAt = time.Now()
@@ -491,6 +518,15 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg {
 			files, _ := git.StatusPorcelain(m.dir)
 			return gitOpsStatusMsg{files: files}
+		}
+	}
+
+	// ── E key: open error list ──
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		if keyMsg.String() == "E" && m.errorRegistry != nil && m.errorRegistry.Len() > 0 {
+			return m, func() tea.Msg {
+				return NavigateTo{Screen: NavErrors, ProfileName: m.profile.Name}
+			}
 		}
 	}
 

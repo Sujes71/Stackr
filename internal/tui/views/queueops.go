@@ -54,6 +54,8 @@ type QueueOpsModel struct {
 	serviceName string
 	serviceIdx  int
 
+	errorRegistry *ErrorRegistry
+
 	// Internal screen
 	screen queueOpsScreen
 
@@ -129,12 +131,13 @@ type QueueOpsModel struct {
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
-func NewQueueOps(cfg *config.Config, p *config.Profile, envName, serviceName string) *QueueOpsModel {
+func NewQueueOps(cfg *config.Config, p *config.Profile, envName, serviceName string, errorRegistry *ErrorRegistry) *QueueOpsModel {
 	m := &QueueOpsModel{
 		cfg:             cfg,
 		profile:         p,
 		envName:         envName,
 		serviceName:     serviceName,
+		errorRegistry:   errorRegistry,
 		screen:          queueScreenSyncEnvList,
 		pendingOps:      make(map[string]string),
 		customNameInput: textinput.New(),
@@ -302,6 +305,15 @@ func (m *QueueOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	}
+
+	// ── E key: open error list ──
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		if keyMsg.String() == "E" && m.errorRegistry != nil && m.errorRegistry.Len() > 0 {
+			return m, func() tea.Msg {
+				return NavigateTo{Screen: NavErrors, ProfileName: m.profile.Name, EnvName: m.envName, ServiceName: m.serviceName}
+			}
+		}
 	}
 
 	switch m.screen {
@@ -996,6 +1008,9 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				errMsg = m.cleanActiveMQError(errMsg)
 			}
 			m.lastResult = formatErrorMsg(errMsg)
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("queue_ops", msg.err.Error(), completedLabel)
+			}
 			return m, nil
 		}
 

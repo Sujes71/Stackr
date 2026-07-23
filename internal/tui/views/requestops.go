@@ -83,6 +83,8 @@ type RequestOpsModel struct {
 	profile *config.Profile
 	envName string
 
+	errorRegistry *ErrorRegistry
+
 	screen requestOpsScreen
 
 	// Environment switching
@@ -166,11 +168,12 @@ type RequestOpsModel struct {
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
-func NewRequestOps(cfg *config.Config, p *config.Profile, envName string) *RequestOpsModel {
+func NewRequestOps(cfg *config.Config, p *config.Profile, envName string, errorRegistry *ErrorRegistry) *RequestOpsModel {
 	m := &RequestOpsModel{
 		cfg:            cfg,
 		profile:        p,
 		envName:        envName,
+		errorRegistry:  errorRegistry,
 		pendingOps:     make(map[string]string),
 		expandedURLs:   make(map[int]bool),
 		parentURLIdx:   -1,
@@ -551,6 +554,10 @@ func (m *RequestOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingOps = make(map[string]string)
 
 		if msg.err != nil {
+			// Capture error in registry
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("request_ops", msg.err.Error(), completedLabel)
+			}
 			m.resultTitle = completedLabel
 			m.resultRaw = msg.err.Error()
 			m.copied = false
@@ -610,6 +617,15 @@ func (m *RequestOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewingResult = false
 			m.resultViewport.SetContent("")
 			return m, nil
+		}
+	}
+
+	// ── E key: open error list ──
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		if keyMsg.String() == "E" && m.errorRegistry != nil && m.errorRegistry.Len() > 0 {
+			return m, func() tea.Msg {
+				return NavigateTo{Screen: NavErrors, ProfileName: m.profile.Name, EnvName: m.envName}
+			}
 		}
 	}
 

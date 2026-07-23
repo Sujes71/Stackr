@@ -46,6 +46,8 @@ type MockOpsModel struct {
 	serviceName string
 	serviceIdx  int
 
+	errorRegistry *ErrorRegistry
+
 	// Actions state
 	actions      []actionItem
 	actionCursor int
@@ -108,12 +110,13 @@ type MockOpsModel struct {
 
 // ── Constructor ────────────────────────────────────────────────────────────────
 
-func NewMockOps(cfg *config.Config, p *config.Profile, envName, serviceName string) *MockOpsModel {
+func NewMockOps(cfg *config.Config, p *config.Profile, envName, serviceName string, errorRegistry *ErrorRegistry) *MockOpsModel {
 	m := &MockOpsModel{
 		cfg:            cfg,
 		profile:        p,
 		envName:        envName,
 		serviceName:    serviceName,
+		errorRegistry:  errorRegistry,
 		pendingOps:     make(map[string]string),
 		paramInput:     textinput.New(),
 		paramTextarea:  textarea.New(),
@@ -708,6 +711,10 @@ func (m *MockOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingOps = make(map[string]string)
 
 		if msg.err != nil {
+			// Capture error in registry
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("mock_ops", msg.err.Error(), completedLabel)
+			}
 			// Show errors in viewport instead of inline — MockServer error
 			// diffs are huge and break the action list layout.
 			m.resultOutput = msg.err.Error()
@@ -842,6 +849,15 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Confirm before destructive action
 	if m.confirmAction {
 		return m.updateConfirm(msg)
+	}
+
+	// ── E key: open error list ──
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		if keyMsg.String() == "E" && m.errorRegistry != nil && m.errorRegistry.Len() > 0 {
+			return m, func() tea.Msg {
+				return NavigateTo{Screen: NavErrors, ProfileName: m.profile.Name, EnvName: m.envName, ServiceName: m.serviceName}
+			}
+		}
 	}
 
 	switch msg := msg.(type) {

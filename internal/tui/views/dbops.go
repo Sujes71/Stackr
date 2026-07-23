@@ -49,11 +49,12 @@ type dbOpsDoneMsg struct {
 //   - SyncEnv Actions — export/import actions for the selected sync env
 //   - Wizard — delegates to AddSyncEnvModel for add/edit
 type DBOpsModel struct {
-	cfg         *config.Config
-	profile     *config.Profile
-	envName     string
-	serviceName string
-	serviceIdx  int
+	cfg            *config.Config
+	profile        *config.Profile
+	envName        string
+	serviceName    string
+	serviceIdx     int
+	errorRegistry  *ErrorRegistry
 
 	// Internal screen
 	screen dbOpsScreen
@@ -123,14 +124,15 @@ type DBOpsModel struct {
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
-func NewDBOps(cfg *config.Config, p *config.Profile, envName, serviceName string) *DBOpsModel {
+func NewDBOps(cfg *config.Config, p *config.Profile, envName, serviceName string, errorRegistry *ErrorRegistry) *DBOpsModel {
 	m := &DBOpsModel{
-		cfg:             cfg,
-		profile:         p,
-		envName:         envName,
-		serviceName:     serviceName,
-		screen:          dbScreenSyncEnvList,
-		pendingOps:      make(map[string]string),
+		cfg:            cfg,
+		profile:        p,
+		envName:        envName,
+		serviceName:    serviceName,
+		errorRegistry:  errorRegistry,
+		screen:         dbScreenSyncEnvList,
+		pendingOps:     make(map[string]string),
 		customNameInput: textinput.New(),
 		customCmdInput:  textinput.New(),
 		paramInput:      textinput.New(),
@@ -298,6 +300,15 @@ func (m *DBOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	}
+
+	// ── E key: open error list ──
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		if keyMsg.String() == "E" && m.errorRegistry != nil && m.errorRegistry.Len() > 0 {
+			return m, func() tea.Msg {
+				return NavigateTo{Screen: NavErrors, ProfileName: m.profile.Name, EnvName: m.envName, ServiceName: m.serviceName}
+			}
+		}
 	}
 
 	switch m.screen {
@@ -741,6 +752,9 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if msg.err != nil {
 			m.lastResult = formatErrorMsg(msg.err.Error())
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("db_ops", msg.err.Error(), completedLabel)
+			}
 			return m, nil
 		}
 
@@ -945,7 +959,13 @@ func (m *DBOpsModel) updateCoreConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, opsKeyEnter):
 			m.confirmAction = false
 			act := m.actions[m.actionCursor]
-			if act.requiresContainer {
+			if act.requiresDaemon {
+				if !docker.DaemonAvailable() {
+					m.promptStartDaemon = true
+					m.pendingStartLabel = act.label
+					return m, nil
+				}
+			} else if act.requiresContainer {
 				if !m.ensureContainerRunning(act.label) {
 					return m, nil
 				}
@@ -1475,8 +1495,8 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 		hasSchema := docker.HasDumpFile(dDir, "schema-*.sql")
 		hasData := docker.HasDumpFile(dDir, "data-*.sql")
 		actions = []actionItem{
-			{label: "Export schema", group: "Export", enabled: true, execute: m.exportSchema(se)},
-			{label: "Export data", group: "Export", enabled: true, execute: m.exportData(se)},
+			{label: "Export schema", group: "Export", enabled: true, requiresDaemon: true, execute: m.exportSchema(se)},
+			{label: "Export data", group: "Export", enabled: true, requiresDaemon: true, execute: m.exportData(se)},
 			{label: "Import schema", group: "Import", enabled: hasSchema, disabledReason: disabledIf(!hasSchema, "no schema dump"), requiresContainer: true, execute: m.importSchema(se)},
 			{label: "Import data", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no data dump"), requiresContainer: true, execute: m.importData(se)},
 			{label: "Truncate tables", group: "Functions", enabled: true, requiresContainer: true, execute: truncate},
@@ -1485,7 +1505,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 	case "mongo":
 		hasData := m.hasMongoDump(dDir)
 		actions = []actionItem{
-			{label: "Export", group: "Export", enabled: true, execute: m.exportData(se)},
+			{label: "Export", group: "Export", enabled: true, requiresDaemon: true, execute: m.exportData(se)},
 			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump"), requiresContainer: true, execute: m.importData(se)},
 			{label: "Truncate tables", group: "Functions", enabled: true, requiresContainer: true, execute: truncate},
 		}
@@ -1493,7 +1513,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 	case "mysql":
 		hasData := docker.HasDumpFile(dDir, "data-*.sql")
 		actions = []actionItem{
-			{label: "Export", group: "Export", enabled: true, execute: m.exportData(se)},
+			{label: "Export", group: "Export", enabled: true, requiresDaemon: true, execute: m.exportData(se)},
 			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no dump file"), requiresContainer: true, execute: m.importData(se)},
 			{label: "Truncate tables", group: "Functions", enabled: true, requiresContainer: true, execute: truncate},
 		}
@@ -1501,7 +1521,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 	case "mssql":
 		hasData := docker.HasDumpFile(dDir, "data-*.bacpac")
 		actions = []actionItem{
-			{label: "Export", group: "Export", enabled: true, execute: m.exportData(se)},
+			{label: "Export", group: "Export", enabled: true, requiresDaemon: true, execute: m.exportData(se)},
 			{label: "Import", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no .bacpac file"), requiresContainer: true, execute: m.importData(se)},
 			{label: "Truncate tables", group: "Functions", enabled: true, requiresContainer: true, execute: truncate},
 		}
