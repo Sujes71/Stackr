@@ -59,8 +59,9 @@ type DBOpsModel struct {
 	screen dbOpsScreen
 
 	// SyncEnv list state
-	listCursor  int
-	deleteArmed bool
+	listCursor     int
+	deleteArmed    bool
+	armGeneration  int // incremented on each arm; timer only fires if generation matches
 
 	// SyncEnv actions state
 	selectedEnv  string
@@ -207,7 +208,7 @@ func (m *DBOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 
 // IsTextInputActive returns true when a text input has focus on this screen.
 func (m *DBOpsModel) IsTextInputActive() bool {
-	return false // wizard uses delegated model; no inline text input
+	return m.addingCustomAction
 }
 
 // ── Environment / Service helpers ─────────────────────────────────────────────
@@ -265,6 +266,15 @@ func (m *DBOpsModel) setCustomCmdTextareaHeight() {
 func (m *DBOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(tea.WindowSizeMsg); ok {
 		m.SetSize(msg.Width, msg.Height)
+		return m, nil
+	}
+
+	// ── Arm auto-dismiss ──
+	if armMsg, ok := msg.(armDisarmMsg); ok {
+		if armMsg.generation == m.armGeneration {
+			m.deleteArmed = false
+			m.deleteActionArmed = false
+		}
 		return m, nil
 	}
 
@@ -363,8 +373,9 @@ func (m *DBOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 			if !m.deleteArmed {
+				m.armGeneration++
 				m.deleteArmed = true
-				break
+				return m, armDisarmAfter(m.armGeneration)
 			}
 			// Second d: confirm delete
 			m.deleteArmed = false
@@ -683,7 +694,9 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				act := m.actions[m.actionCursor]
 				if act.isCustom {
 					if !m.deleteActionArmed {
+						m.armGeneration++
 						m.deleteActionArmed = true
+						return m, armDisarmAfter(m.armGeneration)
 					} else {
 						// Second d: confirm delete
 						m.deleteActionArmed = false

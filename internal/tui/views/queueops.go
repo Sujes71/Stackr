@@ -60,6 +60,7 @@ type QueueOpsModel struct {
 	// SyncEnv list state
 	listCursor      int
 	deleteArmed     bool
+	armGeneration   int // incremented on each arm; timer only fires if generation matches
 	selectedEnv     string // name of selected QueueSyncEnv (empty = local)
 	selectedEnvName string // display name
 
@@ -218,7 +219,7 @@ func (m *QueueOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 
 // IsTextInputActive returns true when a text input has focus on this screen.
 func (m *QueueOpsModel) IsTextInputActive() bool {
-	return false // wizard uses delegated model; no inline text input
+	return m.addingCustomAction
 }
 
 // ── Environment / Service helpers ─────────────────────────────────────────────
@@ -269,6 +270,14 @@ func (m *QueueOpsModel) SetSize(w, h int) {
 func (m *QueueOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if wsMsg, ok := msg.(tea.WindowSizeMsg); ok {
 		m.SetSize(wsMsg.Width, wsMsg.Height)
+		return m, nil
+	}
+
+	// ── Arm auto-dismiss ──
+	if armMsg, ok := msg.(armDisarmMsg); ok {
+		if armMsg.generation == m.armGeneration {
+			m.deleteArmed = false
+		}
 		return m, nil
 	}
 
@@ -376,7 +385,9 @@ func (m *QueueOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break // can't delete local entry
 			}
 			if !m.deleteArmed {
+				m.armGeneration++
 				m.deleteArmed = true
+				return m, armDisarmAfter(m.armGeneration)
 			} else {
 				idx := m.listCursor - 1
 				m.deleteArmed = false

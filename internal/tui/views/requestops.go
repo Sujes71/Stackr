@@ -92,6 +92,7 @@ type RequestOpsModel struct {
 	listCursor       int
 	deleteArmed      bool
 	deleteArmedIsEnv bool   // true when D (env delete) is armed, false for d (item delete)
+	armGeneration    int    // incremented on each arm; timer only fires if generation matches
 	listItems        []requestListItem
 
 	// Tree state
@@ -511,6 +512,14 @@ func (m *RequestOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// ── Arm auto-dismiss ──
+	if armMsg, ok := msg.(armDisarmMsg); ok {
+		if armMsg.generation == m.armGeneration {
+			m.deleteArmed = false
+		}
+		return m, nil
+	}
+
 	if _, ok := msg.(SpinnerTickMsg); ok {
 		if len(m.pendingOps) > 0 {
 			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
@@ -722,9 +731,10 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 			if !m.deleteArmed {
+				m.armGeneration++
 				m.deleteArmed = true
 				m.deleteArmedIsEnv = true
-				return m, nil
+				return m, armDisarmAfter(m.armGeneration)
 			}
 			// Second D: show confirmation screen
 			m.deleteArmed = false
@@ -859,8 +869,10 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 				if !m.deleteArmed {
+					m.armGeneration++
 					m.deleteArmed = true
 					m.deleteArmedIsEnv = false
+					return m, armDisarmAfter(m.armGeneration)
 				} else {
 					m.deleteArmed = false
 					switch item.kind {

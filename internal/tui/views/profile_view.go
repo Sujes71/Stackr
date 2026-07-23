@@ -34,6 +34,7 @@ type ProfileViewModel struct {
 	deleteArmed    bool
 	deleteEnvArmed bool
 	resetArmed     bool
+	armGeneration  int // incremented on each arm; timer only fires if generation matches
 	inputtingEnv   bool
 	envInput       textinput.Model
 
@@ -980,6 +981,14 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ensureValidSelection()
 		m.rememberCurrentEnvSelection()
 
+	case armDisarmMsg:
+		if msg.generation == m.armGeneration {
+			m.deleteArmed = false
+			m.deleteEnvArmed = false
+			m.resetArmed = false
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		// Dismiss overlays on any key
 		if m.viewingService >= 0 {
@@ -1584,8 +1593,9 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// First r: arm, wait for v to reset the focused service's volume
 			m.keyPending = "r"
+			m.armGeneration++
 			m.resetArmed = true
-			return m, nil
+			return m, armDisarmAfter(m.armGeneration)
 
 		case key.Matches(msg, profileKeys.addSvc):
 			if m.isPortForwardEnv() {
@@ -1622,7 +1632,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if !m.deleteArmed {
 					m.deleteArmed = true
-					return m, nil
+					return m, armDisarmAfter(m.armGeneration)
 				}
 				m.deleteArmed = false
 				svc := svcs[m.selectedServiceIndex()]
@@ -1647,8 +1657,11 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 				if !m.deleteArmed {
+					m.armGeneration++
 					m.deleteArmed = true
-					return m, nil
+					m.resetArmed = false
+					m.deleteEnvArmed = false
+					return m, armDisarmAfter(m.armGeneration)
 				}
 				m.deleteArmed = false
 				proc := env.LocalProcesses[procIdx]
@@ -1676,8 +1689,11 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 			if !m.deleteEnvArmed {
+				m.armGeneration++
 				m.deleteEnvArmed = true
-				return m, nil
+				m.deleteArmed = false
+				m.resetArmed = false
+				return m, armDisarmAfter(m.armGeneration)
 			}
 			// Second D: delete current environment
 			m.deleteEnvArmed = false
@@ -1917,12 +1933,15 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return NavigateTo{Screen: NavGitOps, ProfileName: m.profile.Name}
 			}
 		}
+		// Unmatched key → clear armed states (fallthrough for any key not handled above)
+		m.ensureValidSelection()
+		m.deleteArmed = false
+		m.deleteEnvArmed = false
+		m.resetArmed = false
+		m.keyPending = ""
+		return m, nil
 	}
 	m.ensureValidSelection()
-	m.deleteArmed = false
-	m.deleteEnvArmed = false
-	m.resetArmed = false
-	m.keyPending = ""
 	return m, nil
 }
 
@@ -2346,6 +2365,19 @@ func (m *ProfileViewModel) View() string {
 		b.WriteString("\n")
 	}
 
+	if m.deleteArmed {
+		b.WriteString("\n")
+		b.WriteString(styles.StyleError.Render("  Press d again to confirm deletion"))
+	}
+	if m.deleteEnvArmed {
+		b.WriteString("\n")
+		b.WriteString(styles.StyleError.Render("  Press d again to confirm env deletion"))
+	}
+	if m.resetArmed {
+		b.WriteString("\n")
+		b.WriteString(styles.StyleError.Render("  Press r again to reset volumes"))
+	}
+
 	if !m.inDiscovery && m.viewingService < 0 && m.viewingProcess == "" && !m.showStats {
 		b.WriteString("\n\n")
 	}
@@ -2622,8 +2654,14 @@ func (m *ProfileViewModel) estimateItemOverhead() int {
 	oh += 3 // \n\n before hints + backHelp line
 
 	// Optional status lines (armed states, input mode)
-	if m.deleteArmed || m.deleteEnvArmed || m.resetArmed {
+	if m.deleteArmed {
 		oh += 1 // confirmation prompt
+	}
+	if m.deleteEnvArmed {
+		oh += 1
+	}
+	if m.resetArmed {
+		oh += 1
 	}
 	if m.inputtingEnv {
 		oh += 4 // env input text
@@ -3108,8 +3146,9 @@ func (m *ProfileViewModel) handleForwardDelete() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if !m.deleteArmed {
+		m.armGeneration++
 		m.deleteArmed = true
-		return m, nil
+		return m, armDisarmAfter(m.armGeneration)
 	}
 	m.deleteArmed = false
 	h := forwards[m.selectedForwardIndex()]

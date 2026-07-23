@@ -1,6 +1,9 @@
 package views
 
 import (
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stackr/stackr/internal/config"
 	"github.com/stackr/stackr/internal/docker"
 	"github.com/stackr/stackr/internal/hub"
@@ -181,4 +184,21 @@ type wizardSavedMsg struct {
 	env      *config.SyncEnv
 	editMode bool
 	origName string
+}
+
+// ── Arm Auto-Dismiss Messages ──
+
+// armDisarmMsg is sent after 4 seconds to auto-clear armed confirmation states.
+// The generation field ensures only the most recent timer clears the armed state;
+// stale timers from previous arm cycles are silently ignored.
+type armDisarmMsg struct {
+	generation int
+}
+
+// armDisarmAfter schedules an armDisarmMsg after 4 seconds.
+// Pass the current armGeneration so the handler can ignore stale timers.
+func armDisarmAfter(gen int) tea.Cmd {
+	return tea.Tick(4*time.Second, func(time.Time) tea.Msg {
+		return armDisarmMsg{generation: gen}
+	})
 }

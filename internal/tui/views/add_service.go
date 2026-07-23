@@ -96,6 +96,7 @@ type AddServiceModel struct {
 	height       int // terminal height (chrome already subtracted), set via SetSize
 	width        int // terminal width, set via WindowSizeMsg
 	spinnerFrame int // animated spinner frame for search/tag-fetch (AUDIT-027)
+	armGeneration int // incremented on each arm; timer only fires if generation matches
 }
 
 // Named overhead constants for add_service list views (AUDIT-039).
@@ -272,7 +273,6 @@ var addSvcDownField = key.NewBinding(key.WithKeys("down"))
 var addSvcToggle = key.NewBinding(key.WithKeys("tab"))
 var addSvcDelete = key.NewBinding(key.WithKeys("ctrl+d"))
 var addSvcReset = key.NewBinding(key.WithKeys("ctrl+r"))
-var addSvcTab = key.NewBinding(key.WithKeys("tab"))
 
 // SetSize propagates terminal dimensions before the first WindowSizeMsg.
 // h is the full terminal height; we subtract 5 for App chrome (AUDIT-019).
@@ -283,6 +283,14 @@ func (m *AddServiceModel) SetSize(w, h int) {
 
 func (m *AddServiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case armDisarmMsg:
+		if msg.generation == m.armGeneration {
+			m.portsDeleteArmed = false
+			m.envVarsDeleteArmed = false
+			m.resetArmed = false
+		}
+		return m, nil
+
 	case SpinnerTickMsg:
 		// AUDIT-027: animate the spinner while hub search or tag fetch is in flight.
 		if m.searching || m.loadingTags {
@@ -399,7 +407,7 @@ func (m *AddServiceModel) handleStep(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case svcStepName:
 		if m.sourcePath == "manual" {
 			switch {
-			case key.Matches(msg, addSvcUpField), key.Matches(msg, addSvcDownField), key.Matches(msg, addSvcTab):
+			case key.Matches(msg, addSvcUpField), key.Matches(msg, addSvcDownField):
 				if m.nameFocus == 0 {
 					m.nameFocus = 1
 					m.imageInput.Blur()
@@ -782,8 +790,9 @@ func (m *AddServiceModel) handlePorts(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if !m.portsDeleteArmed {
 			// First d: arm deletion
+			m.armGeneration++
 			m.portsDeleteArmed = true
-			return m, nil
+			return m, armDisarmAfter(m.armGeneration)
 		}
 		// Second d: delete last port
 		m.portsDeleteArmed = false
@@ -803,8 +812,9 @@ func (m *AddServiceModel) handlePorts(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if !m.resetArmed {
+			m.armGeneration++
 			m.resetArmed = true
-			return m, nil
+			return m, armDisarmAfter(m.armGeneration)
 		}
 		// Second r: reset to defaults
 		m.resetArmed = false
@@ -874,8 +884,9 @@ func (m *AddServiceModel) handleEnvVars(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if !m.envVarsDeleteArmed {
+			m.armGeneration++
 			m.envVarsDeleteArmed = true
-			return m, nil
+			return m, armDisarmAfter(m.armGeneration)
 		}
 		// Second d: remove last env var
 		m.envVarsDeleteArmed = false
@@ -899,8 +910,9 @@ func (m *AddServiceModel) handleEnvVars(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if !m.resetArmed {
+			m.armGeneration++
 			m.resetArmed = true
-			return m, nil
+			return m, armDisarmAfter(m.armGeneration)
 		}
 		// Second r: reset to defaults
 		m.resetArmed = false
@@ -932,7 +944,7 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, addSvcUpField), key.Matches(msg, addSvcDownField):
 		m.resetArmed = false
-		// Only one input now — tab just focuses source
+		// Only one input now — up/down just focuses source
 		return m, nil
 	case key.Matches(msg, addSvcToggle):
 		m.resetArmed = false
@@ -991,8 +1003,9 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if !m.resetArmed {
+			m.armGeneration++
 			m.resetArmed = true
-			return m, nil
+			return m, armDisarmAfter(m.armGeneration)
 		}
 		// Second r: reset to defaults
 		m.resetArmed = false
@@ -1062,12 +1075,6 @@ func (m *AddServiceModel) handleRunCommand(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 		}
 		return m, m.saveLocalProcess(name, cmdStr, strings.TrimSpace(m.runCmdWorkDir.Value()))
 
-	case key.Matches(msg, addSvcTab):
-		idx := m.runCmdFocus + 1
-		if idx > 2 {
-			idx = 0
-		}
-		return m, m.focusRunCmdField(idx)
 	}
 	return m.updateActiveInput(msg)
 }
