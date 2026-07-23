@@ -473,18 +473,6 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pendingOps = make(map[string]string)
 		m.pendingStart = time.Time{} // reset so next op shows spinner after 200ms
-		// If conflict resolved, return to main and refresh status
-		if m.screen == gitScreenConflict && msg.err == nil {
-			m.screen = gitScreenMain
-			m.conflictFiles = nil
-			return m, tea.Batch(
-				func() tea.Msg {
-					files, _ := git.StatusPorcelain(m.dir)
-					return gitOpsStatusMsg{files: files}
-				},
-				doneExpireCmd(),
-			)
-		}
 		// Schedule re-render so doneOp auto-disappears
 		return m, doneExpireCmd()
 
@@ -2038,7 +2026,7 @@ func (m *GitOpsModel) updateConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 			file := m.conflictFiles[m.conflictCursor]
-			m.startPendingOp("resolve", "resolving (ours)")
+			m.startPendingOp("resolve", "resolving")
 			return m, tea.Batch(
 				func() tea.Msg {
 					err := git.ResolveOurs(m.dir, file)
@@ -2060,7 +2048,8 @@ func (m *GitOpsModel) updateConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
 								return gitOpsDoneMsg{err: err}
 							}
 						}
-						return gitOpsDoneMsg{result: "✓ Conflict resolved"}
+						files, _ := git.StatusPorcelain(m.dir)
+						return gitOpsStatusMsg{files: files}
 					}
 					return gitOpsConflictMsg{files: remaining}
 				},
@@ -2073,7 +2062,7 @@ func (m *GitOpsModel) updateConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 			file := m.conflictFiles[m.conflictCursor]
-			m.startPendingOp("resolve", "resolving (theirs)")
+			m.startPendingOp("resolve", "resolving")
 			return m, tea.Batch(
 				func() tea.Msg {
 					err := git.ResolveTheirs(m.dir, file)
@@ -2095,7 +2084,8 @@ func (m *GitOpsModel) updateConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
 								return gitOpsDoneMsg{err: err}
 							}
 						}
-						return gitOpsDoneMsg{result: "✓ Conflict resolved"}
+						files, _ := git.StatusPorcelain(m.dir)
+						return gitOpsStatusMsg{files: files}
 					}
 					return gitOpsConflictMsg{files: remaining}
 				},
@@ -2160,7 +2150,7 @@ func (m *GitOpsModel) viewConflict() string {
 
 	// Conflict files
 	if len(m.conflictFiles) == 0 {
-		b.WriteString(styles.StyleSubtitle.Render("  ✓ No conflicts remaining — press r to continue"))
+		b.WriteString(styles.StyleSubtitle.Render("  No conflicts remaining"))
 	} else {
 		for i, f := range m.conflictFiles {
 			marker := "  "
@@ -2177,7 +2167,7 @@ func (m *GitOpsModel) viewConflict() string {
 		b.WriteString(fmt.Sprintf("  %s conflict(s) remaining", styles.StyleSubtitle.Render(fmt.Sprintf("%d", len(m.conflictFiles)))))
 	}
 
-	// Pending op / done message (same as other screens)
+	// Pending op / done message
 	b.WriteString("\n")
 	b.WriteString(m.renderPendingOrDone())
 
