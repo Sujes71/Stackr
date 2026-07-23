@@ -578,6 +578,16 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case gitOpsMergeMsg:
 		if msg.err != nil {
+			// Check if this is a merge conflict
+			if git.ConflictInProgress(m.dir) {
+				files, _ := git.ConflictingFiles(m.dir)
+				m.conflictFiles = files
+				m.conflictCursor = 0
+				m.conflictIsRebase = false
+				m.screen = gitScreenConflict
+				delete(m.pendingOps, "merge-branch")
+				return m, nil
+			}
 			if m.errorRegistry != nil {
 				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
 			}
