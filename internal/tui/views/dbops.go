@@ -792,10 +792,37 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !msg.available {
 			m.pendingOps = make(map[string]string)
 			m.pendingStartLabel = ""
-			m.lastResult = formatErrorMsg("Docker daemon failed to start")
+			errMsg := "Docker daemon failed to start"
+			m.lastResult = formatErrorMsg(errMsg)
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("docker_daemon", errMsg, "")
+			}
 			return m, nil
 		}
-		// Daemon is up — now start the service
+		// Daemon is up — check if the pending action needs the service container
+		pendingLabel := m.pendingStartLabel
+		needsContainer := false
+		for _, act := range m.actions {
+			if act.label == pendingLabel {
+				needsContainer = act.requiresContainer
+				break
+			}
+		}
+		if !needsContainer {
+			// Action only needs daemon (e.g. export via pg_dump container) — execute directly
+			m.pendingStartLabel = ""
+			for _, act := range m.actions {
+				if act.label == pendingLabel && act.enabled {
+					m.pendingOps[pendingLabel] = "running"
+					m.lastResult = ""
+					return m, tea.Batch(act.execute, spinnerCmd())
+				}
+			}
+			m.pendingOps = make(map[string]string)
+			m.lastResult = styles.StyleError.Render("Could not find pending action")
+			return m, nil
+		}
+		// Action needs the service container — start it
 		svc := m.currentService()
 		if svc == nil {
 			m.pendingOps = make(map[string]string)
@@ -830,7 +857,11 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case serviceStartedMsg:
 		if msg.err != nil {
 			m.pendingOps = make(map[string]string)
-			m.lastResult = formatErrorMsg("start service: " + msg.err.Error())
+			errMsg := "start service: " + msg.err.Error()
+			m.lastResult = formatErrorMsg(errMsg)
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("db_ops", msg.err.Error(), "Start service")
+			}
 			return m, nil
 		}
 		// Poll container readiness before executing the pending action
@@ -882,6 +913,9 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.retry >= 30 {
 			m.pendingOps = make(map[string]string)
 			m.lastResult = formatErrorMsg("container not ready after 30s")
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("db_ops", "container not ready after 30s", msg.label)
+			}
 			return m, nil
 		}
 		return m, tea.Batch(
