@@ -402,9 +402,10 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case gitOpsStatusMsg:
 		if msg.err != nil {
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
+				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "status")
 			}
 			m.doneOp = msg.err.Error()
+			m.doneOpIsErr = true
 			m.doneOpAt = time.Now()
 		} else {
 			m.files = msg.files
@@ -448,8 +449,15 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case gitOpsDiffMsg:
 		if msg.err != nil {
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "diff")
+			}
+			m.doneOp = msg.err.Error()
+			m.doneOpIsErr = true
+			m.doneOpAt = time.Now()
 			m.diffOutput = ""
 			m.diffVP.SetContent("")
+			return m, doneExpireCmd()
 		} else {
 			m.diffOutput = colorDiff(msg.output)
 			m.diffVP.SetContent(m.diffOutput)
@@ -550,8 +558,16 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case gitOpsCommitDiffMsg:
 		if msg.err != nil {
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "commit-diff")
+			}
+			m.doneOp = msg.err.Error()
+			m.doneOpIsErr = true
+			m.doneOpAt = time.Now()
 			m.logFileDiff = ""
 			m.logFileDiffVP.SetContent("")
+			delete(m.pendingOps, "commit-diff")
+			return m, doneExpireCmd()
 		} else {
 			m.logFileDiff = colorDiff(msg.output)
 			m.logFileDiffVP.SetContent(m.logFileDiff)
