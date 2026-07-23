@@ -821,16 +821,19 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.pendingOps = make(map[string]string)
 					return m, nil
 				}
-				if m.pendingStartLabel != "" {
-					m.pendingOps[m.pendingStartLabel] = "starting"
-				}
-				return m, tea.Batch(
-					func() tea.Msg {
-						err := docker.UpService(m.profile.Name, m.envName, svc.ComposeName())
-						return serviceStartedMsg{err: err}
-					},
-					spinnerCmd(),
-				)
+			if m.pendingStartLabel != "" {
+				m.pendingOps[m.pendingStartLabel] = "starting"
+			}
+			profileName := m.profile.Name
+			envName := m.envName
+			composeName := svc.ComposeName()
+			return m, tea.Batch(
+				func() tea.Msg {
+					err := docker.UpServiceWithTimeout(profileName, envName, composeName, 30*time.Second)
+					return serviceStartedMsg{err: err}
+				},
+				spinnerCmd(),
+			)
 			case "n", "N", "esc":
 				m.promptStartService = false
 				m.pendingOps = make(map[string]string)
@@ -1117,18 +1120,21 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pendingStartLabel != "" {
 			m.pendingOps[m.pendingStartLabel] = "starting"
 		}
+		profileName := m.profile.Name
+		envName := m.envName
+		composeName := svc.ComposeName()
 		return m, tea.Batch(
 			func() tea.Msg {
-				err := docker.UpService(m.profile.Name, m.envName, svc.ComposeName())
+				err := docker.UpServiceWithTimeout(profileName, envName, composeName, 30*time.Second)
 				if err != nil {
 					return serviceStartedMsg{err: err}
 				}
 				// `docker compose up` creates ALL services in the compose file
 				// even though it only starts the target one. Stop the others.
-				statuses, _ := docker.Status(m.profile.Name, m.envName)
+				statuses, _ := docker.Status(profileName, envName)
 				for _, s := range statuses {
-					if s.Name != svc.ComposeName() && s.State == "running" {
-						_ = docker.RmService(m.profile.Name, m.envName, s.Name)
+					if s.Name != composeName && s.State == "running" {
+						_ = docker.RmService(profileName, envName, s.Name)
 					}
 				}
 				return serviceStartedMsg{}

@@ -781,9 +781,12 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.pendingStartLabel != "" {
 					m.pendingOps[m.pendingStartLabel] = "starting"
 				}
+				profileName := m.profile.Name
+				envName := m.envName
+				composeName := svc.ComposeName()
 				return m, tea.Batch(
 					func() tea.Msg {
-						err := docker.UpService(m.profile.Name, m.envName, svc.ComposeName())
+						err := docker.UpServiceWithTimeout(profileName, envName, composeName, 30*time.Second)
 						return serviceStartedMsg{err: err}
 					},
 					spinnerCmd(),
@@ -1082,19 +1085,26 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pendingStartLabel != "" {
 			m.pendingOps[m.pendingStartLabel] = "starting"
 		}
+		profileName := m.profile.Name
+		envName := m.envName
+		composeName := svc.ComposeName()
+		var otherServices []string
+		env := m.currentEnv()
+		if env != nil {
+			for _, s := range env.Services {
+				if s.ComposeName() != composeName {
+					otherServices = append(otherServices, s.ComposeName())
+				}
+			}
+		}
 		return m, tea.Batch(
 			func() tea.Msg {
-				err := docker.UpService(m.profile.Name, m.envName, svc.ComposeName())
+				err := docker.UpServiceWithTimeout(profileName, envName, composeName, 30*time.Second)
 				if err != nil {
 					return serviceStartedMsg{err: err}
 				}
-				env := m.currentEnv()
-				if env != nil {
-					for _, s := range env.Services {
-						if s.ComposeName() != svc.ComposeName() {
-							_ = docker.RmService(m.profile.Name, m.envName, s.ComposeName())
-						}
-					}
+				for _, name := range otherServices {
+					_ = docker.RmService(profileName, envName, name)
 				}
 				return serviceStartedMsg{}
 			},

@@ -543,13 +543,16 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.lastResult = styles.StyleError.Render("Service not found.")
 					return m, nil
 				}
-				if m.pendingStartLabel != "" {
-					m.pendingOps[m.pendingStartLabel] = "starting"
-				}
-				return m, tea.Batch(
-					func() tea.Msg {
-						err := docker.UpService(m.profile.Name, m.envName, svc.ComposeName())
-						return serviceStartedMsg{err: err}
+			if m.pendingStartLabel != "" {
+				m.pendingOps[m.pendingStartLabel] = "starting"
+			}
+			profileName := m.profile.Name
+			envName := m.envName
+			composeName := svc.ComposeName()
+			return m, tea.Batch(
+				func() tea.Msg {
+					err := docker.UpServiceWithTimeout(profileName, envName, composeName, 30*time.Second)
+					return serviceStartedMsg{err: err}
 					},
 					spinnerCmd(),
 				)
@@ -764,13 +767,6 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Show success result message so the user sees what happened
-		if msg.result != "" {
-			m.lastResult = styles.StyleSuccess.Render("✓ " + msg.result)
-		} else {
-			m.lastResult = ""
-		}
-
 		// Re-scan dump states — imports/exports affect dump availability
 		svc := m.currentService()
 		if svc != nil {
@@ -832,22 +828,29 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pendingStartLabel != "" {
 			m.pendingOps[m.pendingStartLabel] = "starting"
 		}
+		profileName := m.profile.Name
+		envName := m.envName
+		composeName := svc.ComposeName()
+		allServices := []string{}
+		env := m.currentEnv()
+		if env != nil {
+			for _, s := range env.Services {
+				if s.ComposeName() != composeName {
+					allServices = append(allServices, s.ComposeName())
+				}
+			}
+		}
 		return m, tea.Batch(
 			func() tea.Msg {
-				err := docker.UpService(m.profile.Name, m.envName, svc.ComposeName())
+				err := docker.UpServiceWithTimeout(profileName, envName, composeName, 30*time.Second)
 				if err != nil {
 					return serviceStartedMsg{err: err}
 				}
 				// `docker compose up` creates ALL services in the compose file
 				// even though it only starts the target one. Stop the others to
 				// avoid leaving them in "Created" state.
-				env := m.currentEnv()
-				if env != nil {
-					for _, s := range env.Services {
-						if s.ComposeName() != svc.ComposeName() {
-							_ = docker.RmService(m.profile.Name, m.envName, s.ComposeName())
-						}
-					}
+				for _, name := range allServices {
+					_ = docker.RmService(profileName, envName, name)
 				}
 				return serviceStartedMsg{}
 			},

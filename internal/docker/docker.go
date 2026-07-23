@@ -227,6 +227,20 @@ func UpService(profileName, envName, serviceName string) error {
 	return runDocker(composeArgs(profileName, envName, "up", "-d", serviceName)...)
 }
 
+// UpServiceWithTimeout runs docker compose up for a service with a deadline.
+// Used after daemon start when the daemon may not be fully ready yet.
+func UpServiceWithTimeout(profileName, envName, serviceName string, timeout time.Duration) error {
+	args := composeArgs(profileName, envName, "up", "-d", serviceName)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return friendlyError(err, string(out))
+	}
+	return nil
+}
+
 // UpServiceWithDetail runs docker compose up for a service and returns both
 // a friendly error (for table rows) and the raw Docker output (for detail views).
 func UpServiceWithDetail(profileName, envName, serviceName string) (friendlyErr error, rawOutput string) {
