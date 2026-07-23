@@ -134,13 +134,15 @@ func (m *ProfileViewModel) whichKeyCommandsDocker() []whichkey.CommandGroup {
 
 	// Services group
 	var svcItems []whichkey.CommandKey
-	svcItems = append(svcItems, whichkey.CommandKey{Key: "a", Desc: "add service"})
 	if hasServices {
 		runLabel := "run"
 		if m.isSelectedServiceRunning() {
 			runLabel = "stop"
 		}
 		svcItems = append(svcItems, whichkey.CommandKey{Key: "enter", Desc: runLabel})
+	}
+	svcItems = append(svcItems, whichkey.CommandKey{Key: "a", Desc: "add service"})
+	if hasServices {
 		if m.selectedDBType() != "" {
 			svcItems = append(svcItems, whichkey.CommandKey{Key: "o", Desc: "db ops"})
 		}
