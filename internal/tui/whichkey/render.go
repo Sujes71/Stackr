@@ -39,12 +39,15 @@ func (m *WhichKeyModel) View(terminalWidth int) string {
 	for _, group := range m.commands {
 		for _, item := range group.Items {
 			keyStr := item.Key
-		if keyStr == "enter" {
-			keyStr = "↵"
-		}
-		if keyStr == " " {
-			keyStr = "⎵"
-		}
+			if keyStr == "enter" {
+				keyStr = "↵"
+			}
+			if keyStr == " " {
+				keyStr = "⎵"
+			}
+			if keyStr == "alt+ " {
+				keyStr = "⌥⎵"
+			}
 			if len(item.Children) > 0 {
 				keyStr += " →"
 			}

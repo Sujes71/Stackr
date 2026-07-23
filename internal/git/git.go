@@ -677,6 +677,81 @@ func Pull(dir string) error {
 	return err
 }
 
+// RebaseInProgress returns true if a rebase is currently in progress.
+func RebaseInProgress(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git", "REBASE_HEAD"))
+	return err == nil
+}
+
+// MergeInProgress returns true if a merge is currently in progress.
+func MergeInProgress(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git", "MERGE_HEAD"))
+	return err == nil
+}
+
+// ConflictInProgress returns true if either a rebase or merge is in progress.
+func ConflictInProgress(dir string) bool {
+	return RebaseInProgress(dir) || MergeInProgress(dir)
+}
+
+// ConflictingFiles returns the list of files with unresolved merge conflicts.
+func ConflictingFiles(dir string) ([]string, error) {
+	out, err := run(dir, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, err
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
+// ResolveOurs resolves a conflicting file by keeping the current branch version.
+func ResolveOurs(dir string, file string) error {
+	_, err := run(dir, "checkout", "--ours", file)
+	if err != nil {
+		return err
+	}
+	_, err = run(dir, "add", file)
+	return err
+}
+
+// ResolveTheirs resolves a conflicting file by keeping the incoming branch version.
+func ResolveTheirs(dir string, file string) error {
+	_, err := run(dir, "checkout", "--theirs", file)
+	if err != nil {
+		return err
+	}
+	_, err = run(dir, "add", file)
+	return err
+}
+
+// RebaseContinue continues an in-progress rebase after conflicts are resolved.
+func RebaseContinue(dir string) error {
+	_, err := run(dir, "rebase", "--continue")
+	return err
+}
+
+// RebaseAbort aborts an in-progress rebase.
+func RebaseAbort(dir string) error {
+	_, err := run(dir, "rebase", "--abort")
+	return err
+}
+
+// MergeContinue continues an in-progress merge after conflicts are resolved.
+// (git merge --continue is an alias for git merge --no-commit, but we use commit)
+func MergeContinue(dir string) error {
+	_, err := run(dir, "commit", "--no-edit")
+	return err
+}
+
+// MergeAbort aborts an in-progress merge.
+func MergeAbort(dir string) error {
+	_, err := run(dir, "merge", "--abort")
+	return err
+}
+
 // HasUnpushedCommits returns true if the current branch has commits
 // ahead of its upstream.
 func HasUnpushedCommits(dir string) bool {

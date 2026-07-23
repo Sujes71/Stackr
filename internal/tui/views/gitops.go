@@ -26,6 +26,7 @@ const (
 	gitScreenBranch                     // Branch list overlay
 	gitScreenLog                        // Full-screen commit log
 	gitScreenLogDetail                  // Commit detail: files + diff
+	gitScreenConflict                   // Rebase conflict resolver
 )
 
 // ── Message types ─────────────────────────────────────────────────────────────
@@ -88,6 +89,11 @@ type gitOpsCreateBranchMsg struct {
 type gitOpsMergeMsg struct {
 	source string
 	err    error
+}
+
+type gitOpsConflictMsg struct {
+	files []string
+	err   error
 }
 
 type gitOpsDoneExpiredMsg struct{}
@@ -156,6 +162,11 @@ type GitOpsModel struct {
 	logFileDiff   string          // diff of selected file in commit
 	logFileDiffVP viewport.Model  // viewport for commit file diff
 
+	// Conflict resolver
+	conflictFiles  []string // files with unresolved merge conflicts
+	conflictCursor int      // cursor in conflict file list
+	conflictIsRebase bool   // true = rebase conflict, false = merge conflict
+
 	// Spinner / pending ops
 	pendingOps    map[string]string
 	pendingStart  time.Time // when the current pending op started
@@ -215,6 +226,19 @@ func (m *GitOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 	case gitScreenMain:
 		var gitItems []whichkey.CommandKey
 
+		// Stage / unstage (dynamic label)
+		if f := m.currentFile(); f != nil && f.Staged {
+			gitItems = append(gitItems, whichkey.CommandKey{Key: " ", Desc: "unstage"})
+		} else {
+			gitItems = append(gitItems, whichkey.CommandKey{Key: " ", Desc: "stage"})
+		}
+		// Stage all / unstage all (dynamic label)
+		if m.stagedStart > 0 && m.stagedStart >= len(m.files) {
+			gitItems = append(gitItems, whichkey.CommandKey{Key: "alt+ ", Desc: "unstage all"})
+		} else {
+			gitItems = append(gitItems, whichkey.CommandKey{Key: "alt+ ", Desc: "stage all"})
+		}
+
 		// Push / pull
 		if m.hasUnpushed {
 			gitItems = append(gitItems, whichkey.CommandKey{Key: "p", Desc: "push"})
@@ -267,6 +291,15 @@ func (m *GitOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 				{Key: "enter", Desc: "view detail"},
 			}},
 		}
+
+	case gitScreenConflict:
+		return []whichkey.CommandGroup{
+			{Items: []whichkey.CommandKey{
+				{Key: "o", Desc: "ours"},
+				{Key: "t", Desc: "theirs"},
+				{Key: "a", Desc: "abort"},
+			}},
+		}
 	}
 
 	return nil
@@ -301,6 +334,11 @@ func (m *GitOpsModel) Init() tea.Cmd {
 			root := ""
 			if isRepo {
 				root, _ = git.Root(m.dir)
+			}
+			// Check for in-progress rebase or merge on entry
+			if isRepo && git.ConflictInProgress(m.dir) {
+				files, _ := git.ConflictingFiles(m.dir)
+				return gitOpsConflictMsg{files: files}
 			}
 			return gitOpsRepoCheckMsg{isRepo: isRepo, gitRoot: root, gitFound: true}
 		},
@@ -554,6 +592,22 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			files, _ := git.StatusPorcelain(m.dir)
 			return gitOpsStatusMsg{files: files}
 		}
+
+	case gitOpsConflictMsg:
+		delete(m.pendingOps, "pull")
+		if msg.err != nil {
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
+			}
+			m.doneOp = msg.err.Error()
+			m.doneOpIsErr = true
+			m.doneOpAt = time.Now()
+		} else {
+			m.conflictFiles = msg.files
+			m.conflictCursor = 0
+			m.conflictIsRebase = git.RebaseInProgress(m.dir)
+			m.screen = gitScreenConflict
+		}
 	}
 
 	// ── E key: open error list ──
@@ -577,6 +631,8 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateLog(msg)
 	case gitScreenLogDetail:
 		return m.updateLogDetail(msg)
+	case gitScreenConflict:
+		return m.updateConflict(msg)
 	}
 
 	return m, nil
@@ -596,6 +652,8 @@ func (m *GitOpsModel) View() string {
 		return m.viewLog()
 	case gitScreenLogDetail:
 		return m.viewLogDetail()
+	case gitScreenConflict:
+		return m.viewConflict()
 	}
 	return ""
 }
@@ -878,6 +936,11 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 					func() tea.Msg {
 						err := git.Pull(m.dir)
 						if err != nil {
+							// Check if this is a rebase/merge conflict
+							if git.ConflictInProgress(m.dir) {
+								files, _ := git.ConflictingFiles(m.dir)
+								return gitOpsConflictMsg{files: files}
+							}
 							return gitOpsDoneMsg{err: err}
 						}
 						files, _ := git.StatusPorcelain(m.dir)
@@ -1904,6 +1967,177 @@ func colorDiff(raw string) string {
 		}
 		b.WriteString("\n")
 	}
+	return b.String()
+}
+
+// ── Conflict Resolver ────────────────────────────────────────────────────────
+
+func (m *GitOpsModel) updateConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch {
+		// Escape: abort rebase/merge
+		case msg.String() == "esc", msg.String() == "q":
+			m.startPendingOp("conflict-abort", "aborting")
+			return m, tea.Batch(
+				func() tea.Msg {
+					var err error
+					if m.conflictIsRebase {
+						err = git.RebaseAbort(m.dir)
+					} else {
+						err = git.MergeAbort(m.dir)
+					}
+					if err != nil {
+						return gitOpsDoneMsg{err: err}
+					}
+					files, _ := git.StatusPorcelain(m.dir)
+					return gitOpsStatusMsg{files: files}
+				},
+				spinnerCmd(),
+			)
+
+		// Up/Down: navigate conflict files
+		case msg.String() == "up":
+			if m.conflictCursor > 0 {
+				m.conflictCursor--
+			}
+		case msg.String() == "down":
+			if m.conflictCursor < len(m.conflictFiles)-1 {
+				m.conflictCursor++
+			}
+
+		// o: resolve with ours
+		case msg.String() == "o":
+			if len(m.conflictFiles) == 0 {
+				break
+			}
+			file := m.conflictFiles[m.conflictCursor]
+			m.startPendingOp("resolve", "resolving (ours)")
+			return m, tea.Batch(
+				func() tea.Msg {
+					err := git.ResolveOurs(m.dir, file)
+					if err != nil {
+						return gitOpsDoneMsg{err: err}
+					}
+					// Check if more conflicts remain
+					remaining, _ := git.ConflictingFiles(m.dir)
+					if len(remaining) == 0 {
+						// All resolved — continue rebase/merge
+						if m.conflictIsRebase {
+							err := git.RebaseContinue(m.dir)
+							if err != nil {
+								return gitOpsDoneMsg{err: err}
+							}
+						} else {
+							err := git.MergeContinue(m.dir)
+							if err != nil {
+								return gitOpsDoneMsg{err: err}
+							}
+						}
+						files, _ := git.StatusPorcelain(m.dir)
+						return gitOpsStatusMsg{files: files}
+					}
+					return gitOpsConflictMsg{files: remaining}
+				},
+				spinnerCmd(),
+			)
+
+		// t: resolve with theirs
+		case msg.String() == "t":
+			if len(m.conflictFiles) == 0 {
+				break
+			}
+			file := m.conflictFiles[m.conflictCursor]
+			m.startPendingOp("resolve", "resolving (theirs)")
+			return m, tea.Batch(
+				func() tea.Msg {
+					err := git.ResolveTheirs(m.dir, file)
+					if err != nil {
+						return gitOpsDoneMsg{err: err}
+					}
+					// Check if more conflicts remain
+					remaining, _ := git.ConflictingFiles(m.dir)
+					if len(remaining) == 0 {
+						// All resolved — continue rebase/merge
+						if m.conflictIsRebase {
+							err := git.RebaseContinue(m.dir)
+							if err != nil {
+								return gitOpsDoneMsg{err: err}
+							}
+						} else {
+							err := git.MergeContinue(m.dir)
+							if err != nil {
+								return gitOpsDoneMsg{err: err}
+							}
+						}
+						files, _ := git.StatusPorcelain(m.dir)
+						return gitOpsStatusMsg{files: files}
+					}
+					return gitOpsConflictMsg{files: remaining}
+				},
+				spinnerCmd(),
+			)
+
+		// a: abort rebase/merge
+		case msg.String() == "a":
+			m.startPendingOp("conflict-abort", "aborting")
+			return m, tea.Batch(
+				func() tea.Msg {
+					var err error
+					if m.conflictIsRebase {
+						err = git.RebaseAbort(m.dir)
+					} else {
+						err = git.MergeAbort(m.dir)
+					}
+					if err != nil {
+						return gitOpsDoneMsg{err: err}
+					}
+					files, _ := git.StatusPorcelain(m.dir)
+					return gitOpsStatusMsg{files: files}
+				},
+				spinnerCmd(),
+			)
+		}
+	}
+	return m, nil
+}
+
+func (m *GitOpsModel) viewConflict() string {
+	w := m.width
+	if w == 0 {
+		w = 80
+	}
+
+	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+
+	var b strings.Builder
+
+	// Header
+	if m.conflictIsRebase {
+		b.WriteString(styles.StyleHeader.Render("Rebase Conflict"))
+	} else {
+		b.WriteString(styles.StyleHeader.Render("Merge Conflict"))
+	}
+	b.WriteString("\n\n")
+
+	// Conflict files
+	if len(m.conflictFiles) == 0 {
+		b.WriteString(styles.StyleSubtitle.Render("  No conflicts remaining"))
+	} else {
+		for i, f := range m.conflictFiles {
+			marker := "  "
+			if i == m.conflictCursor {
+				marker = focusStyle.Render("▸ ")
+			}
+			b.WriteString(marker + styles.StyleCode.Render(f) + "\n")
+		}
+	}
+
+	// Status
+	b.WriteString("\n")
+	b.WriteString(styles.StyleSubtitle.Render("  "))
+	b.WriteString(fmt.Sprintf("%d conflict(s) remaining", len(m.conflictFiles)))
+
 	return b.String()
 }
 
