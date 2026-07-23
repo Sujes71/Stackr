@@ -241,7 +241,7 @@ func (m *GitOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 			changesItems = append(changesItems, whichkey.CommandKey{Key: "c", Desc: "commit"})
 		}
 		if m.lastCommitMsg != "" {
-			changesItems = append(changesItems, whichkey.CommandKey{Key: "A", Desc: "amend"})
+			changesItems = append(changesItems, whichkey.CommandKey{Key: "a", Desc: "amend"})
 		}
 
 		var groups []whichkey.CommandGroup
@@ -945,7 +945,7 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 
 		// A: Amend last commit — opens input pre-filled with last message
-		case msg.String() == "A":
+		case msg.String() == "a":
 			if m.screen != gitScreenMain {
 				break
 			}
