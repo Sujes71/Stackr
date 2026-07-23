@@ -40,12 +40,12 @@ type App struct {
 	homeCursor      int
 
 	// child views
-	home        *views.HomeModel
-	profileView *views.ProfileViewModel
-	newProfile  *views.NewProfileModel
-	addService  *views.AddServiceModel
-	dbOps       *views.DBOpsModel
-	queueOps    *views.QueueOpsModel
+	home          *views.HomeModel
+	profileView   *views.ProfileViewModel
+	newProfile    *views.NewProfileModel
+	addService    *views.AddServiceModel
+	dbOps         *views.DBOpsModel
+	queueOps      *views.QueueOpsModel
 	mockOps       *views.MockOpsModel
 	requestOps    *views.RequestOpsModel
 	err           string
@@ -430,10 +430,23 @@ func (a *App) View() string {
 	out.WriteString("\n")
 	out.WriteString(sep)
 	out.WriteString("\n")
-	out.WriteString(body)
 
 	if whichKeyPanel != "" {
+		// Normalize body to end with exactly one newline, then add which-key.
+		// This ensures a consistent visual gap between content and which-key
+		// across all views, regardless of whether the body ends with \n or not.
+		body = strings.TrimRight(body, "\n")
+		out.WriteString(body)
+		// Git Ops panels already have internal spacing; use a single gap.
+		// All other views get a slightly larger gap for consistency.
+		if a.screen == ScreenGitOps {
+			out.WriteString("\n")
+		} else {
+			out.WriteString("\n\n")
+		}
 		out.WriteString(whichKeyPanel)
+	} else {
+		out.WriteString(body)
 	}
 
 	// Pad remaining vertical space
