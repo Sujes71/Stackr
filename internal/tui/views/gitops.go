@@ -473,6 +473,18 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pendingOps = make(map[string]string)
 		m.pendingStart = time.Time{} // reset so next op shows spinner after 200ms
+		// If conflict resolved, return to main and refresh status
+		if m.screen == gitScreenConflict && msg.err == nil {
+			m.screen = gitScreenMain
+			m.conflictFiles = nil
+			return m, tea.Batch(
+				func() tea.Msg {
+					files, _ := git.StatusPorcelain(m.dir)
+					return gitOpsStatusMsg{files: files}
+				},
+				doneExpireCmd(),
+			)
+		}
 		// Schedule re-render so doneOp auto-disappears
 		return m, doneExpireCmd()
 
@@ -2048,8 +2060,7 @@ func (m *GitOpsModel) updateConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
 								return gitOpsDoneMsg{err: err}
 							}
 						}
-						files, _ := git.StatusPorcelain(m.dir)
-						return gitOpsStatusMsg{files: files}
+						return gitOpsDoneMsg{result: "✓ Conflict resolved"}
 					}
 					return gitOpsConflictMsg{files: remaining}
 				},
@@ -2084,8 +2095,7 @@ func (m *GitOpsModel) updateConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
 								return gitOpsDoneMsg{err: err}
 							}
 						}
-						files, _ := git.StatusPorcelain(m.dir)
-						return gitOpsStatusMsg{files: files}
+						return gitOpsDoneMsg{result: "✓ Conflict resolved"}
 					}
 					return gitOpsConflictMsg{files: remaining}
 				},
@@ -2150,7 +2160,7 @@ func (m *GitOpsModel) viewConflict() string {
 
 	// Conflict files
 	if len(m.conflictFiles) == 0 {
-		b.WriteString(styles.StyleSubtitle.Render("  No conflicts remaining"))
+		b.WriteString(styles.StyleSubtitle.Render("  ✓ No conflicts remaining — press r to continue"))
 	} else {
 		for i, f := range m.conflictFiles {
 			marker := "  "
@@ -2161,10 +2171,15 @@ func (m *GitOpsModel) viewConflict() string {
 		}
 	}
 
-	// Status
+	// Status line
 	b.WriteString("\n")
-	b.WriteString(styles.StyleSubtitle.Render("  "))
-	b.WriteString(fmt.Sprintf("%d conflict(s) remaining", len(m.conflictFiles)))
+	if len(m.conflictFiles) > 0 {
+		b.WriteString(fmt.Sprintf("  %s conflict(s) remaining", styles.StyleSubtitle.Render(fmt.Sprintf("%d", len(m.conflictFiles)))))
+	}
+
+	// Pending op / done message (same as other screens)
+	b.WriteString("\n")
+	b.WriteString(m.renderPendingOrDone())
 
 	return b.String()
 }
