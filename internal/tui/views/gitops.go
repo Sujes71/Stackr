@@ -96,6 +96,8 @@ type gitOpsConflictMsg struct {
 	err   error
 }
 
+type gitOpsConflictResolvedMsg struct{}
+
 type gitOpsDoneExpiredMsg struct{}
 
 // ── Model ─────────────────────────────────────────────────────────────────────
@@ -297,6 +299,7 @@ func (m *GitOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 			{Items: []whichkey.CommandKey{
 				{Key: "o", Desc: "ours"},
 				{Key: "t", Desc: "theirs"},
+				{Key: "r", Desc: "refresh"},
 				{Key: "a", Desc: "abort"},
 			}},
 		}
@@ -595,6 +598,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case gitOpsConflictMsg:
 		delete(m.pendingOps, "pull")
+		delete(m.pendingOps, "conflict-check")
 		if msg.err != nil {
 			if m.errorRegistry != nil {
 				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
@@ -607,6 +611,16 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.conflictCursor = 0
 			m.conflictIsRebase = git.RebaseInProgress(m.dir)
 			m.screen = gitScreenConflict
+		}
+
+	case gitOpsConflictResolvedMsg:
+		delete(m.pendingOps, "conflict-check")
+		m.screen = gitScreenMain
+		m.conflictFiles = nil
+		// Full status refresh
+		return m, func() tea.Msg {
+			files, _ := git.StatusPorcelain(m.dir)
+			return gitOpsStatusMsg{files: files}
 		}
 	}
 
@@ -2094,6 +2108,20 @@ func (m *GitOpsModel) updateConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					files, _ := git.StatusPorcelain(m.dir)
 					return gitOpsStatusMsg{files: files}
+				},
+				spinnerCmd(),
+			)
+
+		// r: re-check conflicts (after external resolution)
+		case msg.String() == "r":
+			m.startPendingOpImmediate("conflict-check", "checking")
+			return m, tea.Batch(
+				func() tea.Msg {
+					if !git.ConflictInProgress(m.dir) {
+						return gitOpsConflictResolvedMsg{}
+					}
+					remaining, _ := git.ConflictingFiles(m.dir)
+					return gitOpsConflictMsg{files: remaining}
 				},
 				spinnerCmd(),
 			)
