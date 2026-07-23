@@ -1464,6 +1464,9 @@ func (m *RequestOpsModel) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.bodyEditMode = false
 			return m, nil
 		}
+		m.nameInput.Blur()
+		m.pathInput.Blur()
+		m.tokenPathInput.Blur()
 		m.screen = reqScreenList
 		m.listItems = m.buildListItems()
 		return m, nil
@@ -2353,6 +2356,7 @@ func (m *RequestOpsModel) updateVarPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch keyMsg.String() {
 	case "esc":
+		m.varPromptInput.Blur()
 		m.screen = reqScreenList
 		m.varPromptValues = nil
 		m.varPromptNames = nil

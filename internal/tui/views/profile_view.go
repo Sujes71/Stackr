@@ -2379,7 +2379,7 @@ func (m *ProfileViewModel) View() string {
 	}
 
 	if !m.inDiscovery && m.viewingService < 0 && m.viewingProcess == "" && !m.showStats {
-		b.WriteString("\n\n")
+		b.WriteString("\n")
 	}
 
 	return b.String()

@@ -433,7 +433,6 @@ func (a *App) View() string {
 	out.WriteString(body)
 
 	if whichKeyPanel != "" {
-		out.WriteString("\n")
 		out.WriteString(whichKeyPanel)
 	}
 
