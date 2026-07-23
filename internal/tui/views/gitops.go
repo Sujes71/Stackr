@@ -197,9 +197,6 @@ func (m *GitOpsModel) ProfileName() string { return m.profile.Name }
 
 func (m *GitOpsModel) IsBusy() bool { return len(m.pendingOps) > 0 }
 
-// HasDirtyFiles returns true when the working tree has staged or unstaged changes.
-func (m *GitOpsModel) HasDirtyFiles() bool { return len(m.files) > 0 }
-
 // HasViewportPadding returns true when the current view renders a two-panel
 // layout with a viewport that adds internal blank-line padding at the bottom.
 // The caller (app.go) uses this to reduce the body→which-key gap from \n\n
