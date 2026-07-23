@@ -166,6 +166,11 @@ func (m *MockOpsModel) IsBusy() bool {
 
 // WhichKeyCommands returns the command catalog for Mock Server screen.
 func (m *MockOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
+	// Readonly / modal overlays: no actionable commands
+	if m.viewingResult || m.promptingParams || m.confirmAction ||
+		m.promptStartDaemon || m.promptStartService || len(m.pendingOps) > 0 {
+		return nil
+	}
 	if m.viewingItemList {
 		return []whichkey.CommandGroup{
 			{Items: []whichkey.CommandKey{

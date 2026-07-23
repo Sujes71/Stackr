@@ -194,6 +194,11 @@ func (m *QueueOpsModel) IsBusy() bool {
 
 // WhichKeyCommands returns the command catalog for Queue Ops screen.
 func (m *QueueOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
+	// Readonly / modal overlays: no actionable commands
+	if m.viewingResult || m.promptingParams || m.confirmAction ||
+		m.promptStartDaemon || m.promptStartService || len(m.pendingOps) > 0 {
+		return nil
+	}
 	switch m.screen {
 	case queueScreenSyncEnvList:
 		return []whichkey.CommandGroup{

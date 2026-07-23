@@ -182,6 +182,12 @@ func (m *DBOpsModel) IsBusy() bool {
 
 // WhichKeyCommands returns the command catalog for DB Ops screen.
 func (m *DBOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
+	// Readonly / modal overlays: no actionable commands
+	if m.addingCustomAction || m.promptingParams || m.confirmAction ||
+		m.confirmCustomAction || m.promptStartDaemon || m.promptStartService ||
+		len(m.pendingOps) > 0 {
+		return nil
+	}
 	switch m.screen {
 	case dbScreenSyncEnvList:
 		return []whichkey.CommandGroup{

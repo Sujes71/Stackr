@@ -108,7 +108,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.String() == "tab" {
 			if provider := a.activeProvider(); provider != nil && !provider.IsTextInputActive() {
-				a.whichKey.Open(provider.WhichKeyCommands())
+				cmds := provider.WhichKeyCommands()
+				if len(cmds) > 0 {
+					a.whichKey.Open(cmds)
+				}
 				return a, nil
 			}
 		}
