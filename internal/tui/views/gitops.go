@@ -252,14 +252,14 @@ func (m *GitOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 		return groups
 
 	case gitScreenBranch:
-		return []whichkey.CommandGroup{
-			{Items: []whichkey.CommandKey{
-				{Key: "enter", Desc: "checkout"},
-				{Key: "n", Desc: "new branch"},
-				{Key: "d", Desc: "delete branch"},
-				{Key: "m", Desc: "merge"},
-			}},
+		var items []whichkey.CommandKey
+		items = append(items, whichkey.CommandKey{Key: "enter", Desc: "checkout"})
+		items = append(items, whichkey.CommandKey{Key: "n", Desc: "new branch"})
+		if len(m.branches) > 1 {
+			items = append(items, whichkey.CommandKey{Key: "d", Desc: "delete branch"})
+			items = append(items, whichkey.CommandKey{Key: "m", Desc: "merge"})
 		}
+		return []whichkey.CommandGroup{{Items: items}}
 
 	case gitScreenLog:
 		return []whichkey.CommandGroup{
