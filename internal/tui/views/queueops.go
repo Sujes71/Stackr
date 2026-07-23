@@ -280,6 +280,8 @@ func (m *QueueOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if armMsg, ok := msg.(armDisarmMsg); ok {
 		if armMsg.generation == m.armGeneration {
 			m.deleteArmed = false
+			m.confirmAction = false
+			m.confirmCustomAction = false
 		}
 		return m, nil
 	}
@@ -921,12 +923,16 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.refreshParamInput()
 						} else {
 							m.confirmCustomAction = true
+							m.armGeneration++
+							return m, armDisarmAfter(m.armGeneration)
 						}
 						return m, nil
 					}
 					// Core action (no params or all params pre-filled): double confirmation
 					if act.execute != nil {
 						m.confirmAction = true
+						m.armGeneration++
+						return m, armDisarmAfter(m.armGeneration)
 					}
 				}
 				if act.disabledReason != "" {
@@ -2013,9 +2019,9 @@ func (m *QueueOpsModel) viewActions() string {
 	}
 
 	if m.confirmAction {
-		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n")
+		b.WriteString(styles.StyleError.Render("  Press enter again to execute") + "\n")
 	} else if m.confirmCustomAction {
-		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n")
+		b.WriteString(styles.StyleError.Render("  Press enter again to execute") + "\n")
 	}
 	return b.String()
 }

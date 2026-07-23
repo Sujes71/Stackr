@@ -276,6 +276,8 @@ func (m *DBOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if armMsg.generation == m.armGeneration {
 			m.deleteArmed = false
 			m.deleteActionArmed = false
+			m.confirmAction = false
+			m.confirmCustomAction = false
 		}
 		return m, nil
 	}
@@ -666,11 +668,15 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.paramInput.Focus()
 						} else {
 							m.confirmCustomAction = true
+						m.armGeneration++
+						return m, armDisarmAfter(m.armGeneration)
 						}
 						return m, nil
 					}
 					// Core action: require double confirmation
 					m.confirmAction = true
+					m.armGeneration++
+					return m, armDisarmAfter(m.armGeneration)
 				}
 				if act.disabledReason != "" {
 					m.lastResult = styles.StyleSubtitle.Render("Unavailable: " + act.disabledReason)
@@ -1351,7 +1357,7 @@ func (m *DBOpsModel) viewActions() string {
 	}
 
 	if m.confirmAction || m.confirmCustomAction {
-		b.WriteString(styles.StyleError.Render("  Press enter to execute, any other key to cancel") + "\n")
+		b.WriteString(styles.StyleError.Render("  Press enter again to execute") + "\n")
 	} else {
 		// Line 1: contextual actions (affect selected action)
 		var contextItems []styles.HelpItemResult

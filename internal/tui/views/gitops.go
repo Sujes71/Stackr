@@ -129,6 +129,7 @@ type GitOpsModel struct {
 	branchCreating     bool           // whether we're in "new branch" prompt mode
 	branchInput        textinput.Model // input for new branch name
 	branchMergeConfirm bool           // merge confirmation state
+	armGeneration      int            // incremented on each arm; timer only fires if generation matches
 
 	// Push state
 	hasUnpushed bool
@@ -333,6 +334,11 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 		m.spinnerFrame = 0
+
+	case armDisarmMsg:
+		if msg.generation == m.armGeneration {
+			m.branchMergeConfirm = false
+		}
 
 	case gitOpsRepoCheckMsg:
 		m.isRepo = msg.isRepo
@@ -1321,7 +1327,7 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// ── Merge confirm mode ─────────────────────────────────────────
 		if m.branchMergeConfirm {
 			switch msg.String() {
-			case "y":
+			case "m":
 				m.branchMergeConfirm = false
 				name := m.focusedBranchName()
 				if name == "" {
@@ -1418,7 +1424,8 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.branchMergeConfirm = true
-			return m, nil
+			m.armGeneration++
+			return m, armDisarmAfter(m.armGeneration)
 
 		case "d":
 			// Delete branch (direct — which-key handles multi-key via prefix children)
@@ -1540,7 +1547,7 @@ func (m *GitOpsModel) viewBranch() string {
 	if m.branchMergeConfirm {
 		focusBranch := m.focusedBranchName()
 		b.WriteString("\n")
-		b.WriteString(styles.StyleError.Render("  Press y to merge "+focusBranch+" into current, any key to cancel"))
+		b.WriteString(styles.StyleError.Render("  Press m again to merge "+focusBranch+" into current"))
 	}
 
 	b.WriteString("\n\n")
