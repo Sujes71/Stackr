@@ -182,7 +182,7 @@ func (m *MockOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 	}
 	return []whichkey.CommandGroup{
 		{Items: []whichkey.CommandKey{
-			{Key: "enter", Desc: "execute"},
+			{Key: "enter", Desc: "run"},
 		}},
 	}
 }

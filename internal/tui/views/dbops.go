@@ -200,7 +200,7 @@ func (m *DBOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 		}
 	case dbScreenSyncEnvActions:
 		items := []whichkey.CommandKey{
-			{Key: "enter", Desc: "execute"},
+			{Key: "enter", Desc: "run"},
 		}
 		if m.actionCursor >= 0 && m.actionCursor < len(m.actions) {
 			act := m.actions[m.actionCursor]
