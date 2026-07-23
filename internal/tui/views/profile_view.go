@@ -208,13 +208,15 @@ func (m *ProfileViewModel) whichKeyCommandsPF() []whichkey.CommandGroup {
 
 	// Port-Forward group
 	var pfItems []whichkey.CommandKey
-	pfItems = append(pfItems, whichkey.CommandKey{Key: "k", Desc: "discover"})
 	if len(forwards) > 0 {
 		runLabel := "run"
 		if m.cursor < len(forwards) && (forwards[m.cursor].State == portforward.ForwardRunning || forwards[m.cursor].State == portforward.ForwardStarting) {
 			runLabel = "stop"
 		}
 		pfItems = append(pfItems, whichkey.CommandKey{Key: "enter", Desc: runLabel})
+	}
+	pfItems = append(pfItems, whichkey.CommandKey{Key: "k", Desc: "discover"})
+	if len(forwards) > 0 {
 		pfItems = append(pfItems, whichkey.CommandKey{Key: "d", Desc: "delete"})
 		pfItems = append(pfItems, whichkey.CommandKey{Key: "e", Desc: "edit port"})
 	}
