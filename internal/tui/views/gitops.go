@@ -1029,7 +1029,6 @@ func (m *GitOpsModel) viewMain() string {
 		} else {
 			b.WriteString("  " + styles.StyleError.Render("This directory is not a git repository"))
 		}
-		b.WriteString("\n")
 		return b.String()
 	}
 
@@ -1041,7 +1040,6 @@ func (m *GitOpsModel) viewMain() string {
 		b.WriteString("\n\n")
 		b.WriteString("  " + styles.StyleSubtitle.Render("Working tree clean"))
 		b.WriteString(m.renderPendingOrDone())
-		b.WriteString("\n")
 		return b.String()
 	}
 

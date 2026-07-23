@@ -440,13 +440,7 @@ func (a *App) View() string {
 		// across all views, regardless of whether the body ends with \n or not.
 		body = strings.TrimRight(body, "\n")
 		out.WriteString(body)
-		// Git Ops panels already have internal spacing; use a single gap.
-		// All other views get a slightly larger gap for consistency.
-		if a.screen == ScreenGitOps {
-			out.WriteString("\n")
-		} else {
-			out.WriteString("\n\n")
-		}
+		out.WriteString("\n\n")
 		out.WriteString(whichKeyPanel)
 	} else {
 		out.WriteString(body)
