@@ -228,7 +228,7 @@ var Catalog = []CatalogEntry{
 			"MINIO_ROOT_USER":     "minioadmin",
 			"MINIO_ROOT_PASSWORD": "minioadmin",
 		},
-		DefaultVolumeTarget: "./data",
+		DefaultVolumeTarget: "/data",
 	},
 	{
 		Name:         "Mailpit",

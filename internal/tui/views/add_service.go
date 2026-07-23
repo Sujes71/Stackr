@@ -80,6 +80,8 @@ type AddServiceModel struct {
 
 	// volumes editor
 	volSource      textinput.Model
+	volTarget      textinput.Model
+	volTargetFix   string // resolved target from catalog; empty = user must type it
 	volNamed       bool
 	volumes        []config.VolumeMapping
 	defaultVolumes []config.VolumeMapping // snapshot for reset on re-entry
@@ -147,6 +149,11 @@ func NewAddService(cfg *config.Config, p *config.Profile, envName string) *AddSe
 	vs.CharLimit = 256
 	vs.Width = 30
 
+	vt := textinput.New()
+	vt.Placeholder = "/var/lib/postgresql/data"
+	vt.CharLimit = 256
+	vt.Width = 30
+
 	rn := textinput.New()
 	rn.Placeholder = "my-dev-server"
 	rn.CharLimit = 64
@@ -175,6 +182,7 @@ func NewAddService(cfg *config.Config, p *config.Profile, envName string) *AddSe
 		envKey:           ek,
 		envVal:           ev,
 		volSource:        vs,
+		volTarget:        vt,
 		runCmdName:       rn,
 		runCmdCmd:        rc,
 		runCmdWorkDir:    rw,
@@ -251,6 +259,7 @@ func (m *AddServiceModel) refocusInputs(step addSvcStep) tea.Cmd {
 		return textinput.Blink
 	case svcStepVolumes:
 		m.volSource.Focus()
+		m.volTarget.Blur()
 		return textinput.Blink
 	case svcStepRunCommand:
 		return m.focusRunCmdField(m.runCmdFocus)
@@ -870,7 +879,9 @@ func (m *AddServiceModel) handleEnvVars(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.resetArmed = false
 		m.svc.EnvVars = m.envVars
 		m.step = svcStepVolumes
+		m.volTargetFix = m.resolveVolumeTarget()
 		m.volSource.Focus()
+		m.volTarget.Blur()
 		return m, textinput.Blink
 	case key.Matches(msg, addSvcDelete):
 		k := strings.TrimSpace(m.envKey.Value())
@@ -944,12 +955,21 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, addSvcUpField), key.Matches(msg, addSvcDownField):
 		m.resetArmed = false
-		// Only one input now — up/down just focuses source
+		// Tab between source and target when target input is visible
+		if m.volTargetFix == "" && m.volTarget.Focused() {
+			m.volTarget.Blur()
+			m.volSource.Focus()
+		} else if m.volTargetFix == "" && m.volSource.Focused() {
+			m.volSource.Blur()
+			m.volTarget.Focus()
+		}
 		return m, nil
 	case key.Matches(msg, addSvcToggle):
 		m.resetArmed = false
 		m.volNamed = !m.volNamed
 		m.volSource.SetValue("")
+		m.volTarget.SetValue("")
+		m.volTargetFix = m.resolveVolumeTarget()
 		return m, nil
 	case key.Matches(msg, addSvcNext):
 		src := strings.TrimSpace(m.volSource.Value())
@@ -959,10 +979,13 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.fieldErrors["volume"] = "source must start with ./ or /"
 				return m, nil
 			}
-			// Resolve target automatically from image
-			tgt := m.resolveVolumeTarget()
+			// Resolve target: from catalog or user input
+			tgt := m.volTargetFix
 			if tgt == "" {
-				m.fieldErrors["volume"] = "unknown volume target for this image"
+				tgt = strings.TrimSpace(m.volTarget.Value())
+			}
+			if tgt == "" {
+				m.fieldErrors["volume"] = "target is required (e.g. /var/lib/data)"
 				return m, nil
 			}
 			// If target already exists, UPDATE the source instead of adding
@@ -984,6 +1007,7 @@ func (m *AddServiceModel) handleVolumes(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.resetArmed = false
 			m.volSource.SetValue("")
+			m.volTarget.SetValue("")
 			m.volSource.Focus()
 			return m, nil
 		}
@@ -1217,7 +1241,11 @@ func (m *AddServiceModel) updateActiveInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.envVal, cmd = m.envVal.Update(msg)
 		}
 	case svcStepVolumes:
-		m.volSource, cmd = m.volSource.Update(msg)
+		if m.volTarget.Focused() {
+			m.volTarget, cmd = m.volTarget.Update(msg)
+		} else {
+			m.volSource, cmd = m.volSource.Update(msg)
+		}
 	case svcStepRunCommand:
 		switch m.runCmdFocus {
 		case 0:
@@ -1659,16 +1687,30 @@ func (m *AddServiceModel) viewVolumes() string {
 	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 	normalStyle := lipgloss.NewStyle()
 
-	label := focusStyle
-	if !m.volSource.Focused() {
-		label = normalStyle
+	// Source input
+	srcLabel := normalStyle
+	if m.volSource.Focused() {
+		srcLabel = focusStyle
+	}
+	b.WriteString("  " + srcLabel.Render("Source: ") + m.volSource.View())
+	b.WriteString("  " + styles.StyleCode.Render(namedLabel) + "\n")
+
+	// Target input: show when catalog has no default for this image
+	if m.volTargetFix == "" {
+		tgtLabel := normalStyle
+		if m.volTarget.Focused() {
+			tgtLabel = focusStyle
+		}
+		b.WriteString("  " + tgtLabel.Render("Target: ") + m.volTarget.View())
+		b.WriteString("  " + styles.StyleSubtitle.Render("(container mount path)") + "\n")
+	} else {
+		b.WriteString("  " + styles.StyleSubtitle.Render("Target: ") + m.volTargetFix + "\n")
 	}
 
-	b.WriteString("  " + label.Render("Source: ") + m.volSource.View())
 	if errMsg, ok := m.fieldErrors["volume"]; ok {
 		b.WriteString("  " + styles.StyleError.Render("⚠ "+errMsg))
 	}
-	b.WriteString("  " + styles.StyleCode.Render(namedLabel) + "\n\n")
+	b.WriteString("\n")
 	win := opsWindow(len(m.volumes), max(0, len(m.volumes)-1), 1, m.height, addSvcOverheadFormList)
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
