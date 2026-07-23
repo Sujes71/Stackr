@@ -276,8 +276,8 @@ type RequestFolder struct {
 // RequestEnv is an independent environment for Request Ops (separate from Docker environments).
 // Each RequestEnv has its own base URL values and variables. Folders and requests are global.
 type RequestEnv struct {
-	Name      string           `yaml:"name"`                  // e.g. "local", "dev"
-	BaseURLs  []RequestBaseURL `yaml:"base_urls,omitempty"`   // per-env URL values for global folders
+	Name      string           `yaml:"name"`                // e.g. "local", "dev"
+	BaseURLs  []RequestBaseURL `yaml:"base_urls,omitempty"` // per-env URL values for global folders
 	Variables []RequestEnvVar  `yaml:"variables,omitempty"`
 	// Deprecated: Requests moved to Profile.RequestDefs. Kept only for migration.
 	Requests []RequestDef `yaml:"requests,omitempty"`
@@ -291,16 +291,16 @@ type RequestBaseURL struct {
 
 // RequestDef defines an HTTP request within an environment.
 type RequestDef struct {
-	Name         string            `yaml:"name"`
-	Method       string            `yaml:"method"`        // GET, POST, PUT, DELETE, PATCH, etc.
-	BaseURLName  string            `yaml:"base_url_name"` // references RequestBaseURL.Name
-	Path         string            `yaml:"path"`          // e.g. /api/v1/users
-	IsLogin      bool              `yaml:"is_login,omitempty"`
-	TokenPath    string            `yaml:"token_path,omitempty"`    // JSON path for token extraction, e.g. data.token
-	Headers      []RequestKV       `yaml:"headers,omitempty"`
-	Params       []RequestKV       `yaml:"params,omitempty"`
-	Body         string            `yaml:"body,omitempty"`
-	VariableRefs []string          `yaml:"variable_refs,omitempty"` // [{var_name}] referenced in body/headers/params
+	Name         string      `yaml:"name"`
+	Method       string      `yaml:"method"`        // GET, POST, PUT, DELETE, PATCH, etc.
+	BaseURLName  string      `yaml:"base_url_name"` // references RequestBaseURL.Name
+	Path         string      `yaml:"path"`          // e.g. /api/v1/users
+	IsLogin      bool        `yaml:"is_login,omitempty"`
+	TokenPath    string      `yaml:"token_path,omitempty"` // JSON path for token extraction, e.g. data.token
+	Headers      []RequestKV `yaml:"headers,omitempty"`
+	Params       []RequestKV `yaml:"params,omitempty"`
+	Body         string      `yaml:"body,omitempty"`
+	VariableRefs []string    `yaml:"variable_refs,omitempty"` // [{var_name}] referenced in body/headers/params
 }
 
 // RequestKV is a key-value pair for headers or query params.

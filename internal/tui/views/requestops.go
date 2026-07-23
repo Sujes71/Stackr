@@ -93,8 +93,8 @@ type RequestOpsModel struct {
 	// List screen state
 	listCursor       int
 	deleteArmed      bool
-	deleteArmedIsEnv bool   // true when D (env delete) is armed, false for d (item delete)
-	armGeneration    int    // incremented on each arm; timer only fires if generation matches
+	deleteArmedIsEnv bool // true when D (env delete) is armed, false for d (item delete)
+	armGeneration    int  // incremented on each arm; timer only fires if generation matches
 	listItems        []requestListItem
 
 	// Tree state
@@ -102,23 +102,23 @@ type RequestOpsModel struct {
 	parentURLIdx int          // when creating a request from a folder context, pre-select this URL (-1 = none)
 
 	// Create/Edit form state
-	formFocus    int
-	editingIdx   int
-	isURLForm    bool // true = Base URL form, false = Request form
-	methodName   string
-	methodCursor int
-	baseURLIdx   int
-	nameInput    textinput.Model
-	pathInput    textinput.Model
-	isLogin      bool
+	formFocus      int
+	editingIdx     int
+	isURLForm      bool // true = Base URL form, false = Request form
+	methodName     string
+	methodCursor   int
+	baseURLIdx     int
+	nameInput      textinput.Model
+	pathInput      textinput.Model
+	isLogin        bool
 	tokenPathInput textinput.Model
-	headerKV     []config.RequestKV
-	headerCursor int
-	paramKV      []config.RequestKV
-	paramCursor  int
-	bodyInput    textarea.Model
-	bodyEditMode bool
-	formError    string
+	headerKV       []config.RequestKV
+	headerCursor   int
+	paramKV        []config.RequestKV
+	paramCursor    int
+	bodyInput      textarea.Model
+	bodyEditMode   bool
+	formError      string
 
 	// KV builder state (headers or params)
 	kvBuilding       bool
@@ -127,14 +127,14 @@ type RequestOpsModel struct {
 	kvTarget         string // "headers" or "params"
 	kvOrigVal        string
 	kvDeleteArmed    bool
-	kvOverwriteIdx   int    // -1 = new pair, >=0 = overwrite existing pair at this index
-	kvContentTypeIdx int    // selector position for Content-Type value
-	kvContentTypeKey bool   // true when current key is "Content-Type"
+	kvOverwriteIdx   int  // -1 = new pair, >=0 = overwrite existing pair at this index
+	kvContentTypeIdx int  // selector position for Content-Type value
+	kvContentTypeKey bool // true when current key is "Content-Type"
 
 	// Variable prompt state
 	varPromptIdx    int
-	varPromptNames  []string           // ordered list of variable names (stable order)
-	varPromptValues map[string]string  // name -> value
+	varPromptNames  []string          // ordered list of variable names (stable order)
+	varPromptValues map[string]string // name -> value
 	varPromptInput  textinput.Model
 
 	// Running state
@@ -158,7 +158,7 @@ type RequestOpsModel struct {
 	newEnvInput textinput.Model
 
 	// Delete environment confirmation
-	deleting    string // env name pending confirmation
+	deleting     string // env name pending confirmation
 	confirmInput textinput.Model
 
 	// Dimensions
@@ -492,7 +492,7 @@ func (m *RequestOpsModel) buildListItems() []requestListItem {
 				items = append(items, requestListItem{
 					kind: reqItemRequest, label: req.Name,
 					sublabel: sublabel,
-					reqIdx: reqIdx, enabled: true,
+					reqIdx:   reqIdx, enabled: true,
 					isChild: true, parentIdx: i, depth: 1,
 				})
 			}
@@ -1546,18 +1546,18 @@ func (m *RequestOpsModel) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.baseURLIdx = (m.baseURLIdx + 1) % len(m.profile.RequestFolders)
 				}
 				return m, nil
-		case 4: // Is Login toggle
-			m.isLogin = !m.isLogin
-			// If we just turned off and cursor is on TokenPath, move up
-			if !m.isLogin && m.formFocus == 5 {
-				m.formFocus = 4
-			}
-			// Clamp if cursor is now out of range
-			if m.formFocus >= m.formFieldCount() {
-				m.formFocus = m.formFieldCount() - 1
-			}
-			m.refreshFormFocus()
-			return m, nil
+			case 4: // Is Login toggle
+				m.isLogin = !m.isLogin
+				// If we just turned off and cursor is on TokenPath, move up
+				if !m.isLogin && m.formFocus == 5 {
+					m.formFocus = 4
+				}
+				// Clamp if cursor is now out of range
+				if m.formFocus >= m.formFieldCount() {
+					m.formFocus = m.formFieldCount() - 1
+				}
+				m.refreshFormFocus()
+				return m, nil
 			case 6: // Headers — enter KV builder
 				m.enterKVBuilder("headers")
 				return m, nil

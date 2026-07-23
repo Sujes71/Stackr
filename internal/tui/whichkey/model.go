@@ -5,7 +5,7 @@ import tea "github.com/charmbracelet/bubbletea"
 // WhichKeyModel manages the which-key floating panel state machine.
 type WhichKeyModel struct {
 	state      whichKeyState
-	prefixPath []string      // breadcrumb for sub-menus (e.g. ["r"])
+	prefixPath []string       // breadcrumb for sub-menus (e.g. ["r"])
 	commands   []CommandGroup // current level commands
 	rootCmds   []CommandGroup // root level commands (for back navigation)
 	prefixKey  string         // which prefix key was pressed (for breadcrumb label)

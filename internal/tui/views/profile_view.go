@@ -62,11 +62,11 @@ type ProfileViewModel struct {
 	discoverySvcCur int
 
 	// ── Port Editing ──
-	editingPort      bool
-	portInput        textinput.Model
-	editFwdIdx       int
-	viewingService   int    // -1 = not viewing
-	viewingProcess   string // "" = not viewing
+	editingPort    bool
+	portInput      textinput.Model
+	editFwdIdx     int
+	viewingService int    // -1 = not viewing
+	viewingProcess string // "" = not viewing
 
 	// ── Docker Stats ──
 	showStats      bool
@@ -100,8 +100,8 @@ type ProfileViewModel struct {
 	//
 	// failedContainers marks a container as "failed" so the UI shows it
 	// immediately. The user can press Enter to retry.
-	prevContainerState map[string]string   // containerName → Docker state on previous tick
-	failedContainers   map[string]bool     // containerName → user-visible failed state
+	prevContainerState map[string]string // containerName → Docker state on previous tick
+	failedContainers   map[string]bool   // containerName → user-visible failed state
 }
 
 type ProfileEnvState struct {
@@ -117,6 +117,10 @@ type ProfileNavState struct {
 
 // WhichKeyCommands returns the command catalog for Profile Docker/PF screens.
 func (m *ProfileViewModel) WhichKeyCommands() []whichkey.CommandGroup {
+	// Readonly sub-screens: no actionable commands
+	if m.viewingService >= 0 || m.showStats || m.viewingProcess != "" || m.inDiscovery {
+		return nil
+	}
 	if m.isPortForwardEnv() {
 		return m.whichKeyCommandsPF()
 	}

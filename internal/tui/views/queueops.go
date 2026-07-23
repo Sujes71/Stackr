@@ -62,7 +62,7 @@ type QueueOpsModel struct {
 	// SyncEnv list state
 	listCursor      int
 	deleteArmed     bool
-	armGeneration   int // incremented on each arm; timer only fires if generation matches
+	armGeneration   int    // incremented on each arm; timer only fires if generation matches
 	selectedEnv     string // name of selected QueueSyncEnv (empty = local)
 	selectedEnvName string // display name
 

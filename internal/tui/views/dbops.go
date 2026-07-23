@@ -49,20 +49,20 @@ type dbOpsDoneMsg struct {
 //   - SyncEnv Actions — export/import actions for the selected sync env
 //   - Wizard — delegates to AddSyncEnvModel for add/edit
 type DBOpsModel struct {
-	cfg            *config.Config
-	profile        *config.Profile
-	envName        string
-	serviceName    string
-	serviceIdx     int
-	errorRegistry  *ErrorRegistry
+	cfg           *config.Config
+	profile       *config.Profile
+	envName       string
+	serviceName   string
+	serviceIdx    int
+	errorRegistry *ErrorRegistry
 
 	// Internal screen
 	screen dbOpsScreen
 
 	// SyncEnv list state
-	listCursor     int
-	deleteArmed    bool
-	armGeneration  int // incremented on each arm; timer only fires if generation matches
+	listCursor    int
+	deleteArmed   bool
+	armGeneration int // incremented on each arm; timer only fires if generation matches
 
 	// SyncEnv actions state
 	selectedEnv  string
@@ -126,13 +126,13 @@ type DBOpsModel struct {
 
 func NewDBOps(cfg *config.Config, p *config.Profile, envName, serviceName string, errorRegistry *ErrorRegistry) *DBOpsModel {
 	m := &DBOpsModel{
-		cfg:            cfg,
-		profile:        p,
-		envName:        envName,
-		serviceName:    serviceName,
-		errorRegistry:  errorRegistry,
-		screen:         dbScreenSyncEnvList,
-		pendingOps:     make(map[string]string),
+		cfg:             cfg,
+		profile:         p,
+		envName:         envName,
+		serviceName:     serviceName,
+		errorRegistry:   errorRegistry,
+		screen:          dbScreenSyncEnvList,
+		pendingOps:      make(map[string]string),
 		customNameInput: textinput.New(),
 		customCmdInput:  textinput.New(),
 		paramInput:      textinput.New(),
@@ -543,16 +543,16 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.lastResult = styles.StyleError.Render("Service not found.")
 					return m, nil
 				}
-			if m.pendingStartLabel != "" {
-				m.pendingOps[m.pendingStartLabel] = "starting"
-			}
-			profileName := m.profile.Name
-			envName := m.envName
-			composeName := svc.ComposeName()
-			return m, tea.Batch(
-				func() tea.Msg {
-					err := docker.UpServiceWithTimeout(profileName, envName, composeName, 30*time.Second)
-					return serviceStartedMsg{err: err}
+				if m.pendingStartLabel != "" {
+					m.pendingOps[m.pendingStartLabel] = "starting"
+				}
+				profileName := m.profile.Name
+				envName := m.envName
+				composeName := svc.ComposeName()
+				return m, tea.Batch(
+					func() tea.Msg {
+						err := docker.UpServiceWithTimeout(profileName, envName, composeName, 30*time.Second)
+						return serviceStartedMsg{err: err}
 					},
 					spinnerCmd(),
 				)
@@ -671,8 +671,8 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.paramInput.Focus()
 						} else {
 							m.confirmCustomAction = true
-						m.armGeneration++
-						return m, armDisarmAfter(m.armGeneration)
+							m.armGeneration++
+							return m, armDisarmAfter(m.armGeneration)
 						}
 						return m, nil
 					}

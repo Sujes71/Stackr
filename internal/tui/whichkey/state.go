@@ -4,7 +4,7 @@ package whichkey
 type whichKeyState int
 
 const (
-	stateIdle  whichKeyState = iota // panel closed
-	stateRoot                       // panel open at root level
-	statePrefix                     // panel open in a prefix sub-menu
+	stateIdle   whichKeyState = iota // panel closed
+	stateRoot                        // panel open at root level
+	statePrefix                      // panel open in a prefix sub-menu
 )

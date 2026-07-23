@@ -95,9 +95,9 @@ type AddServiceModel struct {
 	// inline validation errors per field
 	fieldErrors map[string]string
 
-	height       int // terminal height (chrome already subtracted), set via SetSize
-	width        int // terminal width, set via WindowSizeMsg
-	spinnerFrame int // animated spinner frame for search/tag-fetch (AUDIT-027)
+	height        int // terminal height (chrome already subtracted), set via SetSize
+	width         int // terminal width, set via WindowSizeMsg
+	spinnerFrame  int // animated spinner frame for search/tag-fetch (AUDIT-027)
 	armGeneration int // incremented on each arm; timer only fires if generation matches
 }
 
@@ -1481,8 +1481,19 @@ func (m *AddServiceModel) viewName() string {
 			b.WriteString("  " + m.imageInput.View() + "\n")
 			b.WriteString("  Docker image to pull (e.g. postgres:16, mongo:4.2)\n")
 			b.WriteString("\n  " + styles.BackHelp(styles.HelpItem("↵", "next")))
+		} else {
+			// Step 2: confirm/enter service name
+			b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
+			focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
+			b.WriteString("  " + focusStyle.Render("Service name: ") + m.nameInput.View())
+			if errMsg, ok := m.fieldErrors["name"]; ok {
+				b.WriteString("  " + styles.StyleError.Render("⚠ "+errMsg))
+			}
+			b.WriteString("\n")
+			b.WriteString("  Used as the compose service key and container name suffix\n")
+			b.WriteString("\n  " + styles.BackHelp(styles.HelpItem("↵", "next")))
+		}
 	} else {
-		// Step 2: confirm/enter service name
 		b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
 		focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 		b.WriteString("  " + focusStyle.Render("Service name: ") + m.nameInput.View())
@@ -1491,20 +1502,9 @@ func (m *AddServiceModel) viewName() string {
 		}
 		b.WriteString("\n")
 		b.WriteString("  Used as the compose service key and container name suffix\n")
-		b.WriteString("\n  " + styles.BackHelp(styles.HelpItem("↵", "next")))
+		b.WriteString("\n" + styles.BackHelp(styles.HelpItem("↵", "next")))
 	}
-} else {
-	b.WriteString(fmt.Sprintf("  Image: %s\n\n", styles.StyleCode.Render(m.svc.FullImage())))
-	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
-	b.WriteString("  " + focusStyle.Render("Service name: ") + m.nameInput.View())
-	if errMsg, ok := m.fieldErrors["name"]; ok {
-		b.WriteString("  " + styles.StyleError.Render("⚠ "+errMsg))
-	}
-	b.WriteString("\n")
-	b.WriteString("  Used as the compose service key and container name suffix\n")
-	b.WriteString("\n" + styles.BackHelp(styles.HelpItem("↵", "next")))
-}
-return b.String()
+	return b.String()
 }
 
 func (m *AddServiceModel) viewPorts() string {
@@ -1801,7 +1801,7 @@ func (m *AddServiceModel) viewReview() string {
 	// Show port conflict error inline inside the review panel
 	if errMsg, ok := m.fieldErrors["port"]; ok {
 		b.WriteString("\n")
-		b.WriteString(styles.StyleError.Render("  ✗ "+errMsg))
+		b.WriteString(styles.StyleError.Render("  ✗ " + errMsg))
 	}
 
 	b.WriteString("\n")

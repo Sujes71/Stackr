@@ -134,7 +134,7 @@ func NewMockOps(cfg *config.Config, p *config.Profile, envName, serviceName stri
 	m.paramTextarea.ShowLineNumbers = false
 	m.paramTextarea.Placeholder = "{\n  \"key\": \"value\"\n}"
 	m.paramTextarea.CharLimit = 0
-		// Resolve service index for mutations
+	// Resolve service index for mutations
 	for i, svc := range m.currentEnv().Services {
 		if svc.Name == serviceName {
 			m.serviceIdx = i
@@ -821,19 +821,19 @@ func (m *MockOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.pendingOps = make(map[string]string)
 					return m, nil
 				}
-			if m.pendingStartLabel != "" {
-				m.pendingOps[m.pendingStartLabel] = "starting"
-			}
-			profileName := m.profile.Name
-			envName := m.envName
-			composeName := svc.ComposeName()
-			return m, tea.Batch(
-				func() tea.Msg {
-					err := docker.UpServiceWithTimeout(profileName, envName, composeName, 30*time.Second)
-					return serviceStartedMsg{err: err}
-				},
-				spinnerCmd(),
-			)
+				if m.pendingStartLabel != "" {
+					m.pendingOps[m.pendingStartLabel] = "starting"
+				}
+				profileName := m.profile.Name
+				envName := m.envName
+				composeName := svc.ComposeName()
+				return m, tea.Batch(
+					func() tea.Msg {
+						err := docker.UpServiceWithTimeout(profileName, envName, composeName, 30*time.Second)
+						return serviceStartedMsg{err: err}
+					},
+					spinnerCmd(),
+				)
 			case "n", "N", "esc":
 				m.promptStartService = false
 				m.pendingOps = make(map[string]string)

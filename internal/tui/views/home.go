@@ -23,7 +23,7 @@ type HomeModel struct {
 	cursor        int
 	profiles      []config.Profile
 	deleteArmed   bool
-	armGeneration int // incremented on each arm; timer only fires if generation matches
+	armGeneration int    // incremented on each arm; timer only fires if generation matches
 	deleting      string // non-empty → typed confirmation for deletion of this profile
 	confirmInput  textinput.Model
 	lastResult    string
@@ -281,11 +281,11 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.profiles) == 0 {
 				break
 			}
-		if !m.deleteArmed {
-			m.armGeneration++
-			m.deleteArmed = true
-			return m, armDisarmAfter(m.armGeneration)
-		}
+			if !m.deleteArmed {
+				m.armGeneration++
+				m.deleteArmed = true
+				return m, armDisarmAfter(m.armGeneration)
+			}
 			m.deleteArmed = false
 			name := m.profiles[m.cursor].Name
 			m.deleting = name
