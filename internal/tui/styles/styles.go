@@ -59,6 +59,16 @@ var (
 			BorderForeground(ColorError).
 			Padding(0, 1)
 
+	StylePanelRunning = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorSecondary).
+				Padding(0, 1)
+
+	StylePanelWarning = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorCode).
+				Padding(0, 1)
+
 	StyleInputLabel = lipgloss.NewStyle().
 			Foreground(ColorSecondary).
 			Bold(true)

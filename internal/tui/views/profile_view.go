@@ -2713,7 +2713,16 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 					rows = append(rows, styles.StylePanelFocused.Width(cardW).Render(row))
 				}
 			} else {
-				rows = append(rows, styles.StylePanel.Width(cardW).Render(row))
+				switch {
+				case m.failedContainers[cn]:
+					rows = append(rows, styles.StylePanelError.Width(cardW).Render(row))
+				case st.State == "running":
+					rows = append(rows, styles.StylePanelRunning.Width(cardW).Render(row))
+				case st.State == "restarting":
+					rows = append(rows, styles.StylePanelWarning.Width(cardW).Render(row))
+				default:
+					rows = append(rows, styles.StylePanel.Width(cardW).Render(row))
+				}
 			}
 		} else {
 			// Local process card
@@ -2870,14 +2879,21 @@ func (m *ProfileViewModel) renderPortForwards() string {
 		row := lipgloss.JoinVertical(lipgloss.Left, line1, addrLine)
 
 		if i == m.cursor {
-			if h.State == portforward.ForwardFailed {
-				rows = append(rows, styles.StylePanelError.Width(cardW).Render(row))
+				if h.State == portforward.ForwardFailed {
+					rows = append(rows, styles.StylePanelError.Width(cardW).Render(row))
+				} else {
+					rows = append(rows, styles.StylePanelFocused.Width(cardW).Render(row))
+				}
 			} else {
-				rows = append(rows, styles.StylePanelFocused.Width(cardW).Render(row))
+				switch h.State {
+				case portforward.ForwardFailed:
+					rows = append(rows, styles.StylePanelError.Width(cardW).Render(row))
+				case portforward.ForwardRunning:
+					rows = append(rows, styles.StylePanelRunning.Width(cardW).Render(row))
+				default:
+					rows = append(rows, styles.StylePanel.Width(cardW).Render(row))
+				}
 			}
-		} else {
-			rows = append(rows, styles.StylePanel.Width(cardW).Render(row))
-		}
 	}
 
 	result := strings.Join(rows, "\n")
