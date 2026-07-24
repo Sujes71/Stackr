@@ -774,6 +774,24 @@ func HasUnpushedCommits(dir string) bool {
 	return strings.TrimSpace(out) != ""
 }
 
+// HEADIsPushed returns true if the current HEAD commit exists on the remote.
+// Amend is only safe when HEAD is on the remote — otherwise you'd be
+// amending an already-local-only commit (pointless rewrite).
+func HEADIsPushed(dir string) bool {
+	// Check if HEAD is an ancestor of (or equal to) upstream
+	if _, err := run(dir, "merge-base", "--is-ancestor", "HEAD", "@{upstream}"); err == nil {
+		return true
+	}
+	// No upstream — try origin/<branch>
+	branch, err := run(dir, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return false
+	}
+	branch = strings.TrimSpace(branch)
+	_, err = run(dir, "merge-base", "--is-ancestor", "HEAD", "origin/"+branch)
+	return err == nil
+}
+
 // Prune runs `git remote prune origin`.
 func Prune(dir string) error {
 	_, err := run(dir, "remote", "prune", "origin")

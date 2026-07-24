@@ -145,6 +145,7 @@ type GitOpsModel struct {
 
 	// Push state
 	hasUnpushed bool
+	headPushed  bool // true if HEAD commit exists on remote (amend guard)
 
 	// Stash state
 	hasStash bool // true if there's at least one stash entry
@@ -266,7 +267,7 @@ func (m *GitOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 		if m.stagedStart > 0 {
 			changesItems = append(changesItems, whichkey.CommandKey{Key: "c", Desc: "commit"})
 		}
-		if m.lastCommitMsg != "" {
+		if m.lastCommitMsg != "" && !m.headPushed {
 			changesItems = append(changesItems, whichkey.CommandKey{Key: "a", Desc: "amend"})
 		}
 
@@ -428,6 +429,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.hasUnpushed = git.HasUnpushedCommits(m.dir)
 			}
+			m.headPushed = git.HEADIsPushed(m.dir)
 			m.doneOp = ""
 			m.doneOpIsErr = false
 			m.doneOpAt = time.Time{}
@@ -498,6 +500,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clampBranchCursor()
 			// Refresh hasUnpushed after branch change (checkout changes upstream)
 			m.hasUnpushed = git.HasUnpushedCommits(m.dir)
+			m.headPushed = git.HEADIsPushed(m.dir)
 		}
 		// Clear all branch-related pending ops (checkout, delete, create, merge)
 		delete(m.pendingOps, "branches")
@@ -1051,6 +1054,10 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.String() == "a":
 			if m.screen != gitScreenMain {
 				break
+			}
+			if m.lastCommitMsg == "" || m.headPushed {
+				// No commit to amend or HEAD already on remote
+				return m, nil
 			}
 			m.screen = gitScreenCommit
 			m.amendMode = true

@@ -93,7 +93,7 @@ type RequestOpsModel struct {
 	// List screen state
 	listCursor       int
 	deleteArmed      bool
-	deleteArmedIsEnv bool // true when D (env delete) is armed, false for d (item delete)
+	deleteArmedIsEnv bool // true when r (env delete) is armed, false for d (item delete)
 	armGeneration    int  // incremented on each arm; timer only fires if generation matches
 	listItems        []requestListItem
 
@@ -302,6 +302,12 @@ func (m *RequestOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 		}
 
 		items = append(items, whichkey.CommandKey{Key: "n", Desc: "new env"})
+		if len(m.profile.RequestEnvs) > 0 {
+			env := m.currentEnv()
+			if env != nil && env.Name != "local" {
+				items = append(items, whichkey.CommandKey{Key: "r", Desc: "remove env"})
+			}
+		}
 		return []whichkey.CommandGroup{{Items: items}}
 	}
 	return nil
@@ -770,8 +776,8 @@ func (m *RequestOpsModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		// Delete environment (D key, double-press → confirm screen)
-		case msg.String() == "D":
+		// Delete environment (r key, double-press → confirm screen)
+		case msg.String() == "r":
 			env := m.currentEnv()
 			if env == nil || env.Name == "local" {
 				break
@@ -1092,7 +1098,7 @@ func (m *RequestOpsModel) viewList() string {
 
 	if m.deleteArmed {
 		if m.deleteArmedIsEnv {
-			b.WriteString("\n" + styles.StyleError.Render("  Press D again to confirm removal"))
+			b.WriteString("\n" + styles.StyleError.Render("  Press r again to confirm removal"))
 		} else {
 			b.WriteString("\n" + styles.StyleError.Render("  Press d again to confirm removal"))
 		}
