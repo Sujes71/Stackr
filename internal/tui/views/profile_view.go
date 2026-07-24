@@ -806,39 +806,97 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					delete(m.failedContainers, st.Name)
 					m.prevContainerState[st.Name] = curr
 
-				case (prev == "starting" || prev == "") && curr == "exited":
-					// Container failed to start (health check, dependency, etc.)
-					if !m.failedContainers[st.Name] {
-						m.failedContainers[st.Name] = true
-						delete(m.pendingOps, st.Name)
+			case (prev == "starting" || prev == "") && curr == "exited":
+				// Container failed to start (health check, dependency, etc.)
+				if !m.failedContainers[st.Name] {
+					m.failedContainers[st.Name] = true
+					delete(m.pendingOps, st.Name)
+					if m.errorRegistry != nil {
+						detail := fmt.Sprintf("prev=%s curr=%s", prev, curr)
+						m.errorRegistry.AddWithDetail("docker", fmt.Sprintf("%s failed to start", st.Name), detail)
 					}
-					m.prevContainerState[st.Name] = curr
+				}
+				m.prevContainerState[st.Name] = curr
 
-				case prev == "running" && (curr == "exited" || curr == "restarting"):
-					// Crash — mark failed immediately, no intermediate "stopped"
+			case prev == "starting" && curr == "stopped":
+				// OOM or resource kill during start — treat as crash
+				if !m.failedContainers[st.Name] {
+					m.failedContainers[st.Name] = true
+					delete(m.pendingOps, st.Name)
+					if m.errorRegistry != nil {
+						detail := fmt.Sprintf("prev=%s curr=%s", prev, curr)
+						m.errorRegistry.AddWithDetail("docker", fmt.Sprintf("%s killed during start", st.Name), detail)
+					}
+				}
+				m.prevContainerState[st.Name] = curr
+
+			case prev == "running" && (curr == "exited" || curr == "restarting"):
+				// Crash — mark failed immediately, no intermediate "stopped"
+				if !m.failedContainers[st.Name] {
+					m.failedContainers[st.Name] = true
+					delete(m.pendingOps, st.Name)
+					if m.errorRegistry != nil {
+						detail := fmt.Sprintf("prev=%s curr=%s", prev, curr)
+						m.errorRegistry.AddWithDetail("docker", fmt.Sprintf("%s crashed", st.Name), detail)
+					}
+				}
+				m.prevContainerState[st.Name] = curr
+
+			case prev == "running" && curr == "stopped":
+				// Running→stopped without user action = crash
+				op := m.pendingOps[st.Name]
+				if op == "stopping" {
+					delete(m.failedContainers, st.Name)
+				} else {
 					if !m.failedContainers[st.Name] {
 						m.failedContainers[st.Name] = true
-						delete(m.pendingOps, st.Name)
+						if m.errorRegistry != nil {
+							detail := fmt.Sprintf("prev=%s curr=%s (no pending stop)", prev, curr)
+							m.errorRegistry.AddWithDetail("docker", fmt.Sprintf("%s stopped unexpectedly", st.Name), detail)
+						}
 					}
-					m.prevContainerState[st.Name] = curr
+				}
+				delete(m.pendingOps, st.Name)
+				m.prevContainerState[st.Name] = curr
 
 				case prev == "restarting" && curr == "running":
 					// Recovery from restart — don't mark failed
 					m.prevContainerState[st.Name] = curr
 
-				case prev != "" && curr == "stopped":
-					op := m.pendingOps[st.Name]
-					if op == "stopping" {
-						// User-initiated stop — show "stopped"
-						delete(m.failedContainers, st.Name)
-					} else {
-						// Unexpected stop → treat as crash
-						if !m.failedContainers[st.Name] {
-							m.failedContainers[st.Name] = true
+			case prev == "restarting" && (curr == "exited" || curr == "stopped"):
+				// Restart loop exhausted — mark failed
+				if !m.failedContainers[st.Name] {
+					m.failedContainers[st.Name] = true
+					delete(m.pendingOps, st.Name)
+					if m.errorRegistry != nil {
+						detail := fmt.Sprintf("prev=%s curr=%s", prev, curr)
+						m.errorRegistry.AddWithDetail("docker", fmt.Sprintf("%s restart loop failed", st.Name), detail)
+					}
+				}
+				m.prevContainerState[st.Name] = curr
+
+				case prev == "exited" && curr == "running":
+					// Container came back (retry policy or manual restart)
+					delete(m.failedContainers, st.Name)
+					m.prevContainerState[st.Name] = curr
+
+			case prev != "" && curr == "stopped":
+				op := m.pendingOps[st.Name]
+				if op == "stopping" {
+					// User-initiated stop — show "stopped"
+					delete(m.failedContainers, st.Name)
+				} else {
+					// Unexpected stop → treat as crash
+					if !m.failedContainers[st.Name] {
+						m.failedContainers[st.Name] = true
+						if m.errorRegistry != nil {
+							detail := fmt.Sprintf("prev=%s curr=%s", prev, curr)
+							m.errorRegistry.AddWithDetail("docker", fmt.Sprintf("%s stopped unexpectedly", st.Name), detail)
 						}
 					}
-					delete(m.pendingOps, st.Name)
-					m.prevContainerState[st.Name] = curr
+				}
+				delete(m.pendingOps, st.Name)
+				m.prevContainerState[st.Name] = curr
 
 				default:
 					// Any other transition (e.g. running → running, starting →
@@ -1026,7 +1084,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.isPortForwardEnv() {
 			envName := m.profile.Environments[m.activeEnv].Name
 			for _, h := range m.forwardHandles[envName] {
-				if h.State == portforward.ForwardRunning {
+				if h.State == portforward.ForwardRunning || h.State == portforward.ForwardStarting {
 					h.CheckAlive()
 					// When health check detects failure, register in error registry
 					if h.State == portforward.ForwardFailed && h.Error != "" {
