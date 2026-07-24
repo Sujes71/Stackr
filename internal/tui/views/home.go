@@ -123,7 +123,7 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.importing = false
 		if msg.err != "" {
 			return m, func() tea.Msg {
-				return ErrorMsg{Context: "import", Message: msg.err}
+				return ErrorMsg{Context: "import", Message: "import failed", Detail: msg.err}
 			}
 		}
 		m.profiles = msg.profiles
@@ -198,7 +198,7 @@ func (m *HomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				path := filepath.Join(config.StackrDir(), "exports", name+".yaml")
 				if err := os.Remove(path); err != nil {
 					return m, func() tea.Msg {
-						return ErrorMsg{Context: "import", Message: "failed to delete: " + err.Error()}
+						return ErrorMsg{Context: "import", Message: "delete export file failed", Detail: err.Error()}
 					}
 				}
 				m.importFiles = append(m.importFiles[:m.importCursor], m.importFiles[m.importCursor+1:]...)

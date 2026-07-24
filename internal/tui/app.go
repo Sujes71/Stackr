@@ -129,7 +129,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.home.Init()
 
 	case views.ErrorMsg:
-		a.errorRegistry.Add(msg.Context, msg.Message)
+		detail := msg.Detail
+		if detail == "" {
+			detail = msg.Message
+		}
+		a.errorRegistry.AddWithDetail(msg.Context, msg.Message, detail)
 		a.errFlash = msg.Message
 		return a, views.ClearActionAfter(5 * time.Second)
 

@@ -1023,7 +1023,7 @@ func (m *QueueOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.lastResult = formatErrorMsg(errMsg)
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("queue_ops", msg.err.Error(), completedLabel)
+				m.errorRegistry.AddWithDetail("queue_ops", completedLabel+" failed", msg.err.Error())
 			}
 			return m, nil
 		}

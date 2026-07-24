@@ -192,7 +192,7 @@ func (m *NewProfileModel) saveProfile() tea.Cmd {
 			ActiveEnv:    m.envs[0],
 		}
 		if err := m.cfg.AddProfile(profile); err != nil {
-			return ErrorMsg{Context: "new_profile", Message: err.Error()}
+			return ErrorMsg{Context: "new_profile", Message: "save profile failed", Detail: err.Error()}
 		}
 		return ProfileSavedMsg{Config: m.cfg}
 	}

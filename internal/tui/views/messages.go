@@ -63,9 +63,12 @@ type requestOpsDoneMsg struct {
 
 // ErrorMsg carries a structured error to surface in the footer and register
 // in the ErrorRegistry. Context tags the source (e.g. "add_syncenv").
+// Message is the short summary for the error table; Detail is the full error
+// text shown when the user presses Enter (empty = same as Message).
 type ErrorMsg struct {
 	Context string
 	Message string
+	Detail  string // full error text for the expanded detail view (empty = same as Message)
 }
 
 // ── Discovery Messages ──

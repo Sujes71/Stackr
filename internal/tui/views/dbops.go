@@ -768,7 +768,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.lastResult = formatErrorMsg(msg.err.Error())
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("db_ops", msg.err.Error(), completedLabel)
+				m.errorRegistry.AddWithDetail("db_ops", completedLabel+" failed", msg.err.Error())
 			}
 			return m, nil
 		}
@@ -797,7 +797,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			errMsg := "Docker daemon failed to start"
 			m.lastResult = formatErrorMsg(errMsg)
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("docker_daemon", errMsg, "")
+				m.errorRegistry.AddWithDetail("docker_daemon", "Docker daemon failed to start", errMsg)
 			}
 			return m, nil
 		}
@@ -869,7 +869,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			errMsg := "start service: " + msg.err.Error()
 			m.lastResult = formatErrorMsg(errMsg)
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("db_ops", msg.err.Error(), "Start service")
+				m.errorRegistry.AddWithDetail("db_ops", "Start service failed", msg.err.Error())
 			}
 			return m, nil
 		}
@@ -923,7 +923,7 @@ func (m *DBOpsModel) updateActions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingOps = make(map[string]string)
 			m.lastResult = formatErrorMsg("container not ready after 30s")
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("db_ops", "container not ready after 30s", msg.label)
+				m.errorRegistry.AddWithDetail("db_ops", msg.label+" timeout", "Container not ready after 30s")
 			}
 			return m, nil
 		}

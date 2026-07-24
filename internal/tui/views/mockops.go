@@ -718,7 +718,7 @@ func (m *MockOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			// Capture error in registry
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("mock_ops", msg.err.Error(), completedLabel)
+				m.errorRegistry.AddWithDetail("mock_ops", completedLabel+" failed", msg.err.Error())
 			}
 			// Show errors in viewport instead of inline — MockServer error
 			// diffs are huge and break the action list layout.

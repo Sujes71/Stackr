@@ -1116,7 +1116,7 @@ func (m *AddServiceModel) saveLocalProcess(name, command, workDir string) tea.Cm
 		}
 		m.profile.UpdatedAt = time.Now()
 		if err := m.cfg.UpdateProfile(*m.profile); err != nil {
-			return ErrorMsg{Context: "add_service", Message: err.Error()}
+			return ErrorMsg{Context: "add_service", Message: "save profile failed", Detail: err.Error()}
 		}
 		return svcSavedMsg{}
 	}
@@ -1176,11 +1176,11 @@ func (m *AddServiceModel) saveService() tea.Cmd {
 		}
 		m.profile.UpdatedAt = time.Now()
 		if err := m.cfg.UpdateProfile(*m.profile); err != nil {
-			return ErrorMsg{Context: "add_service", Message: err.Error()}
+			return ErrorMsg{Context: "add_service", Message: "save profile failed", Detail: err.Error()}
 		}
 		// Regenerate compose
 		if _, err := config.GenerateCompose(*m.profile, m.envName); err != nil {
-			return ErrorMsg{Context: "add_service", Message: "compose gen: " + err.Error()}
+			return ErrorMsg{Context: "add_service", Message: "compose generation failed", Detail: err.Error()}
 		}
 		return svcSavedMsg{}
 	}

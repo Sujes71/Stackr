@@ -818,8 +818,9 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.failedContainers[st.Name] = true
 					delete(m.pendingOps, st.Name)
 					if m.errorRegistry != nil {
-						detail := fmt.Sprintf("prev=%s curr=%s", prev, curr)
-						m.errorRegistry.AddWithDetail("docker", fmt.Sprintf("%s failed to start", st.Name), detail)
+						m.errorRegistry.AddWithDetail("docker",
+							fmt.Sprintf("%s failed to start", st.Name),
+							fmt.Sprintf("The container exited immediately after starting.\nThis usually means a startup error, missing dependency, or failed health check.\nCheck logs with: docker logs %s", st.Name))
 					}
 				}
 				m.prevContainerState[st.Name] = curr
@@ -830,8 +831,9 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.failedContainers[st.Name] = true
 					delete(m.pendingOps, st.Name)
 					if m.errorRegistry != nil {
-						detail := fmt.Sprintf("prev=%s curr=%s", prev, curr)
-						m.errorRegistry.AddWithDetail("docker", fmt.Sprintf("%s killed during start", st.Name), detail)
+						m.errorRegistry.AddWithDetail("docker",
+							fmt.Sprintf("%s killed during start", st.Name),
+							fmt.Sprintf("The container was stopped (OOM or resource kill) while starting.\nCheck 'docker inspect %s' or system logs for the kill reason.", st.Name))
 					}
 				}
 				m.prevContainerState[st.Name] = curr
@@ -845,8 +847,13 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if !m.failedContainers[st.Name] {
 						m.failedContainers[st.Name] = true
 						if m.errorRegistry != nil {
-							detail := fmt.Sprintf("prev=%s curr=%s", prev, curr)
-							m.errorRegistry.AddWithDetail("docker", fmt.Sprintf("%s crashed", st.Name), detail)
+							reason := "exited unexpectedly"
+							if curr == "restarting" {
+								reason = "entered a restart loop"
+							}
+							m.errorRegistry.AddWithDetail("docker",
+								fmt.Sprintf("%s crashed", st.Name),
+								fmt.Sprintf("The container was running and %s.\nThis usually indicates a runtime error or out-of-memory condition.\nCheck logs with: docker logs %s", reason, st.Name))
 						}
 					}
 				}
@@ -862,8 +869,9 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if !m.failedContainers[st.Name] {
 						m.failedContainers[st.Name] = true
 						if m.errorRegistry != nil {
-							detail := fmt.Sprintf("prev=%s curr=%s (no pending stop)", prev, curr)
-							m.errorRegistry.AddWithDetail("docker", fmt.Sprintf("%s stopped unexpectedly", st.Name), detail)
+							m.errorRegistry.AddWithDetail("docker",
+								fmt.Sprintf("%s stopped unexpectedly", st.Name),
+								fmt.Sprintf("The container was running and stopped without a user action.\nThis may be caused by a health check failure or resource limit.\nCheck logs with: docker logs %s", st.Name))
 						}
 					}
 				}
@@ -884,8 +892,9 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if !m.failedContainers[st.Name] {
 						m.failedContainers[st.Name] = true
 						if m.errorRegistry != nil {
-							detail := fmt.Sprintf("prev=%s curr=%s", prev, curr)
-							m.errorRegistry.AddWithDetail("docker", fmt.Sprintf("%s restart loop failed", st.Name), detail)
+							m.errorRegistry.AddWithDetail("docker",
+								fmt.Sprintf("%s restart loop failed", st.Name),
+								fmt.Sprintf("The container was in a restart loop and eventually stopped.\nThe restart policy exhausted its retries.\nCheck logs with: docker logs %s", st.Name))
 						}
 					}
 				}
@@ -907,8 +916,9 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if !m.failedContainers[st.Name] {
 						m.failedContainers[st.Name] = true
 						if m.errorRegistry != nil {
-							detail := fmt.Sprintf("prev=%s curr=%s", prev, curr)
-							m.errorRegistry.AddWithDetail("docker", fmt.Sprintf("%s stopped unexpectedly", st.Name), detail)
+							m.errorRegistry.AddWithDetail("docker",
+								fmt.Sprintf("%s stopped unexpectedly", st.Name),
+								fmt.Sprintf("The container stopped without a user action.\nThis may be caused by a health check failure, resource limit, or Docker daemon issue.\nCheck logs with: docker logs %s", st.Name))
 						}
 					}
 				}
@@ -1069,11 +1079,11 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.pendingOps, cn)
 		m.failedContainers[cn] = true
 		if m.errorRegistry != nil {
-			detail := msg.rawDetail
-			if detail == "" {
-				detail = msg.err.Error()
+			detail := msg.err.Error()
+			if msg.rawDetail != "" {
+				detail = detail + "\n" + msg.rawDetail
 			}
-			m.errorRegistry.AddWithDetail("compose_up", msg.err.Error(), detail)
+			m.errorRegistry.AddWithDetail("compose_up", msg.compName+" failed to start", detail)
 		}
 		return m, nil
 
@@ -1127,9 +1137,9 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if h.State == portforward.ForwardFailed && h.Error != "" {
 						if m.errorRegistry != nil {
 							ctx := fmt.Sprintf("pf/%s", envName)
-							msg := fmt.Sprintf("forward %s failed: %s", h.Config.Name, h.Error)
-							detail := fmt.Sprintf("local=%d remote=%d ns=%s svc=%s", h.Config.LocalPort, h.Config.RemotePort, h.Config.K8sNamespace, h.Config.K8sService)
-							m.errorRegistry.AddWithDetail(ctx, msg, detail)
+							short := fmt.Sprintf("forward %s failed", h.Config.Name)
+							detail := fmt.Sprintf("error: %s\nlocal=%d remote=%d ns=%s svc=%s", h.Error, h.Config.LocalPort, h.Config.RemotePort, h.Config.K8sNamespace, h.Config.K8sService)
+							m.errorRegistry.AddWithDetail(ctx, short, detail)
 						}
 					}
 				}

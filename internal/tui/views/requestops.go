@@ -586,7 +586,7 @@ func (m *RequestOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			// Capture error in registry
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("request_ops", msg.err.Error(), completedLabel)
+				m.errorRegistry.AddWithDetail("request_ops", completedLabel+" failed", msg.err.Error())
 			}
 			m.resultTitle = completedLabel
 			m.resultRaw = msg.err.Error()

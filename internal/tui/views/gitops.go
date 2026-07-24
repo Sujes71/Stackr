@@ -402,7 +402,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case gitOpsStatusMsg:
 		if msg.err != nil {
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "status")
+				m.errorRegistry.AddWithDetail("git_ops", "git status failed", msg.err.Error())
 			}
 			m.doneOp = msg.err.Error()
 			m.doneOpIsErr = true
@@ -450,7 +450,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case gitOpsDiffMsg:
 		if msg.err != nil {
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "diff")
+				m.errorRegistry.AddWithDetail("git_ops", "git diff failed", msg.err.Error())
 			}
 			m.doneOp = msg.err.Error()
 			m.doneOpIsErr = true
@@ -469,7 +469,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			// Capture error in registry
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
+				m.errorRegistry.AddWithDetail("git_ops", "git operation failed", msg.err.Error())
 			}
 			m.doneOp = msg.err.Error()
 			m.doneOpIsErr = true
@@ -488,7 +488,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			// Capture error in registry
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
+				m.errorRegistry.AddWithDetail("git_ops", "git branch failed", msg.err.Error())
 			}
 			m.doneOp = msg.err.Error()
 			m.doneOpIsErr = true
@@ -510,7 +510,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			// Capture error in registry
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
+				m.errorRegistry.AddWithDetail("git_ops", "git log failed", msg.err.Error())
 			}
 			m.doneOp = msg.err.Error()
 			m.doneOpIsErr = true
@@ -531,7 +531,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case gitOpsCommitFilesMsg:
 		if msg.err != nil {
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
+				m.errorRegistry.AddWithDetail("git_ops", "git commit files failed", msg.err.Error())
 			}
 			m.doneOp = msg.err.Error()
 			m.doneOpIsErr = true
@@ -559,7 +559,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case gitOpsCommitDiffMsg:
 		if msg.err != nil {
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "commit-diff")
+				m.errorRegistry.AddWithDetail("git_ops", "git commit diff failed", msg.err.Error())
 			}
 			m.doneOp = msg.err.Error()
 			m.doneOpIsErr = true
@@ -578,7 +578,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case gitOpsCreateBranchMsg:
 		if msg.err != nil {
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
+				m.errorRegistry.AddWithDetail("git_ops", "create branch failed", msg.err.Error())
 			}
 			m.doneOp = msg.err.Error()
 			m.doneOpIsErr = true
@@ -605,7 +605,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
+				m.errorRegistry.AddWithDetail("git_ops", "merge branch failed", msg.err.Error())
 			}
 			m.doneOp = msg.err.Error()
 			m.doneOpIsErr = true
@@ -627,7 +627,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.pendingOps, "conflict-check")
 		if msg.err != nil {
 			if m.errorRegistry != nil {
-				m.errorRegistry.AddWithDetail("git_ops", msg.err.Error(), "")
+				m.errorRegistry.AddWithDetail("git_ops", "conflict check failed", msg.err.Error())
 			}
 			m.doneOp = msg.err.Error()
 			m.doneOpIsErr = true
