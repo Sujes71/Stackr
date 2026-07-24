@@ -1280,21 +1280,6 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// ── Allow navigation while Docker daemon is starting ──
-		// Port-forward envs don't need Docker, so skip this guard there.
-		if m.dockerStarting && !m.isPortForwardEnv() {
-			switch {
-			case key.Matches(msg, profileKeys.up),
-				key.Matches(msg, profileKeys.down),
-				key.Matches(msg, profileKeys.switchEnvLeft),
-				key.Matches(msg, profileKeys.switchEnvRight),
-				key.Matches(msg, profileKeys.tab):
-				// safe — navigation and help pass through
-			default:
-				return m, nil
-			}
-		}
-
 		// ── Pending key sequence ────────────────────────────────
 		if m.keyPending != "" && !m.inputtingEnv && !m.inDiscovery && !m.editingPort {
 			pending := m.keyPending
