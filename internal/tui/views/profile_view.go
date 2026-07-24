@@ -2708,6 +2708,8 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 
 			if i == m.cursor {
 				rows = append(rows, styles.StylePanelFocused.Width(cardW).Render(row))
+			} else if m.failedContainers[cn] {
+				rows = append(rows, styles.StylePanelError.Width(cardW).Render(row))
 			} else {
 				rows = append(rows, styles.StylePanel.Width(cardW).Render(row))
 			}
