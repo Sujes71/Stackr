@@ -950,8 +950,15 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				fwdName := strings.TrimPrefix(key, "pf:")
 				for _, h := range m.currentForwards() {
 					if h.Config.Name == fwdName {
-						if (op == "starting" && (h.State == portforward.ForwardRunning || h.State == portforward.ForwardFailed)) ||
-							(op == "stopping" && (h.State == portforward.ForwardStopped || h.State == portforward.ForwardFailed)) {
+						if op == "starting" && (h.State == portforward.ForwardRunning || h.State == portforward.ForwardFailed) {
+							delete(m.pendingOps, key)
+						}
+						if op == "stopping" && (h.State == portforward.ForwardStopped || h.State == portforward.ForwardFailed) {
+							// If CheckAlive raced with Stop() and set ForwardFailed,
+							// force it back to ForwardStopped — the user initiated the stop.
+							if h.State == portforward.ForwardFailed {
+								_ = h.Stop()
+							}
 							delete(m.pendingOps, key)
 						}
 						break
