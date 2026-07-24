@@ -128,7 +128,7 @@ func (m *ErrorListModel) Init() tea.Cmd { return nil }
 
 func (m *ErrorListModel) SetSize(w, h int) {
 	m.width = w
-	m.height = max(0, h-4) // App chrome: header + separator + footer
+	m.height = max(0, h-5) // App chrome: header + sep + body gap + footer sep + quit
 	m.viewport.Width = w
 	m.viewport.Height = m.height
 }
