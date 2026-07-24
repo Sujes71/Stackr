@@ -83,6 +83,7 @@ type ProfileViewModel struct {
 	dockerStarting         bool
 	pendingDockerAction    string          // "toggle:env/composeName" or "stack-all", executed after Docker starts
 	dockerTargetContainers map[string]bool // containers that show spinner during dockerStarting
+	dockerGraceTicks       int             // ticks remaining after Docker daemon comes online; skip failure marking
 
 	// statusCache preserves Docker statuses per env so switching back shows
 	// the previous state immediately while loadStatus() refreshes in background.
@@ -770,6 +771,11 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.statuses = msg.statuses
 		m.statusErr = msg.err
+		// Grace period: when Docker daemon comes online, skip failure marking
+		// for a few ticks while containers stabilize through intermediate states.
+		if msg.daemonAvailable && !m.dockerAvailable {
+			m.dockerGraceTicks = 3 // 3 ticks × 3s = 9s grace
+		}
 		m.dockerAvailable = msg.daemonAvailable
 		if !msg.daemonAvailable && msg.fromLaunch {
 			// Docker start failed — clear the pending action
@@ -915,6 +921,19 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.prevContainerState[st.Name] = curr
 				}
 			}
+
+			// Grace period: after Docker daemon comes online, containers cycle
+			// through intermediate states (starting→stopped→running). Clear
+			// any failures that were just marked during this window.
+			if m.dockerGraceTicks > 0 {
+				m.dockerGraceTicks--
+				for cn := range m.failedContainers {
+					if strings.HasPrefix(cn, envPrefix) {
+						delete(m.failedContainers, cn)
+					}
+				}
+			}
+
 			// Clean stale entries for containers no longer in statuses
 			for cn := range m.prevContainerState {
 				if !strings.HasPrefix(cn, envPrefix) {
