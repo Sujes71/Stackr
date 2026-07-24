@@ -1872,7 +1872,7 @@ func (m *GitOpsModel) updateLog(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if len(pool) == 0 {
 						pool = m.commits
 					}
-					var matched []git.CommitInfo
+					matched := []git.CommitInfo{}
 					for _, c := range pool {
 						if strings.Contains(strings.ToLower(c.Hash), query) ||
 							strings.Contains(strings.ToLower(c.Author), query) ||
