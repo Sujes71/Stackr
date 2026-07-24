@@ -831,15 +831,20 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.prevContainerState[st.Name] = curr
 
 			case prev == "running" && (curr == "exited" || curr == "restarting"):
-				// Crash — mark failed immediately, no intermediate "stopped"
-				if !m.failedContainers[st.Name] {
-					m.failedContainers[st.Name] = true
-					delete(m.pendingOps, st.Name)
-					if m.errorRegistry != nil {
-						detail := fmt.Sprintf("prev=%s curr=%s", prev, curr)
-						m.errorRegistry.AddWithDetail("docker", fmt.Sprintf("%s crashed", st.Name), detail)
+				// Crash — but respect user-initiated stop
+				op := m.pendingOps[st.Name]
+				if op == "stopping" {
+					delete(m.failedContainers, st.Name)
+				} else {
+					if !m.failedContainers[st.Name] {
+						m.failedContainers[st.Name] = true
+						if m.errorRegistry != nil {
+							detail := fmt.Sprintf("prev=%s curr=%s", prev, curr)
+							m.errorRegistry.AddWithDetail("docker", fmt.Sprintf("%s crashed", st.Name), detail)
+						}
 					}
 				}
+				delete(m.pendingOps, st.Name)
 				m.prevContainerState[st.Name] = curr
 
 			case prev == "running" && curr == "stopped":
@@ -864,15 +869,21 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.prevContainerState[st.Name] = curr
 
 			case prev == "restarting" && (curr == "exited" || curr == "stopped"):
-				// Restart loop exhausted — mark failed
-				if !m.failedContainers[st.Name] {
-					m.failedContainers[st.Name] = true
-					delete(m.pendingOps, st.Name)
-					if m.errorRegistry != nil {
-						detail := fmt.Sprintf("prev=%s curr=%s", prev, curr)
-						m.errorRegistry.AddWithDetail("docker", fmt.Sprintf("%s restart loop failed", st.Name), detail)
+				// Restart loop exhausted — but check if user initiated stop
+				op := m.pendingOps[st.Name]
+				if op == "stopping" {
+					// User-initiated stop during restart loop — show stopped
+					delete(m.failedContainers, st.Name)
+				} else {
+					if !m.failedContainers[st.Name] {
+						m.failedContainers[st.Name] = true
+						if m.errorRegistry != nil {
+							detail := fmt.Sprintf("prev=%s curr=%s", prev, curr)
+							m.errorRegistry.AddWithDetail("docker", fmt.Sprintf("%s restart loop failed", st.Name), detail)
+						}
 					}
 				}
+				delete(m.pendingOps, st.Name)
 				m.prevContainerState[st.Name] = curr
 
 				case prev == "exited" && curr == "running":
