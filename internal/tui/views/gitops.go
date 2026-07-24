@@ -1395,7 +1395,17 @@ func (m *GitOpsModel) updateCommit(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return gitOpsDoneMsg{err: err}
 					}
 					files, _ := git.StatusPorcelain(m.dir)
-					return gitOpsStatusMsg{files: files}
+					commits, _ := git.Log(m.dir, 1)
+					lastMsg := ""
+					if len(commits) > 0 {
+						lastMsg = commits[0].Message
+					}
+					unpushed := git.HasUnpushedCommits(m.dir)
+					return gitOpsStatusMsg{
+						files:       files,
+						lastMsg:     &lastMsg,
+						hasUnpushed: &unpushed,
+					}
 				},
 				spinnerCmd(),
 			)
