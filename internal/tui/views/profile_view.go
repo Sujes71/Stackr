@@ -1281,7 +1281,8 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// ── Allow navigation while Docker daemon is starting ──
-		if m.dockerStarting {
+		// Port-forward envs don't need Docker, so skip this guard there.
+		if m.dockerStarting && !m.isPortForwardEnv() {
 			switch {
 			case key.Matches(msg, profileKeys.up),
 				key.Matches(msg, profileKeys.down),
