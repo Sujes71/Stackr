@@ -219,8 +219,21 @@ func (h *PortForwardHandle) Start() error {
 	h.done = doneCh
 	h.mu.Unlock()
 
+	// Background goroutine: drain stderr continuously so the OS pipe buffer
+	// never fills up. If kubectl writes more than ~64KB to stderr and nobody
+	// reads, kubectl blocks on the write, cmd.Wait() never returns, and
+	// doneCh never closes — making CheckAlive() permanently blind.
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			_, err := multiStderr.Read(buf)
+			if err != nil {
+				return // pipe closed (process exited or Wait finished)
+			}
+		}
+	}()
+
 	// Background goroutine: wait for process exit, then signal via close(doneCh).
-	// cmd.Wait() also closes stdout/stderr pipes, so it MUST be the last reader.
 	go func() {
 		cmd.Wait()
 		close(doneCh)
