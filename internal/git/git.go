@@ -35,9 +35,12 @@ type CommitInfo struct {
 
 // BranchInfo represents a local branch.
 type BranchInfo struct {
-	Name     string
-	Current  bool   // * marker
-	Tracking string // upstream tracking info
+	Name       string
+	Current    bool   // * marker
+	Tracking   string // upstream tracking info
+	Ahead      int    // commits ahead of tracking (pre-populated by BranchesDetailed)
+	Behind     int    // commits behind tracking (pre-populated by BranchesDetailed)
+	LastCommit string // last commit message (pre-populated by BranchesDetailed)
 }
 
 // StashInfo represents a stash entry.
@@ -237,6 +240,14 @@ func DiffNew(dir string, path string) (string, error) {
 	if info.IsDir() {
 		return diffNewDir(dir, path)
 	}
+	// Reject files over 1 MB — prevents UI freeze on large binaries (e.g. .db, .zip)
+	if info.Size() > 1<<20 {
+		return fmt.Sprintf("new file %s\n(binary or large file — %s, diff skipped)", path, humanSize(info.Size())), nil
+	}
+	// Reject binary files — check first 512 bytes for null byte
+	if isBinaryFile(fullPath) {
+		return fmt.Sprintf("new file %s\n(binary file — diff skipped)", path), nil
+	}
 	// Read file content directly — more reliable than git diff --no-index
 	content, err := os.ReadFile(fullPath)
 	if err != nil {
@@ -248,6 +259,38 @@ func DiffNew(dir string, path string) (string, error) {
 		b.WriteString("+" + line + "\n")
 	}
 	return b.String(), nil
+}
+
+// isBinaryFile checks the first 512 bytes of a file for null bytes.
+func isBinaryFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 512)
+	n, err := f.Read(buf)
+	if err != nil {
+		return false
+	}
+	for _, b := range buf[:n] {
+		if b == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// humanSize returns a human-readable file size string.
+func humanSize(bytes int64) string {
+	switch {
+	case bytes >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(bytes)/(1<<20))
+	case bytes >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(bytes)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
 }
 
 // diffNewDir lists all files in an untracked directory with their content.
@@ -265,8 +308,23 @@ func diffNewDir(dir, dirPath string) (string, error) {
 		}
 		// Show file header
 		b.WriteString(fmt.Sprintf("new file %s\n", relPath))
+		// Skip large or binary files
+		info, err := entry.Info()
+		if err != nil {
+			b.WriteString(fmt.Sprintf("  (cannot stat: %s)\n", err))
+			continue
+		}
+		if info.Size() > 1<<20 {
+			b.WriteString(fmt.Sprintf("  (large file — %s, diff skipped)\n", humanSize(info.Size())))
+			continue
+		}
+		fullPath := filepath.Join(fullDir, entry.Name())
+		if isBinaryFile(fullPath) {
+			b.WriteString("  (binary file — diff skipped)\n")
+			continue
+		}
 		// Show content as added lines
-		content, err := os.ReadFile(filepath.Join(fullDir, entry.Name()))
+		content, err := os.ReadFile(fullPath)
 		if err != nil {
 			b.WriteString(fmt.Sprintf("  (cannot read: %s)\n", err))
 			continue
@@ -467,6 +525,21 @@ func parseBranches(out string) []BranchInfo {
 		branches = append(branches, BranchInfo{Name: name, Current: current, Tracking: tracking})
 	}
 	return branches
+}
+
+// BranchesDetailed returns branches with ahead/behind counts and last commit
+// messages pre-populated. This avoids per-branch git calls during View() rendering.
+// The extra data is fetched sequentially here so View() stays pure and fast.
+func BranchesDetailed(dir string) ([]BranchInfo, error) {
+	branches, err := Branches(dir)
+	if err != nil {
+		return nil, err
+	}
+	for i := range branches {
+		branches[i].Ahead, branches[i].Behind = BranchAheadBehind(dir, branches[i].Name, branches[i].Tracking)
+		branches[i].LastCommit = BranchLastCommit(dir, branches[i].Name)
+	}
+	return branches, nil
 }
 
 // CreateBranch runs `git checkout -b <name>`.

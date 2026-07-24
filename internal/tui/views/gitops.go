@@ -448,6 +448,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.doneOpAt = time.Now()
 			m.diffOutput = ""
 			m.diffVP.SetContent("")
+			delete(m.pendingOps, "diff")
 			return m, doneExpireCmd()
 		} else {
 			m.diffOutput = colorDiff(msg.output)
@@ -455,6 +456,11 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.diffVP.GotoTop()
 		}
 		delete(m.pendingOps, "diff")
+		// If the cursor moved to a different file while the diff was loading,
+		// auto-fetch the new file's diff so the panel stays in sync.
+		if f := m.currentFile(); f != nil && (f.Path != m.diffFile || f.Staged != m.diffStaged) {
+			return m, m.cmdFetchDiff()
+		}
 
 	case gitOpsDoneMsg:
 		if msg.err != nil {
@@ -578,11 +584,14 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			delete(m.pendingOps, "create-branch")
 			return m, doneExpireCmd()
 		}
-		branches, _ := git.Branches(m.dir)
-		m.branches = branches
-		m.branchCursor = 0
 		delete(m.pendingOps, "create-branch")
-		return m, nil
+		return m, tea.Batch(
+			func() tea.Msg {
+				branches, err := git.BranchesDetailed(m.dir)
+				return gitOpsBranchMsg{branches: branches, err: err}
+			},
+			spinnerCmd(),
+		)
 
 	case gitOpsMergeMsg:
 		if msg.err != nil {
@@ -606,9 +615,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, doneExpireCmd()
 		}
 		delete(m.pendingOps, "merge-branch")
-		branches, _ := git.Branches(m.dir)
-		m.branches = branches
-		// Full status refresh to update hasUnpushed, file panels, stash, etc.
+		// Full status refresh to update hasUnpushed, file panels, stash, branches, etc.
 		return m, m.fullRefreshCmd()
 
 	case gitOpsConflictMsg:
@@ -756,6 +763,13 @@ func (m *GitOpsModel) cmdFetchDiff() tea.Cmd {
 	}
 	m.diffFile = f.Path
 	m.diffStaged = f.Staged
+	// Skip if a diff fetch is already in progress — the pending result will
+	// update the panel, and the next cursor stop will trigger a fresh fetch.
+	// This prevents stacking N git subprocess calls when the user scrolls
+	// quickly through the file list.
+	if _, pending := m.pendingOps["diff"]; pending {
+		return nil
+	}
 	path := f.Path
 	staged := f.Staged
 	statusCode := f.StatusCode
@@ -824,7 +838,7 @@ func (m *GitOpsModel) startPendingOpImmediate(key, label string) {
 // Call this INSIDE action closures on success — guarantees state is fresh.
 func (m *GitOpsModel) fullRefresh() gitOpsStatusMsg {
 	files, _ := git.StatusPorcelain(m.dir)
-	branches, _ := git.Branches(m.dir)
+	branches, _ := git.BranchesDetailed(m.dir)
 	stashes, _ := git.StashList(m.dir)
 	hasStash := len(stashes) > 0
 	commits, _ := git.Log(m.dir, 1)
@@ -954,7 +968,7 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.startPendingOpImmediate("branches", "loading")
 				return m, tea.Batch(
 					func() tea.Msg {
-						branches, err := git.Branches(m.dir)
+						branches, err := git.BranchesDetailed(m.dir)
 						return gitOpsBranchMsg{branches: branches, err: err}
 					},
 					spinnerCmd(),
@@ -1638,22 +1652,21 @@ func (m *GitOpsModel) viewBranch() string {
 			track = mutedStyle.Render("→ " + br.Tracking)
 		}
 
-		// Ahead/behind
-		ahead, behind := git.BranchAheadBehind(m.dir, br.Name, br.Tracking)
+		// Ahead/behind — pre-populated by BranchesDetailed, zero git calls in View()
 		sync := ""
-		if ahead > 0 || behind > 0 {
+		if br.Ahead > 0 || br.Behind > 0 {
 			parts := []string{}
-			if ahead > 0 {
-				parts = append(parts, mutedStyle.Render(fmt.Sprintf("↑%d", ahead)))
+			if br.Ahead > 0 {
+				parts = append(parts, mutedStyle.Render(fmt.Sprintf("↑%d", br.Ahead)))
 			}
-			if behind > 0 {
-				parts = append(parts, mutedStyle.Render(fmt.Sprintf("↓%d", behind)))
+			if br.Behind > 0 {
+				parts = append(parts, mutedStyle.Render(fmt.Sprintf("↓%d", br.Behind)))
 			}
 			sync = " " + strings.Join(parts, " ")
 		}
 
-		// Last commit message (truncated)
-		lastMsg := git.BranchLastCommit(m.dir, br.Name)
+		// Last commit message (truncated) — pre-populated by BranchesDetailed
+		lastMsg := br.LastCommit
 		if len(lastMsg) > 40 {
 			lastMsg = lastMsg[:37] + "..."
 		}
