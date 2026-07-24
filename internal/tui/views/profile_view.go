@@ -1028,6 +1028,15 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for _, h := range m.forwardHandles[envName] {
 				if h.State == portforward.ForwardRunning {
 					h.CheckAlive()
+					// When health check detects failure, register in error registry
+					if h.State == portforward.ForwardFailed && h.Error != "" {
+						if m.errorRegistry != nil {
+							ctx := fmt.Sprintf("pf/%s", envName)
+							msg := fmt.Sprintf("forward %s failed: %s", h.Config.Name, h.Error)
+							detail := fmt.Sprintf("local=%d remote=%d ns=%s svc=%s", h.Config.LocalPort, h.Config.RemotePort, h.Config.K8sNamespace, h.Config.K8sService)
+							m.errorRegistry.AddWithDetail(ctx, msg, detail)
+						}
+					}
 				}
 			}
 			return m, portforward.ForwardMonitorCmd()
@@ -2567,11 +2576,7 @@ func fitItemsFromCursor(cursor, total int, heights []int, avail int) itemWindow 
 }
 
 func forwardCardHeight(h *portforward.PortForwardHandle) int {
-	height := 4
-	if h.Error != "" && h.State == portforward.ForwardFailed {
-		height++
-	}
-	return height
+	return 4 // error text is in registry, not inline
 }
 
 func (m *ProfileViewModel) renderServices(env *config.Environment) string {
@@ -2798,11 +2803,8 @@ func (m *ProfileViewModel) renderPortForwards() string {
 		addr := fmt.Sprintf("  %d:%d  →  %s/%s", fwd.LocalPort, fwd.RemotePort, fwd.K8sNamespace, fwd.K8sService)
 		addrLine := styles.StyleSubtitle.Render(addr)
 
-		// Error line (only for failed)
+		// No inline error — failure is registered in error registry (E key)
 		row := lipgloss.JoinVertical(lipgloss.Left, line1, addrLine)
-		if h.Error != "" && h.State == portforward.ForwardFailed {
-			row = lipgloss.JoinVertical(lipgloss.Left, line1, addrLine, styles.StyleError.Render("     "+h.Error))
-		}
 
 		if i == m.cursor {
 			if h.State == portforward.ForwardFailed {
