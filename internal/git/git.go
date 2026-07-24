@@ -183,10 +183,26 @@ func parseStatusPorcelain(out string, dir string) []FileStatus {
 
 // expandUntrackedDir lists all files in an untracked directory recursively.
 func expandUntrackedDir(files []FileStatus, baseDir, relDir string) []FileStatus {
+	// Use git ls-files to list untracked files respecting .gitignore.
+	// This avoids showing gitignored files that os.ReadDir would include.
+	out, err := run(baseDir, "ls-files", "--others", "--exclude-standard", "--", relDir+"/")
+	if err == nil && strings.TrimSpace(out) != "" {
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				files = append(files, FileStatus{
+					StatusCode: '?',
+					Path:       line,
+					Staged:     false,
+				})
+			}
+		}
+		return files
+	}
+	// Fallback: list directory with os.ReadDir if git fails
 	fullDir := filepath.Join(baseDir, relDir)
 	entries, err := os.ReadDir(fullDir)
 	if err != nil {
-		// Can't read dir — add it as-is
 		return append(files, FileStatus{
 			StatusCode: '?',
 			Path:       relDir + "/",
