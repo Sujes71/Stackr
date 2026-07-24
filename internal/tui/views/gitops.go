@@ -433,6 +433,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.pendingOps, "status")
 		delete(m.pendingOps, "discard")
 		delete(m.pendingOps, "amend")
+		delete(m.pendingOps, "checkout")
 		delete(m.pendingOps, "delete-branch")
 		delete(m.pendingOps, "refresh")
 		// Auto-fetch diff for the currently selected file
