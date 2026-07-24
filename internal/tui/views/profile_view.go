@@ -805,6 +805,15 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				prev := m.prevContainerState[st.Name]
 				curr := st.State
 
+				// During grace period after Docker daemon comes online,
+				// skip the state machine entirely — just record the current
+				// state. Containers cycle through intermediate states
+				// (starting→stopped→running) that aren't real crashes.
+				if m.dockerGraceTicks > 0 {
+					m.prevContainerState[st.Name] = curr
+					continue
+				}
+
 				switch {
 				case prev == "starting" && curr == "running":
 					// Healthy start — clear pending op and any prior failure
@@ -922,18 +931,6 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			// Grace period: after Docker daemon comes online, containers cycle
-			// through intermediate states (starting→stopped→running). Clear
-			// any failures that were just marked during this window.
-			if m.dockerGraceTicks > 0 {
-				m.dockerGraceTicks--
-				for cn := range m.failedContainers {
-					if strings.HasPrefix(cn, envPrefix) {
-						delete(m.failedContainers, cn)
-					}
-				}
-			}
-
 			// Clean stale entries for containers no longer in statuses
 			for cn := range m.prevContainerState {
 				if !strings.HasPrefix(cn, envPrefix) {
@@ -950,6 +947,9 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					delete(m.prevContainerState, cn)
 					delete(m.failedContainers, cn)
 				}
+			}
+			if m.dockerGraceTicks > 0 {
+				m.dockerGraceTicks--
 			}
 		}
 
