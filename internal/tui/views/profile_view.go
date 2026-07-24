@@ -904,6 +904,11 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if op == "starting" && state == "exited" {
 					delete(m.pendingOps, key)
 				}
+				// When Docker daemon is down, statusMap is empty (state == "").
+				// Clear starting ops so the spinner doesn't get stuck.
+				if op == "starting" && state == "" && !m.dockerAvailable {
+					delete(m.pendingOps, key)
+				}
 				if op == "stopping" && (state == "" || state == "stopped" || state == "exited") {
 					delete(m.pendingOps, key)
 				}
@@ -914,6 +919,28 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					delete(m.pendingOps, key)
 				}
 				if op == "removing" {
+					delete(m.pendingOps, key)
+				}
+			}
+		}
+
+		// Clean up stale pf:* pendingOps that don't match any current forward.
+		// This handles env switches or deletions where the forward handle was removed
+		// but the pendingOp was never resolved.
+		if m.isPortForwardEnv() {
+			for key, op := range m.pendingOps {
+				if !strings.HasPrefix(key, "pf:") {
+					continue
+				}
+				fwdName := strings.TrimPrefix(key, "pf:")
+				found := false
+				for _, h := range m.currentForwards() {
+					if h.Config.Name == fwdName {
+						found = true
+						break
+					}
+				}
+				if !found || (op != "starting" && op != "stopping") {
 					delete(m.pendingOps, key)
 				}
 			}
@@ -1190,7 +1217,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					svc := svcs[svcIdx]
 					cn := containerName(m.profile.Name, env.Name, svc.ComposeName())
-					m.pendingOps[cn] = "resetting volume"
+					m.pendingOps[cn] = "resetting volumes"
 					return m, tea.Batch(
 						func() tea.Msg {
 							_ = docker.ResetServiceVolumes(m.profile.Name, env.Name, svc.ComposeName())
@@ -3197,6 +3224,8 @@ func (m *ProfileViewModel) handleDeleteEnv(_ tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Stop running forwards for this env, then clean up — async to avoid
 	// blocking the TUI for up to 5 s per forward during graceful termination.
+	// Capture handles BEFORE deleting so the async closure can still stop them.
+	envFwds := m.forwardHandles[envName]
 	delete(m.forwardHandles, envName)
 	delete(m.envState, envName)
 
@@ -3206,7 +3235,7 @@ func (m *ProfileViewModel) handleDeleteEnv(_ tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	return m, func() tea.Msg {
 		// Stop forwards (may take up to 5s per forward)
-		for _, h := range m.forwardHandles[envName] {
+		for _, h := range envFwds {
 			_ = h.Stop()
 		}
 		// Stop containers for this env (fire and forget)
