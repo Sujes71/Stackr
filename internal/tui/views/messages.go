@@ -195,6 +195,11 @@ type armDisarmMsg struct {
 	generation int
 }
 
+type envDeleteDoneMsg struct {
+	envName string
+	err     error
+}
+
 // armDisarmAfter schedules an armDisarmMsg after 4 seconds.
 // Pass the current armGeneration so the handler can ignore stale timers.
 func armDisarmAfter(gen int) tea.Cmd {
