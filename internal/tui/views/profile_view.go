@@ -2707,11 +2707,7 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 			}
 
 			if i == m.cursor {
-				if m.failedContainers[cn] {
-					rows = append(rows, styles.StylePanelError.Width(cardW).Render(row))
-				} else {
-					rows = append(rows, styles.StylePanelFocused.Width(cardW).Render(row))
-				}
+				rows = append(rows, styles.StylePanelFocused.Width(cardW).Render(row))
 			} else {
 				switch {
 				case m.failedContainers[cn]:
@@ -2881,11 +2877,7 @@ func (m *ProfileViewModel) renderPortForwards() string {
 		row := lipgloss.JoinVertical(lipgloss.Left, line1, addrLine)
 
 		if i == m.cursor {
-				if h.State == portforward.ForwardFailed {
-					rows = append(rows, styles.StylePanelError.Width(cardW).Render(row))
-				} else {
-					rows = append(rows, styles.StylePanelFocused.Width(cardW).Render(row))
-				}
+				rows = append(rows, styles.StylePanelFocused.Width(cardW).Render(row))
 			} else {
 				switch h.State {
 				case portforward.ForwardFailed:
