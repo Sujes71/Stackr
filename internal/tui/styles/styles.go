@@ -69,6 +69,11 @@ var (
 				BorderForeground(ColorCode).
 				Padding(0, 1)
 
+	StylePanelStarting = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorAccent).
+				Padding(0, 1)
+
 	StyleInputLabel = lipgloss.NewStyle().
 			Foreground(ColorSecondary).
 			Bold(true)

@@ -2720,6 +2720,8 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 					rows = append(rows, styles.StylePanelRunning.Width(cardW).Render(row))
 				case st.State == "restarting":
 					rows = append(rows, styles.StylePanelWarning.Width(cardW).Render(row))
+				case st.State == "starting":
+					rows = append(rows, styles.StylePanelStarting.Width(cardW).Render(row))
 				default:
 					rows = append(rows, styles.StylePanel.Width(cardW).Render(row))
 				}
@@ -2890,6 +2892,8 @@ func (m *ProfileViewModel) renderPortForwards() string {
 					rows = append(rows, styles.StylePanelError.Width(cardW).Render(row))
 				case portforward.ForwardRunning:
 					rows = append(rows, styles.StylePanelRunning.Width(cardW).Render(row))
+				case portforward.ForwardStarting:
+					rows = append(rows, styles.StylePanelStarting.Width(cardW).Render(row))
 				default:
 					rows = append(rows, styles.StylePanel.Width(cardW).Render(row))
 				}
