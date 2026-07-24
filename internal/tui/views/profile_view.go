@@ -2713,6 +2713,8 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 				switch {
 				case op == "starting" || op == "stopping":
 					rows = append(rows, styles.StylePanelStarting.Width(cardW).Render(row))
+				case !m.dockerAvailable && m.dockerTargetContainers[cn]:
+					rows = append(rows, styles.StylePanelStarting.Width(cardW).Render(row))
 				case m.failedContainers[cn]:
 					rows = append(rows, styles.StylePanelError.Width(cardW).Render(row))
 				case st.State == "running":
