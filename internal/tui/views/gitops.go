@@ -98,6 +98,11 @@ type gitOpsConflictMsg struct {
 
 type gitOpsConflictResolvedMsg struct{}
 
+type gitOpsLogSearchMsg struct {
+	commits []git.CommitInfo
+	err     error
+}
+
 type gitOpsDoneExpiredMsg struct{}
 
 // ── Model ─────────────────────────────────────────────────────────────────────
@@ -141,6 +146,7 @@ type GitOpsModel struct {
 	branchCreating     bool           // whether we're in "new branch" prompt mode
 	branchInput        textinput.Model // input for new branch name
 	branchMergeConfirm bool           // merge confirmation state
+	branchDeleteArmed  bool           // delete confirmation state (double-press d)
 	armGeneration      int            // incremented on each arm; timer only fires if generation matches
 
 	// Push state
@@ -159,11 +165,19 @@ type GitOpsModel struct {
 	lastCommitMsg string          // last commit message for amend
 
 	// Log detail (drill-down into a commit)
-	logDetailHash string          // hash of the commit being viewed
-	logFiles      []string        // files changed in the commit
-	logFileCursor int             // cursor in file list
-	logFileDiff   string          // diff of selected file in commit
-	logFileDiffVP viewport.Model  // viewport for commit file diff
+	logReturnScreen  gitScreen        // screen to return to when leaving log (main or branch)
+	logDetailHash    string           // hash of the commit being viewed
+	logFiles         []string         // files changed in the commit
+	logFileCursor    int              // cursor in file list
+	logFileDiff      string           // diff of selected file in commit
+	logFileDiffVP    viewport.Model   // viewport for commit file diff
+
+	// Log search
+	logSearching       bool
+	logSearchInput     textinput.Model
+	logSearchQuery     string
+	logAllCommits      []git.CommitInfo // fetched when entering search (up to 200)
+	logFilteredCommits []git.CommitInfo // filtered results (nil = not searching)
 
 	// Conflict resolver
 	conflictFiles  []string // files with unresolved merge conflicts
@@ -196,6 +210,11 @@ func NewGitOps(cfg *config.Config, p *config.Profile, cwd string, errorRegistry 
 	bi.CharLimit = 50
 	bi.Width = 40
 
+	si := textinput.New()
+	si.Placeholder = "search commits..."
+	si.CharLimit = 100
+	si.Width = 50
+
 	return &GitOpsModel{
 		cfg:            cfg,
 		profile:        p,
@@ -205,6 +224,7 @@ func NewGitOps(cfg *config.Config, p *config.Profile, cwd string, errorRegistry 
 		pendingStart:   time.Now(), // initialize so first spinner delay works
 		commitInput:    ci,
 		branchInput:    bi,
+		logSearchInput: si,
 		diffVP:         viewport.New(0, 0),
 	}
 }
@@ -283,15 +303,17 @@ func (m *GitOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 		items = append(items, whichkey.CommandKey{Key: "enter", Desc: "checkout"})
 		items = append(items, whichkey.CommandKey{Key: "n", Desc: "new branch"})
 		if len(m.branches) > 1 {
-			items = append(items, whichkey.CommandKey{Key: "d", Desc: "delete branch"})
+			items = append(items, whichkey.CommandKey{Key: "d", Desc: "delete"})
 			items = append(items, whichkey.CommandKey{Key: "m", Desc: "merge"})
 		}
+		items = append(items, whichkey.CommandKey{Key: "l", Desc: "log"})
 		return []whichkey.CommandGroup{{Items: items}}
 
 	case gitScreenLog:
 		return []whichkey.CommandGroup{
 			{Items: []whichkey.CommandKey{
 				{Key: "enter", Desc: "view detail"},
+				{Key: "/", Desc: "search"},
 			}},
 		}
 
@@ -311,7 +333,7 @@ func (m *GitOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 
 // IsTextInputActive returns true when a text input has focus on this screen.
 func (m *GitOpsModel) IsTextInputActive() bool {
-	return m.commitInput.Focused() || m.branchInput.Focused()
+	return m.commitInput.Focused() || m.branchInput.Focused() || m.logSearchInput.Focused()
 }
 
 func (m *GitOpsModel) SetSize(w, h int) {
@@ -382,6 +404,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case armDisarmMsg:
 		if msg.generation == m.armGeneration {
 			m.branchMergeConfirm = false
+			m.branchDeleteArmed = false
 		}
 
 	case gitOpsRepoCheckMsg:
@@ -520,6 +543,11 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logCursor = 0
 		}
 		delete(m.pendingOps, "log")
+
+	case gitOpsLogSearchMsg:
+		if msg.err == nil {
+			m.logAllCommits = msg.commits
+		}
 
 	case gitOpsLastCommitMsg:
 		m.lastCommitMsg = msg.msg
@@ -1089,6 +1117,7 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// Enter log screen
 			m.screen = gitScreenLog
+			m.logReturnScreen = gitScreenMain
 			m.logCursor = 0
 			if len(m.commits) == 0 {
 				m.startPendingOpImmediate("log", "loading")
@@ -1431,6 +1460,27 @@ func (m *GitOpsModel) viewCommit() string {
 	return b.String()
 }
 
+// ── Log search helpers ───────────────────────────────────────────────────────
+
+// visibleCommits returns the filtered commits when searching, or all commits otherwise.
+func (m *GitOpsModel) visibleCommits() []git.CommitInfo {
+	if m.logFilteredCommits != nil {
+		return m.logFilteredCommits
+	}
+	return m.commits
+}
+
+// clampLogCursor keeps logCursor within valid range for the visible commit list.
+func (m *GitOpsModel) clampLogCursor() {
+	total := len(m.visibleCommits())
+	if m.logCursor >= total {
+		m.logCursor = max(0, total-1)
+	}
+	if m.logCursor < 0 {
+		m.logCursor = 0
+	}
+}
+
 // ── Branch helpers ────────────────────────────────────────────────────────────
 
 // focusedBranchName returns the name of the branch at the current cursor, or "".
@@ -1507,6 +1557,36 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				)
 			default:
 				m.branchMergeConfirm = false
+				return m, nil
+			}
+		}
+
+		// ── Delete confirm mode ───────────────────────────────────────
+		if m.branchDeleteArmed {
+			switch msg.String() {
+			case "d":
+				m.branchDeleteArmed = false
+				name := m.focusedBranchName()
+				if name == "" || name == "main" {
+					return m, nil
+				}
+				if m.branchCursor >= 0 && m.branchCursor < len(m.branches) && m.branches[m.branchCursor].Current {
+					return m, nil
+				}
+				m.startPendingOpImmediate("delete-branch", "deleting")
+				deleteName := name
+				return m, tea.Batch(
+					func() tea.Msg {
+						err := git.DeleteBranch(m.dir, deleteName)
+						if err != nil {
+							return gitOpsDoneMsg{err: err}
+						}
+						return m.fullRefresh()
+					},
+					spinnerCmd(),
+				)
+			default:
+				m.branchDeleteArmed = false
 				return m, nil
 			}
 		}
@@ -1590,7 +1670,7 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, armDisarmAfter(m.armGeneration)
 
 		case "d":
-			// Delete branch (direct — which-key handles multi-key via prefix children)
+			// Arm delete — second press executes
 			name := m.focusedBranchName()
 			if name == "" || name == "main" {
 				return m, nil
@@ -1598,18 +1678,28 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.branchCursor >= 0 && m.branchCursor < len(m.branches) && m.branches[m.branchCursor].Current {
 				return m, nil
 			}
-			m.pendingOps["delete-branch"] = "deleting"
-			deleteName := name
-			return m, tea.Batch(
-				func() tea.Msg {
-					err := git.DeleteBranch(m.dir, deleteName)
-					if err != nil {
-						return gitOpsDoneMsg{err: err}
-					}
-					return m.fullRefresh()
-				},
-				spinnerCmd(),
-			)
+			m.branchDeleteArmed = true
+			m.armGeneration++
+			return m, armDisarmAfter(m.armGeneration)
+
+		case "l":
+			// Navigate to log screen
+			m.screen = gitScreenLog
+			m.logReturnScreen = gitScreenBranch
+			m.logCursor = 0
+			m.logSearching = false
+			m.logSearchInput.Blur()
+			if len(m.commits) == 0 {
+				m.startPendingOpImmediate("log", "loading")
+				return m, tea.Batch(
+					func() tea.Msg {
+						commits, err := git.Log(m.dir, 30)
+						return gitOpsLogMsg{commits: commits, err: err}
+					},
+					spinnerCmd(),
+				)
+			}
+			return m, nil
 		}
 	}
 	return m, nil
@@ -1710,6 +1800,13 @@ func (m *GitOpsModel) viewBranch() string {
 		b.WriteString(styles.StyleError.Render("  Press m again to merge "+focusBranch+" into current"))
 	}
 
+	// Delete confirm prompt
+	if m.branchDeleteArmed {
+		focusBranch := m.focusedBranchName()
+		b.WriteString("\n")
+		b.WriteString(styles.StyleError.Render("  Press d again to delete "+focusBranch))
+	}
+
 	b.WriteString("\n\n")
 
 	// Dynamic footer: only show actions that make sense for the focused branch
@@ -1744,10 +1841,79 @@ func (m *GitOpsModel) viewBranch() string {
 func (m *GitOpsModel) updateLog(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+
+		// ── Search mode ──────────────────────────────────────────────
+		if m.logSearching {
+			switch msg.String() {
+			case "esc":
+				m.logSearching = false
+				m.logSearchInput.Blur()
+				m.logSearchQuery = ""
+				m.logFilteredCommits = nil
+				m.logCursor = 0
+				return m, nil
+
+			case "enter":
+				m.logSearching = false
+				m.logSearchInput.Blur()
+				m.logCursor = 0
+				return m, nil
+
+			default:
+				var cmd tea.Cmd
+				m.logSearchInput, cmd = m.logSearchInput.Update(msg)
+				// Live filter as user types
+				query := strings.ToLower(strings.TrimSpace(m.logSearchInput.Value()))
+				m.logSearchQuery = query
+				if query == "" {
+					m.logFilteredCommits = nil
+				} else {
+					pool := m.logAllCommits
+					if len(pool) == 0 {
+						pool = m.commits
+					}
+					var matched []git.CommitInfo
+					for _, c := range pool {
+						if strings.Contains(strings.ToLower(c.Hash), query) ||
+							strings.Contains(strings.ToLower(c.Author), query) ||
+							strings.Contains(strings.ToLower(c.Message), query) {
+							matched = append(matched, c)
+							if len(matched) >= 50 {
+								break
+							}
+						}
+					}
+					m.logFilteredCommits = matched
+				}
+				m.clampLogCursor()
+				return m, cmd
+			}
+		}
+
+		// ── Normal log navigation ────────────────────────────────────
+		visible := m.visibleCommits()
+
 		switch msg.String() {
 		case "esc", "q", "l":
-			m.screen = gitScreenMain
+			m.screen = m.logReturnScreen
+			m.logSearching = false
+			m.logSearchInput.Blur()
+			m.logFilteredCommits = nil
 			return m, nil
+
+		case "/":
+			// Open search overlay
+			m.logSearching = true
+			m.logSearchInput.SetValue("")
+			m.logSearchInput.Focus()
+			// Fetch more commits in background if we don't have a pool yet
+			if len(m.logAllCommits) == 0 {
+				return m, func() tea.Msg {
+					commits, err := git.Log(m.dir, 200)
+					return gitOpsLogSearchMsg{commits: commits, err: err}
+				}
+			}
+			return m, textinput.Blink
 
 		case "up":
 			if m.logCursor > 0 {
@@ -1756,17 +1922,16 @@ func (m *GitOpsModel) updateLog(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "down":
-			if m.logCursor < len(m.commits)-1 {
+			if m.logCursor < len(visible)-1 {
 				m.logCursor++
 			}
 			return m, nil
 
 		case "enter":
-			// Drill down into commit
-			if m.logCursor >= len(m.commits) || len(m.commits) == 0 {
+			if m.logCursor >= len(visible) || len(visible) == 0 {
 				break
 			}
-			hash := m.commits[m.logCursor].Hash
+			hash := visible[m.logCursor].Hash
 			m.screen = gitScreenLogDetail
 			m.logDetailHash = hash
 			m.logFiles = nil
@@ -1789,28 +1954,55 @@ func (m *GitOpsModel) updateLog(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *GitOpsModel) viewLog() string {
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(styles.StyleHeader.Render(fmt.Sprintf("  Commit Log — %d commits", len(m.commits))))
+
+	visible := m.visibleCommits()
+
+	// Header
+	if m.logSearching && m.logSearchQuery != "" {
+		b.WriteString(styles.StyleHeader.Render(fmt.Sprintf("  Commit Log — %d commits (filtered)", len(visible))))
+	} else {
+		b.WriteString(styles.StyleHeader.Render(fmt.Sprintf("  Commit Log — %d commits", len(m.commits))))
+	}
 	b.WriteString("\n\n")
 
-	if len(m.commits) == 0 {
-		b.WriteString(styles.StyleSubtitle.Render("  No commits"))
+	// Search input (centered)
+	if m.logSearching {
+		searchLine := m.renderLogSearchInput()
+		b.WriteString(searchLine)
+		b.WriteString("\n\n")
+	}
+
+	if len(visible) == 0 {
+		if m.logSearching && m.logSearchQuery != "" {
+			b.WriteString(styles.StyleSubtitle.Render("  No matching commits"))
+		} else {
+			b.WriteString(styles.StyleSubtitle.Render("  No commits"))
+		}
 		b.WriteString("\n\n")
 		return b.String()
 	}
 
 	// Windowed rendering
-	overhead := 5 // header + blank + footer
-	win := opsWindow(len(m.commits), m.logCursor, 1, m.height, overhead)
+	overhead := 5
+	if m.logSearching {
+		overhead += 2
+	}
+	win := opsWindow(len(visible), m.logCursor, 1, m.height, overhead)
 
 	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 	mutedStyle := lipgloss.NewStyle().Foreground(styles.ColorMuted)
+	matchStyle := lipgloss.NewStyle().Foreground(styles.ColorSecondary).Bold(true)
 
 	for i := win.start; i < win.end; i++ {
-		c := m.commits[i]
+		c := visible[i]
 		hash := styles.StyleCode.Render(c.Hash)
 		author := mutedStyle.Render(c.Author)
 		date := mutedStyle.Render(c.Date)
 		message := c.Message
+
+		if m.logSearching && m.logSearchQuery != "" {
+			message = highlightMatch(message, m.logSearchQuery, matchStyle)
+		}
 
 		if i == m.logCursor {
 			cursor := focusStyle.Render("▸")
@@ -1822,6 +2014,39 @@ func (m *GitOpsModel) viewLog() string {
 
 	b.WriteString(m.renderPendingOrDone())
 	return b.String()
+}
+
+// renderLogSearchInput renders a centered search input line.
+func (m *GitOpsModel) renderLogSearchInput() string {
+	icon := lipgloss.NewStyle().Foreground(styles.ColorAccent).Render(" /")
+	input := m.logSearchInput.View()
+	line := icon + " " + input
+	lineW := lipgloss.Width(line)
+	leftPad := max(0, (m.width-lineW)/2)
+	return strings.Repeat(" ", leftPad) + line
+}
+
+// highlightMatch highlights substrings in s that match query (case-insensitive).
+func highlightMatch(s, query string, style lipgloss.Style) string {
+	if query == "" {
+		return s
+	}
+	lower := strings.ToLower(s)
+	lq := strings.ToLower(query)
+	var result strings.Builder
+	start := 0
+	for {
+		idx := strings.Index(lower[start:], lq)
+		if idx < 0 {
+			result.WriteString(s[start:])
+			break
+		}
+		result.WriteString(s[start : start+idx])
+		matchEnd := start + idx + len(query)
+		result.WriteString(style.Render(s[start+idx : matchEnd]))
+		start = matchEnd
+	}
+	return result.String()
 }
 
 // ── Log Detail Screen (commit files + diff) ──────────────────────────────────
