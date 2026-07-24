@@ -1670,11 +1670,7 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.keyPending = ""
 			env := m.currentEnv()
 			if env != nil {
-				if !m.dockerAvailable {
-					m.promptStartDocker = true
-					m.pendingDockerAction = "stack-all:" + env.Name
-					break
-				}
+				// Port-forward envs don't need Docker — check first
 				if m.isPortForwardEnv() {
 					envName := m.profile.Environments[m.activeEnv].Name
 					for _, h := range m.forwardHandles[envName] {
@@ -1685,6 +1681,11 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds := m.startEnvForwards(envName)
 					cmds = append(cmds, func() tea.Msg { return m.refreshStatusForEnv(envName) }, func() tea.Msg { return SpinnerTickMsg{} })
 					return m, tea.Batch(cmds...)
+				}
+				if !m.dockerAvailable {
+					m.promptStartDocker = true
+					m.pendingDockerAction = "stack-all:" + env.Name
+					break
 				}
 				// Populate pending ops for spinner
 				for i := range env.Services {
