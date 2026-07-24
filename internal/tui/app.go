@@ -282,7 +282,7 @@ func (a *App) handleNav(nav views.NavigateTo) (tea.Model, tea.Cmd) {
 					envName = "local"
 				}
 			}
-			if a.requestOps == nil || a.requestOps.EnvName() != envName {
+			if a.requestOps == nil || a.requestOps.ProfileName() != nav.ProfileName || a.requestOps.EnvName() != envName {
 				a.requestOps = views.NewRequestOps(a.cfg, p, envName, a.errorRegistry)
 				a.requestOps.SetSize(a.width, a.height)
 				return a, a.requestOps.Init()
