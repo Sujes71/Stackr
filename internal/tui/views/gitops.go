@@ -346,18 +346,7 @@ func (m *GitOpsModel) Init() tea.Cmd {
 			}
 			return gitOpsRepoCheckMsg{isRepo: isRepo, gitRoot: root, gitFound: true}
 		},
-		func() tea.Msg {
-			files, err := git.StatusPorcelain(m.dir)
-			return gitOpsStatusMsg{files: files, err: err}
-		},
-		func() tea.Msg {
-			// Fetch last commit message for amend feature
-			commits, err := git.Log(m.dir, 1)
-			if err == nil && len(commits) > 0 {
-				return gitOpsLastCommitMsg{msg: commits[0].Message}
-			}
-			return gitOpsLastCommitMsg{msg: ""}
-		},
+		m.fullRefreshCmd(),
 		spinnerCmd(),
 	)
 }
@@ -620,10 +609,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		branches, _ := git.Branches(m.dir)
 		m.branches = branches
 		// Full status refresh to update hasUnpushed, file panels, stash, etc.
-		return m, func() tea.Msg {
-			files, _ := git.StatusPorcelain(m.dir)
-			return gitOpsStatusMsg{files: files}
-		}
+		return m, m.fullRefreshCmd()
 
 	case gitOpsConflictMsg:
 		delete(m.pendingOps, "pull")
@@ -647,10 +633,7 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = gitScreenMain
 		m.conflictFiles = nil
 		// Full status refresh
-		return m, func() tea.Msg {
-			files, _ := git.StatusPorcelain(m.dir)
-			return gitOpsStatusMsg{files: files}
-		}
+		return m, m.fullRefreshCmd()
 	}
 
 	// ── E key: open error list ──
@@ -837,6 +820,31 @@ func (m *GitOpsModel) startPendingOpImmediate(key, label string) {
 	m.pendingOps[key] = label
 }
 
+// fullRefreshCmd returns a tea.Cmd that fetches ALL git state in one shot:
+// files, branches, stash, last commit msg, and push status.
+// Use this after every action instead of cherry-picking individual fields.
+func (m *GitOpsModel) fullRefreshCmd() tea.Cmd {
+	return func() tea.Msg {
+		files, _ := git.StatusPorcelain(m.dir)
+		branches, _ := git.Branches(m.dir)
+		stashes, _ := git.StashList(m.dir)
+		hasStash := len(stashes) > 0
+		commits, _ := git.Log(m.dir, 1)
+		lastMsg := ""
+		if len(commits) > 0 {
+			lastMsg = commits[0].Message
+		}
+		unpushed := git.HasUnpushedCommits(m.dir)
+		return gitOpsStatusMsg{
+			files:       files,
+			branches:    branches,
+			hasStash:    &hasStash,
+			lastMsg:     &lastMsg,
+			hasUnpushed: &unpushed,
+		}
+	}
+}
+
 // ── Done Op Expiry ────────────────────────────────────────────────────────────
 
 // doneExpireCmd returns a tea.Cmd that fires after the doneOp timeout
@@ -882,9 +890,9 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if err != nil {
 							return gitOpsDoneMsg{err: err}
 						}
-						files, err := git.StatusPorcelain(m.dir)
-						return gitOpsStatusMsg{files: files, err: err}
+						return gitOpsDoneMsg{result: "unstaged"}
 					},
+					m.fullRefreshCmd(),
 					spinnerCmd(),
 				)
 			}
@@ -895,9 +903,9 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
-					files, err := git.StatusPorcelain(m.dir)
-					return gitOpsStatusMsg{files: files, err: err}
+					return gitOpsDoneMsg{result: "staged"}
 				},
+				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
@@ -912,9 +920,9 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if err != nil {
 							return gitOpsDoneMsg{err: err}
 						}
-						files, err := git.StatusPorcelain(m.dir)
-						return gitOpsStatusMsg{files: files, err: err}
+						return gitOpsDoneMsg{result: "unstaged all"}
 					},
+					m.fullRefreshCmd(),
 					spinnerCmd(),
 				)
 			}
@@ -925,9 +933,9 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
-					files, err := git.StatusPorcelain(m.dir)
-					return gitOpsStatusMsg{files: files, err: err}
+					return gitOpsDoneMsg{result: "staged all"}
 				},
+				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
@@ -966,9 +974,9 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if err != nil {
 							return gitOpsDoneMsg{err: err}
 						}
-						files, _ := git.StatusPorcelain(m.dir)
-						return gitOpsStatusMsg{files: files}
+						return gitOpsDoneMsg{result: "pushed"}
 					},
+					m.fullRefreshCmd(),
 					spinnerCmd(),
 				)
 			}
@@ -986,9 +994,9 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 							}
 							return gitOpsDoneMsg{err: err}
 						}
-						files, _ := git.StatusPorcelain(m.dir)
-						return gitOpsStatusMsg{files: files}
+						return gitOpsDoneMsg{result: "pulled"}
 					},
+					m.fullRefreshCmd(),
 					spinnerCmd(),
 				)
 			}
@@ -1003,9 +1011,9 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if err != nil {
 							return gitOpsDoneMsg{err: err}
 						}
-						files, _ := git.StatusPorcelain(m.dir)
-						return gitOpsStatusMsg{files: files}
+						return gitOpsDoneMsg{result: "stashed"}
 					},
+					m.fullRefreshCmd(),
 					spinnerCmd(),
 				)
 			}
@@ -1020,9 +1028,9 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 						// Ensure nothing stays staged after pop
 						git.UnstageAll(m.dir)
-						files, _ := git.StatusPorcelain(m.dir)
-						return gitOpsStatusMsg{files: files}
+						return gitOpsDoneMsg{result: "stash popped"}
 					},
+					m.fullRefreshCmd(),
 					spinnerCmd(),
 				)
 			}
@@ -1044,9 +1052,9 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
-					files, _ := git.StatusPorcelain(m.dir)
-					return gitOpsStatusMsg{files: files}
+					return gitOpsDoneMsg{result: "discarded"}
 				},
+				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
@@ -1093,25 +1101,7 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.startPendingOpImmediate("refresh", "refreshing")
 			return m, tea.Batch(
-				func() tea.Msg {
-					files, _ := git.StatusPorcelain(m.dir)
-					branches, _ := git.Branches(m.dir)
-					stashes, _ := git.StashList(m.dir)
-					hasStash := len(stashes) > 0
-					commits, _ := git.Log(m.dir, 1)
-					lastMsg := ""
-					if len(commits) > 0 {
-						lastMsg = commits[0].Message
-					}
-					unpushed := git.HasUnpushedCommits(m.dir)
-					return gitOpsStatusMsg{
-						files:       files,
-						branches:    branches,
-						hasStash:    &hasStash,
-						lastMsg:     &lastMsg,
-						hasUnpushed: &unpushed,
-					}
-				},
+				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
@@ -1394,19 +1384,9 @@ func (m *GitOpsModel) updateCommit(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
-					files, _ := git.StatusPorcelain(m.dir)
-					commits, _ := git.Log(m.dir, 1)
-					lastMsg := ""
-					if len(commits) > 0 {
-						lastMsg = commits[0].Message
-					}
-					unpushed := git.HasUnpushedCommits(m.dir)
-					return gitOpsStatusMsg{
-						files:       files,
-						lastMsg:     &lastMsg,
-						hasUnpushed: &unpushed,
-					}
+					return gitOpsDoneMsg{result: "committed"}
 				},
+				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 		default:
@@ -1564,9 +1544,9 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
-					branches, _ := git.Branches(m.dir)
-					return gitOpsBranchMsg{branches: branches}
+					return gitOpsDoneMsg{result: "checked out"}
 				},
+				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
@@ -1620,9 +1600,9 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
-					branches, _ := git.Branches(m.dir)
-					return gitOpsBranchMsg{branches: branches}
+					return gitOpsDoneMsg{result: "branch deleted"}
 				},
+				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 		}
@@ -2047,9 +2027,9 @@ func (m *GitOpsModel) updateConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
-					files, _ := git.StatusPorcelain(m.dir)
-					return gitOpsStatusMsg{files: files}
+					return gitOpsDoneMsg{result: "aborted"}
 				},
+				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
@@ -2091,11 +2071,11 @@ func (m *GitOpsModel) updateConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
 								return gitOpsDoneMsg{err: err}
 							}
 						}
-						files, _ := git.StatusPorcelain(m.dir)
-						return gitOpsStatusMsg{files: files}
+						return gitOpsDoneMsg{result: "resolved"}
 					}
 					return gitOpsConflictMsg{files: remaining}
 				},
+				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
@@ -2127,11 +2107,11 @@ func (m *GitOpsModel) updateConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
 								return gitOpsDoneMsg{err: err}
 							}
 						}
-						files, _ := git.StatusPorcelain(m.dir)
-						return gitOpsStatusMsg{files: files}
+						return gitOpsDoneMsg{result: "resolved"}
 					}
 					return gitOpsConflictMsg{files: remaining}
 				},
+				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
@@ -2149,9 +2129,9 @@ func (m *GitOpsModel) updateConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
-					files, _ := git.StatusPorcelain(m.dir)
-					return gitOpsStatusMsg{files: files}
+					return gitOpsDoneMsg{result: "aborted"}
 				},
+				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
