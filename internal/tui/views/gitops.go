@@ -820,29 +820,31 @@ func (m *GitOpsModel) startPendingOpImmediate(key, label string) {
 	m.pendingOps[key] = label
 }
 
-// fullRefreshCmd returns a tea.Cmd that fetches ALL git state in one shot:
-// files, branches, stash, last commit msg, and push status.
-// Use this after every action instead of cherry-picking individual fields.
-func (m *GitOpsModel) fullRefreshCmd() tea.Cmd {
-	return func() tea.Msg {
-		files, _ := git.StatusPorcelain(m.dir)
-		branches, _ := git.Branches(m.dir)
-		stashes, _ := git.StashList(m.dir)
-		hasStash := len(stashes) > 0
-		commits, _ := git.Log(m.dir, 1)
-		lastMsg := ""
-		if len(commits) > 0 {
-			lastMsg = commits[0].Message
-		}
-		unpushed := git.HasUnpushedCommits(m.dir)
-		return gitOpsStatusMsg{
-			files:       files,
-			branches:    branches,
-			hasStash:    &hasStash,
-			lastMsg:     &lastMsg,
-			hasUnpushed: &unpushed,
-		}
+// fullRefresh fetches ALL git state synchronously and returns the status message.
+// Call this INSIDE action closures on success — guarantees state is fresh.
+func (m *GitOpsModel) fullRefresh() gitOpsStatusMsg {
+	files, _ := git.StatusPorcelain(m.dir)
+	branches, _ := git.Branches(m.dir)
+	stashes, _ := git.StashList(m.dir)
+	hasStash := len(stashes) > 0
+	commits, _ := git.Log(m.dir, 1)
+	lastMsg := ""
+	if len(commits) > 0 {
+		lastMsg = commits[0].Message
 	}
+	unpushed := git.HasUnpushedCommits(m.dir)
+	return gitOpsStatusMsg{
+		files:       files,
+		branches:    branches,
+		hasStash:    &hasStash,
+		lastMsg:     &lastMsg,
+		hasUnpushed: &unpushed,
+	}
+}
+
+// fullRefreshCmd wraps fullRefresh as a tea.Cmd for standalone use (Init, refresh key, etc).
+func (m *GitOpsModel) fullRefreshCmd() tea.Cmd {
+	return func() tea.Msg { return m.fullRefresh() }
 }
 
 // ── Done Op Expiry ────────────────────────────────────────────────────────────
@@ -890,9 +892,8 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if err != nil {
 							return gitOpsDoneMsg{err: err}
 						}
-						return gitOpsDoneMsg{result: "unstaged"}
+						return m.fullRefresh()
 					},
-					m.fullRefreshCmd(),
 					spinnerCmd(),
 				)
 			}
@@ -903,9 +904,8 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
-					return gitOpsDoneMsg{result: "staged"}
+					return m.fullRefresh()
 				},
-				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
@@ -920,9 +920,8 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if err != nil {
 							return gitOpsDoneMsg{err: err}
 						}
-						return gitOpsDoneMsg{result: "unstaged all"}
+						return m.fullRefresh()
 					},
-					m.fullRefreshCmd(),
 					spinnerCmd(),
 				)
 			}
@@ -933,9 +932,8 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
-					return gitOpsDoneMsg{result: "staged all"}
+					return m.fullRefresh()
 				},
-				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
@@ -974,9 +972,8 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if err != nil {
 							return gitOpsDoneMsg{err: err}
 						}
-						return gitOpsDoneMsg{result: "pushed"}
+						return m.fullRefresh()
 					},
-					m.fullRefreshCmd(),
 					spinnerCmd(),
 				)
 			}
@@ -994,9 +991,8 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 							}
 							return gitOpsDoneMsg{err: err}
 						}
-						return gitOpsDoneMsg{result: "pulled"}
+						return m.fullRefresh()
 					},
-					m.fullRefreshCmd(),
 					spinnerCmd(),
 				)
 			}
@@ -1011,9 +1007,8 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if err != nil {
 							return gitOpsDoneMsg{err: err}
 						}
-						return gitOpsDoneMsg{result: "stashed"}
+						return m.fullRefresh()
 					},
-					m.fullRefreshCmd(),
 					spinnerCmd(),
 				)
 			}
@@ -1028,9 +1023,8 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 						// Ensure nothing stays staged after pop
 						git.UnstageAll(m.dir)
-						return gitOpsDoneMsg{result: "stash popped"}
+						return m.fullRefresh()
 					},
-					m.fullRefreshCmd(),
 					spinnerCmd(),
 				)
 			}
@@ -1052,9 +1046,8 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
-					return gitOpsDoneMsg{result: "discarded"}
+					return m.fullRefresh()
 				},
-				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
@@ -1384,9 +1377,8 @@ func (m *GitOpsModel) updateCommit(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
-					return gitOpsDoneMsg{result: "committed"}
+					return m.fullRefresh()
 				},
-				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 		default:
@@ -1544,9 +1536,8 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
-					return gitOpsDoneMsg{result: "checked out"}
+					return m.fullRefresh()
 				},
-				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
@@ -1600,9 +1591,8 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
-					return gitOpsDoneMsg{result: "branch deleted"}
+					return m.fullRefresh()
 				},
-				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 		}
@@ -2027,9 +2017,8 @@ func (m *GitOpsModel) updateConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
-					return gitOpsDoneMsg{result: "aborted"}
+					return m.fullRefresh()
 				},
-				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
@@ -2071,11 +2060,10 @@ func (m *GitOpsModel) updateConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
 								return gitOpsDoneMsg{err: err}
 							}
 						}
-						return gitOpsDoneMsg{result: "resolved"}
+						return m.fullRefresh()
 					}
 					return gitOpsConflictMsg{files: remaining}
 				},
-				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
@@ -2107,11 +2095,10 @@ func (m *GitOpsModel) updateConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
 								return gitOpsDoneMsg{err: err}
 							}
 						}
-						return gitOpsDoneMsg{result: "resolved"}
+						return m.fullRefresh()
 					}
 					return gitOpsConflictMsg{files: remaining}
 				},
-				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
@@ -2129,9 +2116,8 @@ func (m *GitOpsModel) updateConflict(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return gitOpsDoneMsg{err: err}
 					}
-					return gitOpsDoneMsg{result: "aborted"}
+					return m.fullRefresh()
 				},
-				m.fullRefreshCmd(),
 				spinnerCmd(),
 			)
 
