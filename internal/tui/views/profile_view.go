@@ -2709,7 +2709,10 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 			if i == m.cursor {
 				rows = append(rows, styles.StylePanelFocused.Width(cardW).Render(row))
 			} else {
+				op := m.pendingOps[cn]
 				switch {
+				case op == "starting" || op == "stopping":
+					rows = append(rows, styles.StylePanelStarting.Width(cardW).Render(row))
 				case m.failedContainers[cn]:
 					rows = append(rows, styles.StylePanelError.Width(cardW).Render(row))
 				case st.State == "running":
@@ -2879,12 +2882,15 @@ func (m *ProfileViewModel) renderPortForwards() string {
 		if i == m.cursor {
 				rows = append(rows, styles.StylePanelFocused.Width(cardW).Render(row))
 			} else {
-				switch h.State {
-				case portforward.ForwardFailed:
+				op := m.pendingOps["pf:"+fwd.Name]
+				switch {
+				case op == "starting" || op == "stopping":
+					rows = append(rows, styles.StylePanelStarting.Width(cardW).Render(row))
+				case h.State == portforward.ForwardFailed:
 					rows = append(rows, styles.StylePanelError.Width(cardW).Render(row))
-				case portforward.ForwardRunning:
+				case h.State == portforward.ForwardRunning:
 					rows = append(rows, styles.StylePanelRunning.Width(cardW).Render(row))
-				case portforward.ForwardStarting:
+				case h.State == portforward.ForwardStarting:
 					rows = append(rows, styles.StylePanelStarting.Width(cardW).Render(row))
 				default:
 					rows = append(rows, styles.StylePanel.Width(cardW).Render(row))
