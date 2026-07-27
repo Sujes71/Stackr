@@ -96,6 +96,10 @@ type gitOpsConflictMsg struct {
 	err   error
 }
 
+type gitOpsCherryPickMsg struct {
+	err error
+}
+
 type gitOpsConflictResolvedMsg struct{}
 
 type gitOpsLogSearchMsg struct {
@@ -179,6 +183,11 @@ type GitOpsModel struct {
 	logAllCommits      []git.CommitInfo // fetched when entering search (up to 200)
 	logFilteredCommits []git.CommitInfo // filtered results (nil = not searching)
 
+	// Cherry-pick
+	logBranch             string          // branch whose log we're viewing (empty = HEAD)
+	cherryPickSelected    map[string]bool // selected commit hashes for cherry-pick
+	cherryPickExecuting   bool            // true while cherry-pick + push is running
+
 	// Conflict resolver
 	conflictFiles  []string // files with unresolved merge conflicts
 	conflictCursor int      // cursor in conflict file list
@@ -216,16 +225,17 @@ func NewGitOps(cfg *config.Config, p *config.Profile, cwd string, errorRegistry 
 	si.Width = 50
 
 	return &GitOpsModel{
-		cfg:            cfg,
-		profile:        p,
-		dir:            cwd,
-		errorRegistry:  errorRegistry,
-		pendingOps:     make(map[string]string),
-		pendingStart:   time.Now(), // initialize so first spinner delay works
-		commitInput:    ci,
-		branchInput:    bi,
-		logSearchInput: si,
-		diffVP:         viewport.New(0, 0),
+		cfg:                 cfg,
+		profile:             p,
+		dir:                 cwd,
+		errorRegistry:       errorRegistry,
+		pendingOps:          make(map[string]string),
+		pendingStart:        time.Now(), // initialize so first spinner delay works
+		commitInput:         ci,
+		branchInput:         bi,
+		logSearchInput:      si,
+		diffVP:              viewport.New(0, 0),
+		cherryPickSelected:  make(map[string]bool),
 	}
 }
 
@@ -310,12 +320,18 @@ func (m *GitOpsModel) WhichKeyCommands() []whichkey.CommandGroup {
 		return []whichkey.CommandGroup{{Items: items}}
 
 	case gitScreenLog:
-		return []whichkey.CommandGroup{
-			{Items: []whichkey.CommandKey{
-				{Key: "enter", Desc: "view detail"},
-				{Key: "/", Desc: "search"},
-			}},
+		var items []whichkey.CommandKey
+		items = append(items, whichkey.CommandKey{Key: "enter", Desc: "view detail"})
+		items = append(items, whichkey.CommandKey{Key: "/", Desc: "search"})
+		if m.logBranch != "" && !m.cherryPickExecuting {
+			if len(m.cherryPickSelected) > 0 {
+				items = append(items, whichkey.CommandKey{Key: "c", Desc: "deselect"})
+				items = append(items, whichkey.CommandKey{Key: "p", Desc: "pick + push"})
+			} else {
+				items = append(items, whichkey.CommandKey{Key: "c", Desc: "select"})
+			}
 		}
+		return []whichkey.CommandGroup{{Items: items}}
 
 	case gitScreenConflict:
 		return []whichkey.CommandGroup{
@@ -670,6 +686,35 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.conflictFiles = nil
 		// Full status refresh
 		return m, m.fullRefreshCmd()
+
+	case gitOpsCherryPickMsg:
+		m.cherryPickExecuting = false
+		delete(m.pendingOps, "cherry-pick")
+		if msg.err != nil {
+			// Check if this is a cherry-pick conflict
+			if git.ConflictInProgress(m.dir) {
+				files, _ := git.ConflictingFiles(m.dir)
+				m.conflictFiles = files
+				m.conflictCursor = 0
+				m.conflictIsRebase = false
+				m.screen = gitScreenConflict
+				m.cherryPickSelected = make(map[string]bool)
+				return m, nil
+			}
+			if m.errorRegistry != nil {
+				m.errorRegistry.AddWithDetail("git_ops", "cherry-pick failed", msg.err.Error())
+			}
+			m.doneOp = msg.err.Error()
+			m.doneOpIsErr = true
+			m.doneOpAt = time.Now()
+			m.cherryPickSelected = make(map[string]bool)
+			return m, doneExpireCmd()
+		}
+		m.doneOp = "cherry-pick + push done"
+		m.doneOpIsErr = false
+		m.doneOpAt = time.Now()
+		m.cherryPickSelected = make(map[string]bool)
+		return m, doneExpireCmd()
 	}
 
 	// ── E key: open error list ──
@@ -843,7 +888,7 @@ func (m *GitOpsModel) renderPendingOrDone() string {
 		if m.doneOpIsErr {
 			return "\n" + formatErrorMsg(m.doneOp)
 		}
-		return "\n" + styles.StyleSuccess.Render("  " + m.doneOp)
+		return "\n" + styles.StyleSuccess.Render("✓") + " " + m.doneOp
 	}
 	return ""
 }
@@ -1290,6 +1335,9 @@ func (m *GitOpsModel) renderFileList(panelW int) string {
 	// Windowed rendering
 	overhead := 4 // section headers + padding
 	win := opsWindow(len(m.files), m.fileCursor, 1, m.height, overhead)
+	if win.hasAbove || win.hasBelow {
+		win = opsWindow(len(m.files), m.fileCursor, 1, m.height, overhead+2)
+	}
 
 	for i := win.start; i < win.end; i++ {
 		f := m.files[i]
@@ -1689,17 +1737,32 @@ func (m *GitOpsModel) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logCursor = 0
 			m.logSearching = false
 			m.logSearchInput.Blur()
-			if len(m.commits) == 0 {
-				m.startPendingOpImmediate("log", "loading")
-				return m, tea.Batch(
-					func() tea.Msg {
-						commits, err := git.Log(m.dir, 30)
-						return gitOpsLogMsg{commits: commits, err: err}
-					},
-					spinnerCmd(),
-				)
+			m.logFilteredCommits = nil
+			m.logAllCommits = nil
+			m.cherryPickSelected = make(map[string]bool)
+			// Set logBranch based on focused branch
+			focusedBranch := m.focusedBranchName()
+			currentBranch, _ := git.CurrentBranch(m.dir)
+			if focusedBranch != "" && focusedBranch != currentBranch {
+				m.logBranch = focusedBranch
+			} else {
+				m.logBranch = ""
 			}
-			return m, nil
+			// Fetch log for the target branch
+			m.startPendingOpImmediate("log", "loading")
+			return m, tea.Batch(
+				func() tea.Msg {
+					var commits []git.CommitInfo
+					var err error
+					if m.logBranch != "" {
+						commits, err = git.LogBranch(m.dir, m.logBranch, 30)
+					} else {
+						commits, err = git.Log(m.dir, 30)
+					}
+					return gitOpsLogMsg{commits: commits, err: err}
+				},
+				spinnerCmd(),
+			)
 		}
 	}
 	return m, nil
@@ -1724,8 +1787,27 @@ func (m *GitOpsModel) viewBranch() string {
 	mutedStyle := lipgloss.NewStyle().Foreground(styles.ColorMuted)
 	currentMarker := styles.StyleError.Render("*") // red asterisk for current branch
 
-	overhead := 6
+	overhead := 6 // \n(1) + header(1) + \n\n(2) + footer-blank(2)
+	if m.branchCreating {
+		overhead += 2
+	}
+	if m.branchMergeConfirm {
+		overhead++
+	}
+	if m.branchDeleteArmed {
+		overhead++
+	}
 	win := opsWindow(len(m.branches), m.branchCursor, 1, m.height, overhead)
+	// Scroll indicators add 1-2 lines not counted in overhead.
+	// Recalculate with extra margin so header stays on screen.
+	if win.hasAbove || win.hasBelow {
+		win = opsWindow(len(m.branches), m.branchCursor, 1, m.height, overhead+2)
+	}
+
+	if win.hasAbove {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
+		b.WriteString("\n")
+	}
 
 	for i := win.start; i < win.end; i++ {
 		br := m.branches[i]
@@ -1774,13 +1856,8 @@ func (m *GitOpsModel) viewBranch() string {
 		}
 	}
 
-	// Scroll indicators
-	if win.hasAbove {
-		b.WriteString(styles.StyleSubtitle.Render("  ↑"))
-		b.WriteString("\n")
-	}
 	if win.hasBelow {
-		b.WriteString(styles.StyleSubtitle.Render("  ↓"))
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", len(m.branches)-win.end)))
 		b.WriteString("\n")
 	}
 
@@ -1899,6 +1976,8 @@ func (m *GitOpsModel) updateLog(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logSearching = false
 			m.logSearchInput.Blur()
 			m.logFilteredCommits = nil
+			m.logBranch = ""
+			m.cherryPickSelected = make(map[string]bool)
 			return m, nil
 
 		case "/":
@@ -1946,6 +2025,58 @@ func (m *GitOpsModel) updateLog(msg tea.Msg) (tea.Model, tea.Cmd) {
 				},
 				spinnerCmd(),
 			)
+
+		case "c":
+			// Toggle cherry-pick selection (only when viewing another branch's log)
+			if m.logBranch == "" || m.cherryPickExecuting {
+				break
+			}
+			if m.logCursor >= len(visible) || len(visible) == 0 {
+				break
+			}
+			hash := visible[m.logCursor].Hash
+			if m.cherryPickSelected[hash] {
+				delete(m.cherryPickSelected, hash)
+			} else {
+				m.cherryPickSelected[hash] = true
+			}
+			return m, nil
+
+		case "p":
+			// Cherry-pick selected commits + auto-push (only when viewing another branch's log)
+			if m.logBranch == "" || m.cherryPickExecuting {
+				break
+			}
+			if len(m.cherryPickSelected) == 0 {
+				break
+			}
+			// Sort selected commits chronologically (oldest first) using the visible order
+			var selectedHashes []string
+			for _, c := range visible {
+				if m.cherryPickSelected[c.Hash] {
+					selectedHashes = append(selectedHashes, c.Hash)
+				}
+			}
+			if len(selectedHashes) == 0 {
+				break
+			}
+			m.cherryPickExecuting = true
+			m.startPendingOpImmediate("cherry-pick", "cherry-picking")
+			return m, tea.Batch(
+				func() tea.Msg {
+					err := git.CherryPick(m.dir, selectedHashes)
+					if err != nil {
+						return gitOpsCherryPickMsg{err: err}
+					}
+					// Auto-push after successful cherry-pick
+					err = git.Push(m.dir)
+					if err != nil {
+						return gitOpsCherryPickMsg{err: fmt.Errorf("cherry-pick ok but push failed: %w", err)}
+					}
+					return gitOpsCherryPickMsg{err: nil}
+				},
+				spinnerCmd(),
+			)
 		}
 	}
 	return m, nil
@@ -1957,11 +2088,19 @@ func (m *GitOpsModel) viewLog() string {
 
 	visible := m.visibleCommits()
 
-	// Header
-	if m.logSearching && m.logSearchQuery != "" {
-		b.WriteString(styles.StyleHeader.Render(fmt.Sprintf("  Commit Log — %d commits (filtered)", len(visible))))
+	// Header — show branch name when viewing another branch's log
+	if m.logBranch != "" {
+		header := fmt.Sprintf("  Commit Log — %s — %d commits", m.logBranch, len(m.commits))
+		if m.logSearching && m.logSearchQuery != "" {
+			header = fmt.Sprintf("  Commit Log — %s — %d commits (filtered)", m.logBranch, len(visible))
+		}
+		b.WriteString(styles.StyleHeader.Render(header))
 	} else {
-		b.WriteString(styles.StyleHeader.Render(fmt.Sprintf("  Commit Log — %d commits", len(m.commits))))
+		if m.logSearching && m.logSearchQuery != "" {
+			b.WriteString(styles.StyleHeader.Render(fmt.Sprintf("  Commit Log — %d commits (filtered)", len(visible))))
+		} else {
+			b.WriteString(styles.StyleHeader.Render(fmt.Sprintf("  Commit Log — %d commits", len(m.commits))))
+		}
 	}
 	b.WriteString("\n\n")
 
@@ -1988,10 +2127,19 @@ func (m *GitOpsModel) viewLog() string {
 		overhead += 2
 	}
 	win := opsWindow(len(visible), m.logCursor, 1, m.height, overhead)
+	if win.hasAbove || win.hasBelow {
+		win = opsWindow(len(visible), m.logCursor, 1, m.height, overhead+2)
+	}
 
 	focusStyle := lipgloss.NewStyle().Foreground(styles.ColorAccent).Bold(true)
 	mutedStyle := lipgloss.NewStyle().Foreground(styles.ColorMuted)
 	matchStyle := lipgloss.NewStyle().Foreground(styles.ColorSecondary).Bold(true)
+	cherryStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213")) // pink for cherry
+
+	if win.hasAbove {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
+		b.WriteString("\n")
+	}
 
 	for i := win.start; i < win.end; i++ {
 		c := visible[i]
@@ -2004,12 +2152,23 @@ func (m *GitOpsModel) viewLog() string {
 			message = highlightMatch(message, m.logSearchQuery, matchStyle)
 		}
 
+		// Cherry-pick selection marker
+		marker := " "
+		if m.logBranch != "" && m.cherryPickSelected[c.Hash] {
+			marker = cherryStyle.Render("\U0001F352") // cherry emoji
+		}
+
 		if i == m.logCursor {
 			cursor := focusStyle.Render("▸")
-			b.WriteString(fmt.Sprintf(" %s %s %s %s %s\n", cursor, hash, author, date, message))
+			b.WriteString(fmt.Sprintf(" %s%s %s %s %s %s\n", cursor, marker, hash, author, date, message))
 		} else {
-			b.WriteString(fmt.Sprintf("   %s %s %s %s\n", hash, author, date, message))
+			b.WriteString(fmt.Sprintf("  %s %s %s %s %s\n", marker, hash, author, date, message))
 		}
+	}
+
+	if win.hasBelow {
+		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↓ %d more", len(visible)-win.end)))
+		b.WriteString("\n")
 	}
 
 	b.WriteString(m.renderPendingOrDone())

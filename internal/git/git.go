@@ -63,7 +63,7 @@ type TagInfo struct {
 
 // ── Core Runner ───────────────────────────────────────────────────────────────
 
-const defaultTimeout = 30 * time.Second
+const defaultTimeout = 60 * time.Second
 
 // run executes a git command in the given directory and returns combined output.
 func run(dir string, args ...string) (string, error) {
@@ -439,7 +439,7 @@ func DeleteUntracked(dir string) error {
 
 // ── Log ───────────────────────────────────────────────────────────────────────
 
-// Log returns the last n commits.
+// Log returns the last n commits from HEAD.
 func Log(dir string, n int) ([]CommitInfo, error) {
 	if n <= 0 {
 		n = 30
@@ -449,6 +449,34 @@ func Log(dir string, n int) ([]CommitInfo, error) {
 		return nil, err
 	}
 	return parseLog(out), nil
+}
+
+// LogBranch returns the last n commits from a specific branch.
+func LogBranch(dir string, branch string, n int) ([]CommitInfo, error) {
+	if n <= 0 {
+		n = 30
+	}
+	out, err := run(dir, "log", "--format=%h|%an|%ar|%s", fmt.Sprintf("-%d", n), branch)
+	if err != nil {
+		return nil, err
+	}
+	return parseLog(out), nil
+}
+
+// CurrentBranch returns the name of the currently checked out branch.
+func CurrentBranch(dir string) (string, error) {
+	out, err := run(dir, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// CherryPick applies a list of commit hashes onto the current branch.
+func CherryPick(dir string, hashes []string) error {
+	args := append([]string{"cherry-pick"}, hashes...)
+	_, err := run(dir, args...)
+	return err
 }
 
 func parseLog(out string) []CommitInfo {
