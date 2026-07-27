@@ -1742,6 +1742,9 @@ func (m *MockOpsModel) viewActions() string {
 		overhead += 3
 	}
 	win := opsWindow(totalActions, m.actionCursor, 2, m.height, overhead)
+	if win.hasAbove || win.hasBelow {
+		win = opsWindow(totalActions, m.actionCursor, 2, m.height, overhead+2)
+	}
 
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))

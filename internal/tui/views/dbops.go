@@ -459,6 +459,9 @@ func (m *DBOpsModel) viewSyncEnvList() string {
 		}
 		total := len(syncEnvs)
 		win := opsWindow(total, m.listCursor, 1, m.height, overhead)
+		if win.hasAbove || win.hasBelow {
+			win = opsWindow(total, m.listCursor, 1, m.height, overhead+2)
+		}
 		if win.hasAbove {
 			b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
 			b.WriteString("\n")
@@ -1308,6 +1311,9 @@ func (m *DBOpsModel) viewActions() string {
 	// Estimate ~2 lines per action (some have disabled reason, group headers)
 	itemHeight := 2
 	win := opsWindow(total, m.actionCursor, itemHeight, m.height, overhead)
+	if win.hasAbove || win.hasBelow {
+		win = opsWindow(total, m.actionCursor, itemHeight, m.height, overhead+2)
+	}
 
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))

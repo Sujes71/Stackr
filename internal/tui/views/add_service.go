@@ -1353,6 +1353,9 @@ func (m *AddServiceModel) viewCatalog() string {
 	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 
 	win := opsWindow(len(hub.Catalog), m.catalogCursor, 1, m.height, addSvcOverheadCatalog)
+	if win.hasAbove || win.hasBelow {
+		win = opsWindow(len(hub.Catalog), m.catalogCursor, 1, m.height, addSvcOverheadCatalog+2)
+	}
 
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
@@ -1397,6 +1400,9 @@ func (m *AddServiceModel) viewSearch() string {
 	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 
 	win := opsWindow(len(m.searchResults), m.searchCursor, 1, m.height, addSvcOverheadSearch)
+	if win.hasAbove || win.hasBelow {
+		win = opsWindow(len(m.searchResults), m.searchCursor, 1, m.height, addSvcOverheadSearch+2)
+	}
 
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
@@ -1444,6 +1450,9 @@ func (m *AddServiceModel) viewTags() string {
 	selStyle := lipgloss.NewStyle().Foreground(styles.ColorPrimary).Bold(true)
 
 	win := opsWindow(len(m.tags), m.tagCursor, 1, m.height, addSvcOverheadTags)
+	if win.hasAbove || win.hasBelow {
+		win = opsWindow(len(m.tags), m.tagCursor, 1, m.height, addSvcOverheadTags+2)
+	}
 
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
@@ -1528,6 +1537,9 @@ func (m *AddServiceModel) viewPorts() string {
 	b.WriteString("\n")
 	b.WriteString("  " + contLabel.Render("Container port: ") + m.portContainer.View() + "\n\n")
 	win := opsWindow(len(m.ports), max(0, len(m.ports)-1), 1, m.height, addSvcOverheadFormList)
+	if win.hasAbove || win.hasBelow {
+		win = opsWindow(len(m.ports), max(0, len(m.ports)-1), 1, m.height, addSvcOverheadFormList+2)
+	}
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
 		b.WriteString("\n")
@@ -1639,6 +1651,9 @@ func (m *AddServiceModel) viewEnvVars() string {
 	b.WriteString("\n")
 	b.WriteString("  " + valLabel.Render("Value:") + m.envVal.View() + "\n\n")
 	win := opsWindow(len(m.envVars), max(0, len(m.envVars)-1), 1, m.height, addSvcOverheadFormList)
+	if win.hasAbove || win.hasBelow {
+		win = opsWindow(len(m.envVars), max(0, len(m.envVars)-1), 1, m.height, addSvcOverheadFormList+2)
+	}
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
 		b.WriteString("\n")
@@ -1712,6 +1727,9 @@ func (m *AddServiceModel) viewVolumes() string {
 	}
 	b.WriteString("\n")
 	win := opsWindow(len(m.volumes), max(0, len(m.volumes)-1), 1, m.height, addSvcOverheadFormList)
+	if win.hasAbove || win.hasBelow {
+		win = opsWindow(len(m.volumes), max(0, len(m.volumes)-1), 1, m.height, addSvcOverheadFormList+2)
+	}
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
 		b.WriteString("\n")

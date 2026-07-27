@@ -465,6 +465,9 @@ func (m *QueueOpsModel) viewSyncEnvList() string {
 		overhead += 2
 	}
 	win := opsWindow(totalItems, m.listCursor, 1, m.height, overhead)
+	if win.hasAbove || win.hasBelow {
+		win = opsWindow(totalItems, m.listCursor, 1, m.height, overhead+2)
+	}
 
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
@@ -1948,6 +1951,9 @@ func (m *QueueOpsModel) viewActions() string {
 		overhead += 2
 	}
 	win := opsWindow(totalActions, m.actionCursor, 2, m.height, overhead)
+	if win.hasAbove || win.hasBelow {
+		win = opsWindow(totalActions, m.actionCursor, 2, m.height, overhead+2)
+	}
 
 	if win.hasAbove {
 		b.WriteString(styles.StyleSubtitle.Render(fmt.Sprintf("  ↑ %d more", win.start)))

@@ -1029,6 +1029,9 @@ func (m *RequestOpsModel) viewList() string {
 		overhead++
 	}
 	win := opsWindow(totalItems, m.listCursor, 1, m.height, overhead)
+	if win.hasAbove || win.hasBelow {
+		win = opsWindow(totalItems, m.listCursor, 1, m.height, overhead+2)
+	}
 
 	if win.hasAbove {
 		b.WriteString(mutedStyle.Render(fmt.Sprintf("  ↑ %d more", win.start)))
