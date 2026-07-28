@@ -660,8 +660,18 @@ func (m *GitOpsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, doneExpireCmd()
 		}
 		delete(m.pendingOps, "merge-branch")
-		// Full status refresh to update hasUnpushed, file panels, stash, branches, etc.
-		return m, m.fullRefreshCmd()
+		// Merge succeeded — auto-push
+		m.startPendingOpImmediate("push", "pushing after merge")
+		return m, tea.Batch(
+			func() tea.Msg {
+				err := git.Push(m.dir)
+				if err != nil {
+					return gitOpsDoneMsg{result: "merged " + msg.source, err: err}
+				}
+				return gitOpsDoneMsg{result: "merged " + msg.source + " and pushed"}
+			},
+			spinnerCmd(),
+		)
 
 	case gitOpsConflictMsg:
 		delete(m.pendingOps, "pull")
