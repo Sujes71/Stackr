@@ -890,6 +890,39 @@ func ExecPgRestore(profileName, envName, serviceName, dumpPath string) error {
 	return err
 }
 
+// PgDropSchema drops every non-system schema (all data and schema objects)
+// and recreates public. It is used before a schema import so the dump is
+// applied to a clean database instead of on top of existing objects.
+func PgDropSchema(profileName, envName, serviceName string) error {
+	container := ContainerName(profileName, envName, serviceName)
+
+	user, err := ContainerEnv(container, "POSTGRES_USER")
+	if err != nil {
+		return fmt.Errorf("read POSTGRES_USER: %w", err)
+	}
+	pass, _ := ContainerEnv(container, "POSTGRES_PASSWORD")
+	db, err := ContainerEnv(container, "POSTGRES_DB")
+	if err != nil {
+		return fmt.Errorf("read POSTGRES_DB: %w", err)
+	}
+
+	env := []string{}
+	if pass != "" {
+		env = append(env, "PGPASSWORD="+pass)
+	}
+	// Drops all non-system schemas (booking, client, ...) with CASCADE so both
+	// data and schema objects go away, then recreates public — schema dumps
+	// reference it (extensions, procedures) but usually do not recreate it.
+	_, err = ContainerExecWithEnv(container, env,
+		"psql", "-U", user, "-d", db,
+		"-c", `DO $$ DECLARE s text; BEGIN FOR s IN SELECT nspname FROM pg_namespace WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema' LOOP EXECUTE 'DROP SCHEMA IF EXISTS ' || quote_ident(s) || ' CASCADE'; END LOOP; END $$; CREATE SCHEMA IF NOT EXISTS public;`,
+	)
+	if err != nil {
+		return fmt.Errorf("drop schemas: %w", err)
+	}
+	return nil
+}
+
 // ExecMongoRestore restores a MongoDB dump directory into the container via docker exec.
 func ExecMongoRestore(profileName, envName, serviceName, dumpDir string) error {
 	container := ContainerName(profileName, envName, serviceName)

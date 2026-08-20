@@ -1552,7 +1552,7 @@ func (m *DBOpsModel) buildActionsList(se *config.SyncEnv) []actionItem {
 		actions = []actionItem{
 			{label: "Export schema", group: "Export", enabled: true, requiresDaemon: true, execute: m.exportSchema(se)},
 			{label: "Export data", group: "Export", enabled: true, requiresDaemon: true, execute: m.exportData(se)},
-			{label: "Import schema", group: "Import", enabled: hasSchema, disabledReason: disabledIf(!hasSchema, "no schema dump"), requiresContainer: true, execute: m.importSchema(se)},
+			{label: "Import schema (reset)", group: "Import", enabled: hasSchema, disabledReason: disabledIf(!hasSchema, "no schema dump"), requiresContainer: true, execute: m.importSchema(se)},
 			{label: "Import data", group: "Import", enabled: hasData, disabledReason: disabledIf(!hasData, "no data dump"), requiresContainer: true, execute: m.importData(se)},
 			{label: "Truncate tables", group: "Functions", enabled: true, requiresContainer: true, execute: truncate},
 		}
@@ -1695,10 +1695,15 @@ func (m *DBOpsModel) importSchema(se *config.SyncEnv) tea.Cmd {
 			return dbOpsDoneMsg{err: fmt.Errorf("service '%s' is not running. Start it first.", m.serviceName)}
 		}
 
+		// Import schema = full reset: wipe every existing schema (all data and
+		// schema objects) first, then apply the dump to a clean database.
+		if err := docker.PgDropSchema(m.profile.Name, m.envName, m.serviceName); err != nil {
+			return dbOpsDoneMsg{err: fmt.Errorf("import schema: %w", err)}
+		}
 		if err := docker.ExecPgRestore(m.profile.Name, m.envName, m.serviceName, latest); err != nil {
 			return dbOpsDoneMsg{err: fmt.Errorf("import schema: %w", err)}
 		}
-		return dbOpsDoneMsg{result: "Schema imported from " + filepath.Base(latest)}
+		return dbOpsDoneMsg{result: "Schema re-imported from " + filepath.Base(latest)}
 	}
 }
 
