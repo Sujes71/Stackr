@@ -7,6 +7,7 @@ import (
 	"github.com/stackr/stackr/internal/config"
 	"github.com/stackr/stackr/internal/docker"
 	"github.com/stackr/stackr/internal/hub"
+	"github.com/stackr/stackr/internal/portforward"
 )
 
 // NavTarget identifies a screen to navigate to.
@@ -202,6 +203,35 @@ type envDeleteDoneMsg struct {
 	envName string
 	err     error
 }
+
+// ── K8s Manager Messages ──
+
+type explorerDeploymentsMsg struct {
+	deployments []portforward.K8sDeployment
+}
+
+type explorerActionResultMsg struct {
+	output string
+	err    string
+}
+
+// explorerQuickActionDoneMsg signals a quick action (restart/scale/delete) completed.
+// The handler shows ✓ feedback and refreshes the deployment list.
+type explorerQuickActionDoneMsg struct {
+	action string // label for doneOp feedback
+}
+
+// explorerQuickActionErrorMsg signals a quick action failed.
+// The handler shows brief error feedback on the action menu.
+type explorerQuickActionErrorMsg struct {
+	action string // label for context
+	err    string // error message
+}
+
+// k8sStatusPollTickMsg drives the continuous K8s deployment status poll.
+// Like Docker's statusRefreshTickMsg, fires every 3s while viewing the
+// deployment list. Catches external changes (pod killed, crash, manual scale).
+type k8sStatusPollTickMsg struct{}
 
 // armDisarmAfter schedules an armDisarmMsg after 4 seconds.
 // Pass the current armGeneration so the handler can ignore stale timers.

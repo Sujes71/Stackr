@@ -1077,7 +1077,7 @@ func (m *GitOpsModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if len(m.files) == 0 {
 				// Pull (only when working tree is clean)
-				m.startPendingOp("pull", "pulling")
+				m.startPendingOp("pull", "pulling (can take a while)")
 				return m, tea.Batch(
 					func() tea.Msg {
 						err := git.Pull(m.dir)

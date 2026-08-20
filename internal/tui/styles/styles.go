@@ -320,6 +320,29 @@ func ForwardDot(state portforward.ForwardState) string {
 		Render(fmt.Sprintf("● %s", state))
 }
 
+// DeploymentDot returns a colored state indicator for K8s deployment states.
+// Uses the same color scheme as Dot() and ForwardDot().
+func DeploymentDot(desired, available, updated int) string {
+	var c lipgloss.Color
+	state := "running"
+	switch {
+	case desired == 0:
+		c = ColorMuted
+		state = "stopped"
+	case available < desired:
+		c = ColorError // red — pods failing/missing
+		state = "failing"
+	case updated < desired:
+		c = ColorAccent // orange — rollout in progress
+		state = "progressing"
+	default:
+		c = ColorSecondary // green — all ready
+	}
+	return lipgloss.NewStyle().
+		Foreground(c).
+		Render(fmt.Sprintf("● %s", state))
+}
+
 // DockerOffDot returns a dimmed dot for "docker off" state.
 func DockerOffDot() string {
 	return lipgloss.NewStyle().

@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stackr/stackr/internal/config"
@@ -103,6 +104,21 @@ type ProfileViewModel struct {
 	// immediately. The user can press Enter to retry.
 	prevContainerState map[string]string // containerName → Docker state on previous tick
 	failedContainers   map[string]bool   // containerName → user-visible failed state
+
+	// ── K8s Explorer (Manager) ──
+	explorerMode   explorerMode
+	explorerDepls  []portforward.K8sDeployment
+	explorerDepl   *portforward.K8sDeployment // selected deployment
+	explorerActCur int                        // action menu cursor
+	explorerResult string                     // action output (raw, for clipboard)
+
+	// Viewport for long results (logs, describe)
+	explorerResultVP    viewport.Model
+	explorerViewportSet bool // true when viewport has content
+
+	// Brief feedback after quick actions (restart/scale/delete) — DBOps pattern
+	explorerDoneOp   string    // action label shown with ✓ for 5s
+	explorerDoneOpAt time.Time // timestamp when doneOp was set
 }
 
 type ProfileEnvState struct {
@@ -116,10 +132,22 @@ type ProfileNavState struct {
 	Environments  map[string]ProfileEnvState
 }
 
+// explorerMode distinguishes between Port Forward and K8s Manager flows.
+type explorerMode int
+
+const (
+	explorerModeForward explorerMode = iota // port-forward discovery (existing)
+	explorerModeManager                     // K8s resource manager (new)
+)
+
 // WhichKeyCommands returns the command catalog for Profile Docker/PF screens.
 func (m *ProfileViewModel) WhichKeyCommands() []whichkey.CommandGroup {
 	// Readonly sub-screens: no actionable commands
 	if m.viewingService >= 0 || m.showStats || m.viewingProcess != "" || m.inDiscovery {
+		return nil
+	}
+	// Hide commands when viewing K8s manager action results
+	if m.explorerResult != "" {
 		return nil
 	}
 	if m.isPortForwardEnv() {
@@ -309,6 +337,12 @@ func (m *ProfileViewModel) ProfileName() string {
 func (m *ProfileViewModel) SetSize(w, h int) {
 	m.width = w
 	m.height = max(0, h-5)
+	// Resize K8s Manager result viewport when in step 10
+	if m.explorerViewportSet && m.discoveryStep == 10 {
+		m.explorerResultVP.Width = max(40, w-4)
+		lineCount := strings.Count(m.explorerResult, "\n") + 1
+		m.explorerResultVP.Height = min(lineCount, max(8, m.height-13))
+	}
 }
 
 // ── Container name helper ───────────────────────────────────────────────
@@ -325,6 +359,15 @@ func containerName(profile, env, compose string) string {
 func statusRefreshTick() tea.Cmd {
 	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
 		return statusRefreshTickMsg{}
+	})
+}
+
+// k8sStatusPollTick returns a tea.Cmd that fires k8sStatusPollTickMsg every 3s.
+// Like Docker's statusRefreshTick, continuously refreshes K8s deployment status
+// while the deployment list is visible (step 2+ in manager mode).
+func k8sStatusPollTick() tea.Cmd {
+	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+		return k8sStatusPollTickMsg{}
 	})
 }
 
@@ -1094,6 +1137,18 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return SpinnerTickMsg{}
 			})
 		}
+		// Keep ticking while doneOp is active to trigger re-renders and auto-clear
+		if m.explorerDoneOp != "" {
+			if time.Since(m.explorerDoneOpAt) >= 5*time.Second {
+				m.explorerDoneOp = ""
+				m.explorerDoneOpAt = time.Time{}
+			} else {
+				m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
+				return m, tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+					return SpinnerTickMsg{}
+				})
+			}
+		}
 		m.spinnerFrame = 0
 
 	case ClearActionMsg:
@@ -1177,11 +1232,71 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.discoverySvcs = msg.services
 		m.discoveryCursor = 0
 
+	case explorerDeploymentsMsg:
+		m.explorerDepls = msg.deployments
+		delete(m.pendingOps, "discovery")
+		// Re-sync explorerDepl pointer after poll refreshes the slice
+		if m.explorerDepl != nil {
+			name := m.explorerDepl.Name
+			for i := range m.explorerDepls {
+				if m.explorerDepls[i].Name == name {
+					m.explorerDepl = &m.explorerDepls[i]
+					break
+				}
+			}
+		}
+
+	case explorerActionResultMsg:
+		if msg.err != "" {
+			m.explorerResult = "  " + msg.err
+		} else {
+			m.explorerResult = msg.output
+		}
+		delete(m.pendingOps, "explorer-action")
+		// Set up viewport only when there's content to display
+		if m.explorerResult != "" {
+			m.explorerResultVP = viewport.New(max(40, m.width-4), max(8, m.height-13))
+			m.explorerResultVP.SetContent(styles.StyleCode.Render(m.explorerResult))
+			m.explorerResultVP.YPosition = 0
+			m.explorerResultVP.GotoTop()
+			m.explorerViewportSet = true
+		} else {
+			m.explorerResultVP = viewport.Model{}
+			m.explorerViewportSet = false
+		}
+
+	case explorerQuickActionDoneMsg:
+		delete(m.pendingOps, "explorer-action")
+		m.explorerDoneOp = msg.action
+		m.explorerDoneOpAt = time.Now()
+		// Continuous k8sStatusPollTick handles deployment list refresh
+
+	case explorerQuickActionErrorMsg:
+		delete(m.pendingOps, "explorer-action")
+		m.explorerDoneOp = msg.action + " failed: " + msg.err
+		m.explorerDoneOpAt = time.Now()
+
 	case discoveryErrorMsg:
 		delete(m.pendingOps, "discovery")
 		m.inDiscovery = false
 		m.discoveryStep = 0
 		return m, nil
+
+	case k8sStatusPollTickMsg:
+		// Continuous K8s deployment status poll (like Docker statusRefreshTick)
+		// Runs while viewing deployment list (step 2) or action menu (step 10) in manager mode
+		if m.inDiscovery && m.explorerMode == explorerModeManager && m.discoveryStep >= 2 {
+			return m, tea.Batch(
+				func() tea.Msg {
+					depls, err := portforward.DiscoverDeployments(m.discoverySelCtx, m.discoverySelNS)
+					if err != nil {
+						return discoveryErrorMsg{err: err.Error()}
+					}
+					return explorerDeploymentsMsg{deployments: depls}
+				},
+				k8sStatusPollTick(), // self-reschedule
+			)
+		}
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -1401,8 +1516,18 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// ── Normal mode ──────────────────────────────────────────
+
+		// K8s Manager step 10 intercept: route ALL keys through action handler
+		// (global up/down/enter would conflict with manager navigation)
+		if m.discoveryStep == 10 && m.explorerMode == explorerModeManager {
+			return m.handleManagerActionKey(msg)
+		}
+
 		switch {
 		case key.Matches(msg, profileKeys.back):
+			if m.inDiscovery {
+				return m.handleDiscoveryKey(msg)
+			}
 			m.persistActiveEnv()
 			m.deleteArmed = false
 			m.deleteEnvArmed = false
@@ -1501,12 +1626,18 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, textinput.Blink
 
 		case key.Matches(msg, profileKeys.up):
+			if m.inDiscovery {
+				return m.handleDiscoveryKey(msg)
+			}
 			if m.cursor > 0 {
 				m.cursor--
 			}
 			m.rememberCurrentEnvSelection()
 
 		case key.Matches(msg, profileKeys.down):
+			if m.inDiscovery {
+				return m.handleDiscoveryKey(msg)
+			}
 			total := m.totalServiceItems()
 			if m.isPortForwardEnv() {
 				total = len(m.currentForwards())
@@ -1517,10 +1648,16 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rememberCurrentEnvSelection()
 
 		case opsIsJumpTop(msg):
+			if m.inDiscovery {
+				return m.handleDiscoveryKey(msg)
+			}
 			m.cursor = 0
 			m.rememberCurrentEnvSelection()
 
 		case opsIsJumpBottom(msg):
+			if m.inDiscovery {
+				return m.handleDiscoveryKey(msg)
+			}
 			total := m.totalServiceItems()
 			if m.isPortForwardEnv() {
 				total = len(m.currentForwards())
@@ -1548,47 +1685,18 @@ func (m *ProfileViewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !portforward.CheckKubectl() {
 					return m, nil
 				}
+				// Show mode selection screen (step -1)
 				m.inDiscovery = true
-				m.discoveryStep = 0
+				m.discoveryStep = -1
 				m.discoveryCursor = 0
-				if knownCtx := m.knownForwardCtx(); knownCtx != "" {
-					m.discoveryStep = 1
-					m.discoveryNSs = nil
-					m.discoverySvcs = nil
-					m.discoverySelCtx = knownCtx
-					m.discoverySelNS = ""
-					m.pendingOps["discovery"] = "loading"
-					return m, tea.Batch(
-						func() tea.Msg {
-							nss, err := portforward.DiscoverNamespaces(knownCtx)
-							if err != nil {
-								return discoveryErrorMsg{err: err.Error()}
-							}
-							if len(nss) == 0 {
-								return discoveryErrorMsg{err: "no namespaces found in context " + knownCtx}
-							}
-							return discoveryNamespacesMsg{namespaces: nss}
-						},
-						spinnerCmd(),
-					)
-				}
-				m.pendingOps["discovery"] = "loading"
-				return m, tea.Batch(
-					func() tea.Msg {
-						ctxs, err := portforward.DiscoverContexts()
-						if err != nil {
-							return discoveryErrorMsg{err: err.Error()}
-						}
-						if len(ctxs) == 0 {
-							return discoveryErrorMsg{err: "no K8s contexts found"}
-						}
-						return discoveryContextsMsg{contexts: ctxs}
-					},
-					spinnerCmd(),
-				)
+				m.explorerMode = explorerModeForward
+				return m, nil
 			}
 
 		case key.Matches(msg, profileKeys.enter):
+			if m.inDiscovery {
+				return m.handleDiscoveryKey(msg)
+			}
 			m.deleteArmed = false
 			m.deleteEnvArmed = false
 			m.resetArmed = false
@@ -2957,6 +3065,24 @@ func (m *ProfileViewModel) renderDiscovery() string {
 	var b strings.Builder
 
 	switch m.discoveryStep {
+	case -1:
+		b.WriteString(styles.StyleHeader.Render("  K8s — select mode:"))
+		b.WriteString("\n\n")
+		type modeEntry struct {
+			label, desc string
+		}
+		modes := []modeEntry{
+			{"Port Forward", "Create/manage port-forwards"},
+			{"Manager", "Manage K8s resources"},
+		}
+		var rows []string
+		for i, mode := range modes {
+			label := fmt.Sprintf("%-16s %s", mode.label, styles.StyleSubtitle.Render(mode.desc))
+			rows = append(rows, renderDiscoveryItem(label, i == m.discoveryCursor))
+		}
+		b.WriteString(strings.Join(rows, "\n"))
+		b.WriteString("\n\n" + styles.InlineHelp(styles.HelpItem("↵", "select")))
+
 	case 0:
 		dTotal := len(m.discoveryCtxs)
 		b.WriteString(styles.StyleHeader.Render("  Select K8s context:"))
@@ -2994,6 +3120,35 @@ func (m *ProfileViewModel) renderDiscovery() string {
 		b.WriteString("\n\n" + styles.InlineHelp(styles.HelpItem("↵", "select")))
 
 	case 2:
+		if m.explorerMode == explorerModeManager {
+			// Manager: deployment list with status dots
+			dTotal := len(m.explorerDepls)
+			b.WriteString(styles.StyleHeader.Render("  Select deployment in '" + shortCtxName(m.discoverySelCtx) + "/" + m.discoverySelNS + "':"))
+			b.WriteString("\n\n")
+			if dTotal == 0 {
+				b.WriteString(opsRenderSpinnerDot(m.spinnerFrame, "Loading deployments..."))
+				b.WriteString("\n")
+				break
+			}
+			win := m.discoveryItemWindow(dTotal)
+			var rows []string
+			for i := win.start; i < win.end; i++ {
+				d := m.explorerDepls[i]
+				statusDot := styles.DeploymentDot(d.Desired, d.Available, d.Updated)
+				lastRestarted := ""
+				if d.LastRestarted != "" {
+					lastRestarted = "  restarted " + d.LastRestarted + " ago"
+				}
+				label := fmt.Sprintf("%s  %-20s  %d/%d  ready  %s%s",
+					statusDot, d.Name, d.Available, d.Desired, d.Age,
+					styles.StyleSubtitle.Render(lastRestarted))
+				rows = append(rows, renderDiscoveryItem(label, i == m.discoveryCursor))
+			}
+			b.WriteString(m.decorateScroll(strings.Join(rows, "\n"), win, dTotal))
+			b.WriteString("\n\n" + styles.InlineHelp(styles.HelpItem("↵", "select")))
+			break
+		}
+		// Port Forward mode: service list (existing)
 		dTotal := len(m.discoverySvcs)
 		b.WriteString(styles.StyleHeader.Render("  Select service in '" + shortCtxName(m.discoverySelCtx) + "/" + m.discoverySelNS + "':"))
 		b.WriteString("\n\n")
@@ -3019,6 +3174,80 @@ func (m *ProfileViewModel) renderDiscovery() string {
 		b.WriteString("  Remote:   " + styles.StyleCode.Render(fmt.Sprintf("%d", m.discoveredPF.RemotePort)) + "\n")
 		b.WriteString("  Local:    " + m.portInput.View() + "\n")
 		b.WriteString("\n\n" + styles.InlineHelp(styles.HelpItem("↵", "confirm")))
+
+	case 10:
+		// K8s Manager action menu
+		if m.explorerResult != "" && m.explorerViewportSet {
+			// Show action result with scrollable viewport (matching RequestOps pattern)
+			titleLine := styles.StyleHeader.Render("  " + m.explorerDepl.Name + "  —  result")
+			scrollHint := ""
+			atTop := m.explorerResultVP.AtTop()
+			atBottom := m.explorerResultVP.AtBottom()
+			switch {
+			case !atTop && !atBottom:
+				scrollHint = "\n  " + styles.StyleHelp.Render("▲ up  ▼ down") + "\n"
+			case !atTop:
+				scrollHint = "\n  " + styles.StyleHelp.Render("▲ up") + "\n"
+			case !atBottom:
+				scrollHint = "\n  " + styles.StyleHelp.Render("▼ down") + "\n"
+			}
+			b.WriteString(titleLine + "\n\n")
+			b.WriteString(m.explorerResultVP.View())
+			b.WriteString(scrollHint)
+			b.WriteString("\n  " + styles.StyleHelp.Render("press any key to close"))
+		} else if m.explorerDepl != nil {
+			actions := managerActions()
+			b.WriteString(styles.StyleHeader.Render("  " + m.explorerDepl.Name + " (" + m.discoverySelNS + ")"))
+			b.WriteString("\n\n")
+			statusDot := styles.DeploymentDot(m.explorerDepl.Desired, m.explorerDepl.Available, m.explorerDepl.Updated)
+			lastRestarted := ""
+			if m.explorerDepl.LastRestarted != "" {
+				lastRestarted = "   restarted " + m.explorerDepl.LastRestarted + " ago"
+			}
+			b.WriteString("  " + statusDot + fmt.Sprintf("    Replicas: %d/%d%s",
+				m.explorerDepl.Available, m.explorerDepl.Desired,
+				styles.StyleSubtitle.Render(lastRestarted)))
+			b.WriteString("\n\n")
+			// Section header (matching DBOps pattern)
+			groupHeaderStyle := lipgloss.NewStyle().
+				Foreground(styles.ColorPrimary).
+				Bold(true)
+			b.WriteString("  " + groupHeaderStyle.Render("Actions"))
+			b.WriteString("\n")
+			hasPending := len(m.pendingOps) > 0
+			for i, a := range actions {
+				isCursor := i == m.explorerActCur
+				// Spinner for running action (DBOps pattern)
+				if state, pending := m.pendingOps["explorer-action"]; pending && isCursor {
+					b.WriteString("    " + opsRenderSpinnerDot(m.spinnerFrame, state) + "\n")
+					continue
+				}
+				// Checkmark feedback for recently completed action
+				if m.explorerDoneOp != "" && time.Since(m.explorerDoneOpAt) < 5*time.Second {
+					if m.explorerDoneOp == a.label {
+						// Success
+						b.WriteString("    " + styles.StyleSuccess.Render("✓") + " " + a.label + "\n")
+						continue
+					}
+					if strings.HasPrefix(m.explorerDoneOp, a.label+" failed") {
+						// Error
+						b.WriteString("    " + styles.StyleError.Render("✗") + " " + styles.StyleSubtitle.Render(m.explorerDoneOp) + "\n")
+						continue
+					}
+				}
+				// Dim other actions while one is running
+				if hasPending {
+					b.WriteString("      " + styles.StyleSubtitle.Render(a.label) + "\n")
+					continue
+				}
+				if isCursor {
+					b.WriteString(styles.StyleDiscoveryItemSelected.Render("    > "+a.label) + "\n")
+				} else {
+					b.WriteString("      " + a.label + "\n")
+				}
+			}
+			b.WriteString("\n" + styles.InlineHelp(styles.HelpItem("esc", "back"), styles.HelpItem("↵", "execute")))
+		}
 	}
 
 	return b.String()
@@ -3101,6 +3330,89 @@ func (m *ProfileViewModel) renderLocalProcPanel(proc config.LocalProcess) string
 // ── Discovery Key Handler ──────────────────────────────────────────────────
 
 func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// ── Step -1: mode selection (Port Forward vs Manager) ──
+	if m.discoveryStep == -1 {
+		switch {
+		case key.Matches(msg, profileKeys.back):
+			m.inDiscovery = false
+			m.discoveryStep = 0
+			m.discoveryCursor = 0
+			return m, nil
+
+		case key.Matches(msg, profileKeys.up):
+			if m.discoveryCursor > 0 {
+				m.discoveryCursor--
+			}
+
+		case key.Matches(msg, profileKeys.down):
+			if m.discoveryCursor < 1 {
+				m.discoveryCursor++
+			}
+
+		case key.Matches(msg, profileKeys.enter):
+			if m.discoveryCursor == 0 {
+				// Port Forward mode — continue to existing discovery flow
+				m.explorerMode = explorerModeForward
+				m.discoveryStep = 0
+				m.discoveryCursor = 0
+				m.pendingOps["discovery"] = "loading"
+				if knownCtx := m.knownForwardCtx(); knownCtx != "" {
+					m.discoveryStep = 1
+					m.discoveryNSs = nil
+					m.discoverySvcs = nil
+					m.discoverySelCtx = knownCtx
+					m.discoverySelNS = ""
+					return m, tea.Batch(
+						func() tea.Msg {
+							nss, err := portforward.DiscoverNamespaces(knownCtx)
+							if err != nil {
+								return discoveryErrorMsg{err: err.Error()}
+							}
+							if len(nss) == 0 {
+								return discoveryErrorMsg{err: "no namespaces found in context " + knownCtx}
+							}
+							return discoveryNamespacesMsg{namespaces: nss}
+						},
+						spinnerCmd(),
+					)
+				}
+				return m, tea.Batch(
+					func() tea.Msg {
+						ctxs, err := portforward.DiscoverContexts()
+						if err != nil {
+							return discoveryErrorMsg{err: err.Error()}
+						}
+						if len(ctxs) == 0 {
+							return discoveryErrorMsg{err: "no K8s contexts found"}
+						}
+						return discoveryContextsMsg{contexts: ctxs}
+					},
+					spinnerCmd(),
+				)
+			} else {
+				// Manager mode
+				m.explorerMode = explorerModeManager
+				m.discoveryStep = 0
+				m.discoveryCursor = 0
+				m.pendingOps["discovery"] = "loading"
+				return m, tea.Batch(
+					func() tea.Msg {
+						ctxs, err := portforward.DiscoverContexts()
+						if err != nil {
+							return discoveryErrorMsg{err: err.Error()}
+						}
+						if len(ctxs) == 0 {
+							return discoveryErrorMsg{err: "no K8s contexts found"}
+						}
+						return discoveryContextsMsg{contexts: ctxs}
+					},
+					spinnerCmd(),
+				)
+			}
+		}
+		return m, nil
+	}
+
 	// ── Step 3: text input mode for port confirmation ──
 	// Handled separately so backspace edits the port instead of cancelling.
 	if m.discoveryStep == 3 {
@@ -3109,6 +3421,12 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 			m.portInput.Blur()
 			m.discoveryStep = 2
 			m.discoveredPF = nil
+			m.explorerMode = explorerModeForward
+			m.explorerDepls = nil
+			m.explorerDepl = nil
+			m.explorerResult = ""
+			m.explorerResultVP = viewport.Model{}
+			m.explorerViewportSet = false
 			return m, nil
 
 		case key.Matches(msg, profileKeys.enter):
@@ -3143,6 +3461,12 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 			m.discoverySvcs = nil
 			m.discoveredPF = nil
 			m.discoveryCursor = 0
+			m.explorerMode = explorerModeForward
+			m.explorerDepls = nil
+			m.explorerDepl = nil
+			m.explorerResult = ""
+			m.explorerResultVP = viewport.Model{}
+			m.explorerViewportSet = false
 			return m, m.loadStatus()
 
 		default:
@@ -3155,10 +3479,28 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 	// ── Steps 0-2: navigation mode ──
 	switch {
 	case key.Matches(msg, profileKeys.back):
-		if m.discoveryStep > 1 {
+		// Step 10 (K8s Manager action menu): back to deployment list
+		if m.discoveryStep == 10 {
+			if m.explorerResult != "" {
+				// Viewing result → back to action menu (stay on step 10)
+				m.explorerResult = ""
+				m.explorerResultVP = viewport.Model{}
+				m.explorerViewportSet = false
+			} else {
+				// Action menu → back to deployment list
+				m.explorerDepl = nil
+				m.explorerActCur = 0
+				m.discoveryStep = 2
+				m.discoveryCursor = 0
+			}
+			return m, nil
+		}
+		if m.discoveryStep >= 0 {
 			m.discoveryStep--
 			// Restore cursor from previous step
 			switch m.discoveryStep {
+			case 0:
+				m.discoveryCursor = m.discoveryCtxCur
 			case 1:
 				m.discoveryCursor = m.discoveryNSCur
 			case 2:
@@ -3166,6 +3508,7 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 			}
 			return m, nil
 		}
+		// Step -1 (mode selection): exit discovery
 		m.inDiscovery = false
 		m.discoveryStep = 0
 		m.discoveryCtxs = nil
@@ -3173,14 +3516,26 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 		m.discoverySvcs = nil
 		m.discoveredPF = nil
 		m.discoveryCursor = 0
+		m.explorerMode = explorerModeForward
+		m.explorerDepls = nil
+		m.explorerDepl = nil
+		m.explorerResult = ""
+		m.explorerResultVP = viewport.Model{}
+		m.explorerViewportSet = false
 		return m, nil
 
 	case key.Matches(msg, profileKeys.up):
+		if m.discoveryStep == 10 {
+			return m.handleManagerActionKey(msg)
+		}
 		if m.discoveryCursor > 0 {
 			m.discoveryCursor--
 		}
 
 	case key.Matches(msg, profileKeys.down):
+		if m.discoveryStep == 10 {
+			return m.handleManagerActionKey(msg)
+		}
 		switch m.discoveryStep {
 		case 0:
 			if m.discoveryCursor < len(m.discoveryCtxs)-1 {
@@ -3191,15 +3546,25 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 				m.discoveryCursor++
 			}
 		case 2:
-			if m.discoveryCursor < len(m.discoverySvcs)-1 {
+			total := len(m.discoverySvcs)
+			if m.explorerMode == explorerModeManager {
+				total = len(m.explorerDepls)
+			}
+			if m.discoveryCursor < total-1 {
 				m.discoveryCursor++
 			}
 		}
 
 	case opsIsJumpTop(msg):
+		if m.discoveryStep == 10 {
+			return m.handleManagerActionKey(msg)
+		}
 		m.discoveryCursor = 0
 
 	case opsIsJumpBottom(msg):
+		if m.discoveryStep == 10 {
+			return m.handleManagerActionKey(msg)
+		}
 		switch m.discoveryStep {
 		case 0:
 			if len(m.discoveryCtxs) > 0 {
@@ -3210,12 +3575,19 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 				m.discoveryCursor = len(m.discoveryNSs) - 1
 			}
 		case 2:
-			if len(m.discoverySvcs) > 0 {
-				m.discoveryCursor = len(m.discoverySvcs) - 1
+			total := len(m.discoverySvcs)
+			if m.explorerMode == explorerModeManager {
+				total = len(m.explorerDepls)
+			}
+			if total > 0 {
+				m.discoveryCursor = total - 1
 			}
 		}
 
 	case key.Matches(msg, profileKeys.enter):
+		if m.discoveryStep == 10 {
+			return m.handleManagerActionKey(msg)
+		}
 		switch m.discoveryStep {
 		case 0:
 			if m.discoveryCursor < len(m.discoveryCtxs) {
@@ -3223,6 +3595,7 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 				m.discoverySelNS = ""
 				m.discoveryNSs = nil
 				m.discoverySvcs = nil
+				m.discoveryCtxCur = m.discoveryCursor
 				m.discoveryStep = 1
 				m.discoveryCursor = 0
 				m.pendingOps["discovery"] = "loading"
@@ -3245,9 +3618,30 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 			if m.discoveryCursor < len(m.discoveryNSs) {
 				m.discoverySelNS = m.discoveryNSs[m.discoveryCursor]
 				m.discoveryNSCur = m.discoveryCursor
-				m.discoverySvcs = nil
 				m.discoveryStep = 2
 				m.discoveryCursor = 0
+
+				if m.explorerMode == explorerModeManager {
+					// Manager: discover deployments instead of services
+					m.pendingOps["discovery"] = "loading"
+					return m, tea.Batch(
+						func() tea.Msg {
+							depls, err := portforward.DiscoverDeployments(m.discoverySelCtx, m.discoverySelNS)
+							if err != nil {
+								return discoveryErrorMsg{err: err.Error()}
+							}
+							if len(depls) == 0 {
+								return discoveryErrorMsg{err: "no deployments found in " + m.discoverySelCtx + "/" + m.discoverySelNS}
+							}
+							return explorerDeploymentsMsg{deployments: depls}
+						},
+						spinnerCmd(),
+						k8sStatusPollTick(), // start continuous poll (like Docker statusRefreshTick)
+					)
+				}
+
+				// Port Forward mode (existing)
+				m.discoverySvcs = nil
 				m.discoverySvcCur = 0
 				m.pendingOps["discovery"] = "loading"
 				return m, tea.Batch(
@@ -3266,6 +3660,19 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 			}
 
 		case 2:
+			if m.explorerMode == explorerModeManager {
+				// Manager: select deployment → show action menu
+				if m.discoveryCursor < len(m.explorerDepls) {
+					m.explorerDepl = &m.explorerDepls[m.discoveryCursor]
+					m.explorerActCur = 0
+					m.explorerResult = ""
+					m.explorerResultVP = viewport.Model{}
+					m.explorerViewportSet = false
+					m.discoveryStep = 10
+					m.discoveryCursor = 0
+				}
+				return m, nil
+			}
 			if m.discoveryCursor < len(m.discoverySvcs) {
 				svc := m.discoverySvcs[m.discoveryCursor]
 				m.discoverySvcCur = m.discoveryCursor
@@ -3281,6 +3688,150 @@ func (m *ProfileViewModel) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 	}
 
 	return m, nil
+}
+
+// ── K8s Manager Action Handler ──────────────────────────────────────────────
+
+func (m *ProfileViewModel) handleManagerActionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// If viewing action result, scroll with arrows or dismiss on other keys
+	if m.explorerResult != "" && m.explorerViewportSet {
+		switch {
+		case key.Matches(msg, profileKeys.up), opsIsJumpTop(msg):
+			var cmd tea.Cmd
+			m.explorerResultVP, cmd = m.explorerResultVP.Update(msg)
+			return m, cmd
+		case key.Matches(msg, profileKeys.down), opsIsJumpBottom(msg):
+			var cmd tea.Cmd
+			m.explorerResultVP, cmd = m.explorerResultVP.Update(msg)
+			return m, cmd
+		default:
+			// Any other key dismisses (matching RequestOps pattern)
+			m.explorerResult = ""
+			m.explorerResultVP = viewport.Model{}
+			m.explorerViewportSet = false
+			return m, nil
+		}
+	}
+
+	actions := managerActions()
+	switch {
+	case key.Matches(msg, profileKeys.back):
+		// Return to deployment list
+		m.explorerDepl = nil
+		m.explorerActCur = 0
+		m.explorerResult = ""
+		m.explorerResultVP = viewport.Model{}
+		m.explorerViewportSet = false
+		m.discoveryStep = 2
+		m.discoveryCursor = 0
+		return m, nil
+
+	case key.Matches(msg, profileKeys.up):
+		if m.explorerActCur > 0 {
+			m.explorerActCur--
+		}
+
+	case key.Matches(msg, profileKeys.down):
+		if m.explorerActCur < len(actions)-1 {
+			m.explorerActCur++
+		}
+
+	case key.Matches(msg, profileKeys.enter):
+		if m.explorerDepl == nil || m.explorerActCur >= len(actions) {
+			return m, nil
+		}
+		action := actions[m.explorerActCur]
+		depl := m.explorerDepl
+		ctx := m.discoverySelCtx
+		ns := m.discoverySelNS
+
+		switch action.key {
+		case "restart":
+			m.pendingOps["explorer-action"] = "restarting"
+			return m, tea.Batch(
+				func() tea.Msg {
+					_, err := portforward.RolloutRestart(ctx, ns, depl.Name)
+					if err != nil {
+						return explorerQuickActionErrorMsg{action: "restart", err: err.Error()}
+					}
+					return explorerQuickActionDoneMsg{action: "restart"}
+				},
+				spinnerCmd(),
+			)
+
+		case "scale":
+			// Scale to desired + 1
+			replicas := depl.Desired + 1
+			m.pendingOps["explorer-action"] = "scaling"
+			return m, tea.Batch(
+				func() tea.Msg {
+					_, err := portforward.ScaleDeployment(ctx, ns, depl.Name, replicas)
+					if err != nil {
+						return explorerQuickActionErrorMsg{action: "scale", err: err.Error()}
+					}
+					return explorerQuickActionDoneMsg{action: "scale"}
+				},
+				spinnerCmd(),
+			)
+
+		case "logs":
+			// Real-time log streaming via tea.ExecProcess (like shell)
+			cmd := portforward.ExecDeploymentLogs(ctx, ns, depl.Name, 100)
+			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+				return explorerActionResultMsg{}
+			})
+
+		case "describe":
+			m.pendingOps["explorer-action"] = "describing"
+			return m, tea.Batch(
+				func() tea.Msg {
+					out, err := portforward.DescribeDeployment(ctx, ns, depl.Name)
+					if err != nil {
+						return explorerActionResultMsg{err: err.Error()}
+					}
+					return explorerActionResultMsg{output: out}
+				},
+				spinnerCmd(),
+			)
+
+		case "shell":
+			cmd := portforward.ExecDeploymentShell(ctx, ns, depl.Name)
+			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+				return explorerActionResultMsg{}
+			})
+
+		case "delete":
+			m.pendingOps["explorer-action"] = "deleting"
+			return m, tea.Batch(
+				func() tea.Msg {
+					_, err := portforward.DeleteDeployment(ctx, ns, depl.Name)
+					if err != nil {
+						return explorerQuickActionErrorMsg{action: "delete", err: err.Error()}
+					}
+					return explorerQuickActionDoneMsg{action: "delete"}
+				},
+				spinnerCmd(),
+			)
+		}
+	}
+	return m, nil
+}
+
+// managerActionEntry holds a single action in the K8s Manager action menu.
+type managerActionEntry struct {
+	key, label, desc string
+}
+
+// managerActions returns the list of actions for the K8s Manager action menu.
+func managerActions() []managerActionEntry {
+	return []managerActionEntry{
+		{"restart", "restart", "Rollout restart"},
+		{"scale", "scale", "Scale replicas (+1)"},
+		{"logs", "logs", "View recent logs (100)"},
+		{"describe", "describe", "Full deployment description"},
+		{"shell", "shell", "Exec into first running pod"},
+		{"delete", "delete", "Delete deployment"},
+	}
 }
 
 // ── Forward Toggle ─────────────────────────────────────────────────────────
