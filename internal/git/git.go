@@ -63,21 +63,47 @@ type TagInfo struct {
 
 // ── Core Runner ───────────────────────────────────────────────────────────────
 
-const defaultTimeout = 60 * time.Second
+const (
+	// defaultTimeout covers local-only git commands (status, diff, log, ...).
+	// 60s is generous for local worktree operations.
+	defaultTimeout = 60 * time.Second
+	// networkTimeout covers commands that hit the remote (pull, fetch, push).
+	// A slow connection or a credential dialog can legitimately take minutes;
+	// 60s used to kill these mid-flight, surfacing "signal: killed".
+	networkTimeout = 5 * time.Minute
+	// waitDelay bounds how long Wait() blocks on stdio pipes after the
+	// process exits. A killed `git pull` can leave child helpers (e.g.
+	// git-remote-https) holding the pipes open; without this, the UI would
+	// hang well past the timeout waiting for them to close.
+	waitDelay = 5 * time.Second
+)
 
 // run executes a git command in the given directory and returns combined output.
 func run(dir string, args ...string) (string, error) {
 	return runWithTimeout(dir, defaultTimeout, args...)
 }
 
+// runNetwork is run() for network-bound commands: same behavior but with a
+// much longer timeout so slow pulls/fetches/pushes are not killed.
+func runNetwork(dir string, args ...string) (string, error) {
+	return runWithTimeout(dir, networkTimeout, args...)
+}
+
 func runWithTimeout(dir string, timeout time.Duration, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd.WaitDelay = waitDelay
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		// A deadline kill is not a git failure — report it as a timeout so the
+		// UI does not show the raw "signal: killed" (which reads like the
+		// command string itself, e.g. "git pull --rebase:").
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("git %s: timed out after %s (slow network or git waiting for credentials) — check the branch state and retry the operation", strings.Join(args, " "), timeout)
+		}
 		errMsg := strings.TrimSpace(stderr.String())
 		if errMsg == "" {
 			errMsg = err.Error()
@@ -766,7 +792,7 @@ func RemoteRemove(dir string, name string) error {
 
 // FetchAll runs `git fetch --all`.
 func FetchAll(dir string) error {
-	_, err := run(dir, "fetch", "--all")
+	_, err := runNetwork(dir, "fetch", "--all")
 	return err
 }
 
@@ -775,22 +801,22 @@ func Push(dir string) error {
 	// Check if upstream is set
 	if _, err := run(dir, "rev-parse", "--verify", "--quiet", "@{upstream}"); err != nil {
 		// No upstream — push with --set-upstream so future pulls work
-		_, err = run(dir, "push", "--set-upstream", "origin", "HEAD")
+		_, err = runNetwork(dir, "push", "--set-upstream", "origin", "HEAD")
 		return err
 	}
-	_, err := run(dir, "push")
+	_, err := runNetwork(dir, "push")
 	return err
 }
 
 // PushForce pushes with force lease (safe force push).
 func PushForce(dir string) error {
-	_, err := run(dir, "push", "--force-with-lease")
+	_, err := runNetwork(dir, "push", "--force-with-lease")
 	return err
 }
 
 // Pull pulls from upstream with rebase.
 func Pull(dir string) error {
-	_, err := run(dir, "pull", "--rebase")
+	_, err := runNetwork(dir, "pull", "--rebase")
 	return err
 }
 
