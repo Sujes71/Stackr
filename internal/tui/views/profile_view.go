@@ -2704,6 +2704,59 @@ func (m *ProfileViewModel) cardWidth() int {
 	return w
 }
 
+// cutText removes trailing characters from plain, unstyled text until it fits
+// in maxW display cells. It never appends anything.
+func cutText(s string, maxW int) string {
+	if maxW <= 0 {
+		return ""
+	}
+	var b strings.Builder
+	width := 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if width+rw > maxW {
+			break
+		}
+		b.WriteRune(r)
+		width += rw
+	}
+	return b.String()
+}
+
+// clipText truncates plain, unstyled text to at most maxW display cells,
+// appending an ellipsis when it does not fit. Callers must clip before
+// styling so ANSI escape sequences are never split.
+func clipText(s string, maxW int) string {
+	if maxW <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= maxW {
+		return s
+	}
+	const tail = "…"
+	if maxW <= lipgloss.Width(tail) {
+		return tail
+	}
+	return cutText(s, maxW-lipgloss.Width(tail)) + tail
+}
+
+// clipPath clips a path to maxW display cells while keeping its final
+// component (the repository or directory name) fully visible.
+func clipPath(path string, maxW int) string {
+	if maxW <= 0 || lipgloss.Width(path) <= maxW {
+		return path
+	}
+	idx := strings.LastIndex(path, "/")
+	if idx < 0 {
+		return clipText(path, maxW)
+	}
+	dir, base := path[:idx+1], path[idx+1:]
+	if lipgloss.Width(base) > maxW-3 {
+		return clipText(path, maxW)
+	}
+	return cutText(dir, maxW-lipgloss.Width(base)-3) + "..." + base
+}
+
 // serviceWindow computes the visible window for Docker service cards.
 // Unlike the shared opsWindow helper (which uses average item height),
 // this method respects each card's actual height so variable-port cards
@@ -2829,14 +2882,16 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 				dot = styles.Dot(st.State)
 			}
 
-			name := styles.StyleHeader.Render(svc.Name)
+			innerW := cardW - 2 // panel content width minus horizontal padding
+
+			name := styles.StyleHeader.Render(clipText(svc.Name, innerW-lipgloss.Width(dot)-2))
 
 			line1 := lipgloss.JoinHorizontal(lipgloss.Center, dot, "  ", name)
-			line2 := "   " + styles.StyleCode.Render(svc.FullImage())
+			line2 := "   " + styles.StyleCode.Render(clipText(svc.FullImage(), innerW-5))
 
 			var portLines []string
 			for _, p := range svc.Ports {
-				portLines = append(portLines, styles.StyleSubtitle.Render("     "+p.String()))
+				portLines = append(portLines, styles.StyleSubtitle.Render("     "+clipText(p.String(), innerW-5)))
 			}
 			portBlock := strings.Join(portLines, "\n")
 
@@ -2880,14 +2935,16 @@ func (m *ProfileViewModel) renderServices(env *config.Environment) string {
 			} else {
 				dot = styles.LocalProcessDot(running)
 			}
-			name := styles.StyleHeader.Render(proc.Name)
+			innerW := cardW - 2 // panel content width minus horizontal padding
+
+			name := styles.StyleHeader.Render(clipText(proc.Name, innerW-lipgloss.Width(dot)-2))
 
 			line1 := lipgloss.JoinHorizontal(lipgloss.Center, dot, "  ", name)
-			line2 := "   " + styles.StyleCode.Render(proc.Command)
+			line2 := "   " + styles.StyleCode.Render(clipText(proc.Command, innerW-5))
 
 			var row string
 			if proc.WorkDir != "" {
-				line3 := "     " + styles.StyleSubtitle.Render("dir: "+proc.WorkDir)
+				line3 := "     " + styles.StyleSubtitle.Render("dir: "+clipPath(proc.WorkDir, innerW-10))
 				row = lipgloss.JoinVertical(lipgloss.Left, line1, line2, line3)
 			} else {
 				row = lipgloss.JoinVertical(lipgloss.Left, line1, line2)
